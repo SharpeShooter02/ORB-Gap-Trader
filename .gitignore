@@ -1,0 +1,43 @@
+# Credentials — never commit
+.env
+
+# Runtime data
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/logs/
+data/archive/
+data/underlyings/
+data/reports/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Build / packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store

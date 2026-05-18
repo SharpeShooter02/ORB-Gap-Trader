@@ -1,0 +1,31 @@
+# overrides.yaml — optional field overrides for LiveConfig.
+#
+# Uncomment and edit to override any LiveConfig default.
+# Keys must match LiveConfig field names exactly.
+#
+# paper_trading: true          # set false only after full paper-trading validation
+# slippage_pct: 0.001
+# session_kill_loss_pct: 0.03
+# ps_filter_k: 1.25
+# orb_minutes: 30
+# max_concurrent_positions: 0
+#
+# ── Pre-flight liquidity thresholds ──────────────────────────────────────────
+# adv_lookback_days: 20
+# min_dollar_volume_floor: 1000000
+# max_pct_of_adv: 0.01
+# min_yesterday_dv_ratio: 0.30
+# allow_htb_shorts: false
+#
+# ── Operator exclusions ───────────────────────────────────────────────────────
+# excluded_symbols:
+#   - UXRP
+#   - XRPT
+#
+# date_exclusions:
+#   "2026-06-01":
+#     - ETHU
+#     - ETHD
+#
+# force_long_only:
+#   - UVIX

@@ -1,12 +1,19 @@
 """
 tests/test_ps_filter_parity.py — Verify live PS filter config matches reference.
 
-The reference PS_FILTERS are keyed (underlying, threshold_fraction, [inverse=True]).
-These tests catch any drift between what _production_run.ps_filter() computes
-and what the live config carries.
+All tests here explicitly use use_rolling=False (frozen SIGMA seeds) so that
+parity against the reference PS_FILTERS is guaranteed regardless of whether
+parquet files exist on the test machine.
 """
 
 import pytest
+
+
+@pytest.fixture
+def live_cfg():
+    """Frozen-seed config — override the session-scoped conftest fixture."""
+    from orb_live.config.live_config import load_live_config
+    return load_live_config(use_rolling=False)
 
 
 def test_ps_filters_match_reference(live_cfg):

@@ -15,7 +15,9 @@ import orb_live  # noqa: F401 — sys.path setup
 @pytest.fixture(scope="session")
 def live_cfg():
     from orb_live.config.live_config import load_live_config
-    return load_live_config()
+    # use_rolling=False: frozen SIGMA seeds, no parquet access.
+    # Keeps all tests independent of parquet presence on any machine.
+    return load_live_config(use_rolling=False)
 
 
 @pytest.fixture

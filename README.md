@@ -100,6 +100,41 @@ During RTH, `/health` returns 503 if:
 - Alpaca API not called in > 5 minutes
 - `state_store.all_open_positions()` raises
 
+## Operations
+
+### Sigma calibration
+
+The prior-session filter uses sigma values (daily-return volatility) of each
+underlying. The live system computes these dynamically from full historical
+data at startup, and refreshes them weekly via cron.
+
+- **Seed values:** `reference/_production_run.py`'s `SIGMA` dict — used as
+  fallback when historical parquet data is unavailable.
+- **Live values:** `data/sigma_runtime.yaml` — auto-generated at every
+  startup and after each weekly recalibration. Human-readable; safe to inspect.
+- **History:** `state_store.sigma_history` table — append-only record of
+  every sigma computation, for forensic analysis.
+
+To force frozen-seed mode (for backtest parity validation):
+
+```bash
+USE_ROLLING_SIGMAS=0 python -m orb_live.runner.main
+```
+
+To manually recalibrate now:
+
+```bash
+python -m orb_live.scripts.recalibrate_sigmas --confirm
+python -m orb_live.scripts.recalibrate_sigmas --confirm --db /path/to/orb_live.db
+```
+
+Underlyings whose parquet is missing will fall back to seed values and emit a
+`WARN`. Run `backfill_underlyings` if WARNs appear frequently:
+
+```bash
+python -m orb_live.scripts.backfill_underlyings
+```
+
 ## Tests
 
 ```bash

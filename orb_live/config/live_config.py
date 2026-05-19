@@ -14,12 +14,16 @@ Verification:
     → <n> ps_filters
 """
 
+import datetime
+import logging
 import os
 import sys
 import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
+
+import pandas as pd
 
 # Ensure BacktestingGaps root is on sys.path before reference imports.
 import orb_live  # noqa: F401 — triggers orb_live/__init__.py path setup
@@ -54,46 +58,159 @@ from reference._production_run import (
     cfg as _prod_cfg,
 )
 
-_OVERRIDES_FILE     = Path(__file__).parent / "overrides.yaml"
+_OVERRIDES_FILE      = Path(__file__).parent / "overrides.yaml"
 _SIGMA_OVERRIDE_FILE = Path(__file__).parent / "sigma_override.yaml"
 
-# Default paths (relative to BacktestingGaps root).
-_DEFAULT_DATA_DIR = Path(__file__).parent.parent / "data" / "underlyings"
-_DEFAULT_DB_PATH  = Path(__file__).parent.parent / "state" / "live.db"
+# Default paths (relative to package root).
+_DEFAULT_DATA_DIR    = Path(__file__).parent.parent / "data" / "underlyings"
+_DEFAULT_DB_PATH     = Path(__file__).parent.parent / "state" / "live.db"
+_SIGMA_RUNTIME_FILE  = Path(__file__).parent.parent / "data" / "sigma_runtime.yaml"
+
+_logger = logging.getLogger(__name__)
 
 
-# ── Sigma-override aware PS-filter builder ────────────────────────────────────
+# ── Rolling sigma helpers ─────────────────────────────────────────────────────
+
+def _compute_rolling_sigma_map(
+    data_dir: Path,
+) -> tuple[dict, dict, list]:
+    """
+    Compute sigma (std of abs daily returns) for every underlying in UNIVERSE
+    from its parquet file in data_dir.
+
+    Returns (sigma_map, n_obs_map, fallback_underlyings).
+    Falls back to SIGMA seed values when a parquet is missing or has <30 rows.
+    Logs WARN for each fallback.
+    """
+    all_uls = sorted({info["underlying"] for info in UNIVERSE.values()})
+    sigma_map:    dict = {}
+    n_obs_map:    dict = {}
+    fallback_uls: list = []
+
+    for ul in all_uls:
+        path = data_dir / f"{ul}.parquet"
+        try:
+            if not path.exists():
+                raise FileNotFoundError("parquet not found")
+            df = pd.read_parquet(path)
+            closes = df["close"].dropna()
+            if len(closes) < 30:
+                raise ValueError(f"only {len(closes)} rows")
+            returns = closes.pct_change().dropna().abs()
+            sigma_map[ul] = float(returns.std())
+            n_obs_map[ul] = len(returns)
+        except Exception as exc:
+            seed = SIGMA.get(ul)
+            if seed is not None:
+                _logger.warning(
+                    "rolling_sigma_fallback ul=%s reason=%s seed=%.6f", ul, exc, seed
+                )
+                sigma_map[ul] = seed
+            else:
+                _logger.warning(
+                    "rolling_sigma_no_seed ul=%s reason=%s — ps_filter disabled", ul, exc
+                )
+            n_obs_map[ul] = 0
+            fallback_uls.append(ul)
+
+    return sigma_map, n_obs_map, fallback_uls
+
+
+def _write_sigma_runtime(
+    sigma_map: dict,
+    fallback_uls: list,
+    path: Path,
+) -> None:
+    payload = {
+        "last_computed": datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        ),
+        "source": "rolling",
+        "sigmas": {ul: round(s, 6) for ul, s in sorted(sigma_map.items())},
+        "fallback_underlyings": sorted(fallback_uls),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.dump(payload, default_flow_style=False, sort_keys=False))
+
+
+# ── PS-filter builder ─────────────────────────────────────────────────────────
+
+def build_live_ps_filters(
+    sigma_map: Optional[dict] = None,
+    k: float = 1.25,
+    use_rolling: bool = True,
+    data_dir: Optional[Path] = None,
+    sigma_override_path: Optional[Path] = None,
+    sigma_runtime_path: Optional[Path] = None,
+    state_store=None,
+) -> dict:
+    """
+    Build the prior_session_filters dict.
+
+    use_rolling=True (default): sigmas computed from full historical data in
+    data_dir/*.parquet. Falls back to SIGMA seeds for underlyings whose parquet
+    is missing or has <30 rows; logs WARN. Writes sigma_runtime.yaml and
+    optionally audits state_store.sigma_history.
+
+    use_rolling=False: uses sigma_map (or SIGMA seeds). Identical to the
+    pre-rolling frozen-seed behaviour. Used by tests and backtest validation.
+
+    sigma_override.yaml is applied on top of either path when it exists.
+    """
+    _override_path = sigma_override_path if sigma_override_path is not None else _SIGMA_OVERRIDE_FILE
+
+    if use_rolling:
+        _data_dir = data_dir or _DEFAULT_DATA_DIR
+        computed_map, n_obs_map, fallback_uls = _compute_rolling_sigma_map(_data_dir)
+
+        _runtime_path = sigma_runtime_path or _SIGMA_RUNTIME_FILE
+        try:
+            _write_sigma_runtime(computed_map, fallback_uls, _runtime_path)
+        except Exception as exc:
+            _logger.warning("sigma_runtime_write_failed path=%s reason=%s", _runtime_path, exc)
+
+        if state_store is not None:
+            for ul, sig in computed_map.items():
+                source = "runtime_fallback" if ul in fallback_uls else "runtime_rolling"
+                try:
+                    state_store.save_sigma_calibration(
+                        underlying=ul,
+                        sigma=sig,
+                        n_obs=n_obs_map.get(ul, 0),
+                        source=source,
+                    )
+                except Exception:
+                    pass
+
+        effective_sigma = computed_map
+    else:
+        effective_sigma = dict(sigma_map) if sigma_map is not None else dict(SIGMA)
+
+    if _override_path.exists():
+        with _override_path.open() as f:
+            override = yaml.safe_load(f) or {}
+        if "sigmas" in override:
+            effective_sigma = {**effective_sigma, **override["sigmas"]}
+
+    filters: dict = {}
+    for sym, info in UNIVERSE.items():
+        ul  = info["underlying"]
+        sig = effective_sigma.get(ul)
+        if sig is None:
+            continue
+        threshold = sig * k
+        filters[sym] = (ul, threshold, True) if info["inverse"] else (ul, threshold)
+    return filters
+
 
 def _build_live_ps_filters(
     sigma_override_path: Path = _SIGMA_OVERRIDE_FILE,
     k: float = 1.25,
 ) -> dict:
-    """
-    Build PS_FILTERS, optionally substituting sigmas from sigma_override.yaml.
-
-    When the override file does not exist, falls back to _production_run.SIGMA
-    (reference values, identical to the frozen backtest constants).
-    """
-    sigma = dict(SIGMA)
-
-    if sigma_override_path.exists():
-        with sigma_override_path.open() as f:
-            override = yaml.safe_load(f) or {}
-        if "sigmas" in override:
-            sigma.update(override["sigmas"])
-
-    filters: dict = {}
-    for sym, info in UNIVERSE.items():
-        ul  = info["underlying"]
-        sig = sigma.get(ul)
-        if sig is None:
-            continue
-        threshold = sig * k
-        if info["inverse"]:
-            filters[sym] = (ul, threshold, True)
-        else:
-            filters[sym] = (ul, threshold)
-    return filters
+    """Backward-compat wrapper — frozen seed mode (no parquet access)."""
+    return build_live_ps_filters(
+        use_rolling=False, k=k, sigma_override_path=sigma_override_path
+    )
 
 
 # ── LiveConfig ────────────────────────────────────────────────────────────────
@@ -206,15 +323,19 @@ def _apply_direction_filters(cfg: LiveConfig) -> None:
     cfg.direction_filters = dict(cfg.strategy_config.direction_filters)
 
 
-def load_live_config(overrides: Optional[dict] = None) -> LiveConfig:
+def load_live_config(
+    overrides: Optional[dict] = None,
+    use_rolling: bool = True,
+) -> LiveConfig:
     """
     Build and return a LiveConfig instance.
 
     1. Starts from all-default fields (sourced from reference layer).
-       prior_session_filters are built from sigma_override.yaml if present,
-       else from _production_run.SIGMA reference values.
     2. Applies overrides.yaml (if present).
     3. Applies any caller-supplied overrides dict.
+    4. Recomputes prior_session_filters using rolling parquet sigmas when
+       use_rolling=True (default). Set USE_ROLLING_SIGMAS=0 in env to force
+       frozen-seed mode without changing calling code.
 
     Override keys must match LiveConfig field names exactly.
     """
@@ -245,5 +366,16 @@ def load_live_config(overrides: Optional[dict] = None) -> LiveConfig:
     for key, val in merged.items():
         if hasattr(cfg, key):
             setattr(cfg, key, val)
+
+    # Recompute prior_session_filters with rolling parquet sigmas unless
+    # caller or env explicitly opts out.
+    _env_flag = os.getenv("USE_ROLLING_SIGMAS", "1").strip().lower()
+    _rolling  = use_rolling and (_env_flag not in ("0", "false"))
+    cfg.prior_session_filters = build_live_ps_filters(
+        use_rolling=_rolling,
+        data_dir=cfg.data_dir,
+        k=cfg.ps_filter_k,
+        sigma_runtime_path=cfg.data_dir.parent / "sigma_runtime.yaml",
+    )
 
     return cfg

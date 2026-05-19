@@ -181,7 +181,7 @@ class BarRouter:
                         fn=getattr(fn, "__name__", "?"), exc=str(exc),
                     )
 
-    async def _on_stream_bar(self, bar) -> None:
+    def _on_stream_bar(self, bar) -> None:
         """
         Callback invoked by alpaca-py on each incoming WebSocket bar.
         Normalises the alpaca Bar object to a plain dict, detects missed bars,

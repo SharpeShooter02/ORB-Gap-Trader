@@ -31,15 +31,11 @@ class _StubAlpaca:
         self.subscribe_calls = []
 
     def subscribe_bars(self, symbols, callback):
-        import asyncio
-        import inspect
         self.subscribe_calls.append(list(symbols))
         for sym, bars in self._sequences.items():
             if sym in symbols:
                 for b in bars:
-                    result = callback(_make_alpaca_bar(sym, b))
-                    if inspect.iscoroutine(result):
-                        asyncio.run(result)
+                    callback(_make_alpaca_bar(sym, b))
 
     def get_intraday_bars(self, symbol, start_dt, end_dt, timeframe="1Min", feed="iex"):
         rows = self._sequences.get(symbol, [])
@@ -220,8 +216,7 @@ def test_g_replay_before_live_on_reconnect():
     router._last_bar_ts["TQQQ"] = _DT(10, 1)
 
     # Simulate receiving a live bar at 10:05 (4-min gap)
-    import asyncio
-    asyncio.run(router._on_stream_bar(_make_alpaca_bar("TQQQ", live_bar)))
+    router._on_stream_bar(_make_alpaca_bar("TQQQ", live_bar))
 
     # Expected: 51, 52, 53 (replayed), then 54 (live)
     assert dispatch_order == [51.0, 52.0, 53.0, 54.0]

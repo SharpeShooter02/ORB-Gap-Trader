@@ -471,8 +471,13 @@ class AlpacaClient:
         from alpaca.data.live.stock import StockDataStream
         stream = StockDataStream(self._trading._api_key, self._trading._secret_key)
         self._active_stream = stream
+
+        # alpaca-py requires async coroutine handlers; wrap the sync callback.
+        async def _async_callback(bar):
+            callback(bar)
+
         try:
-            stream.subscribe_bars(callback, *symbols)
+            stream.subscribe_bars(_async_callback, *symbols)
             stream.run()
         finally:
             self._active_stream = None

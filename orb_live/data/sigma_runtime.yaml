@@ -1,0 +1,64 @@
+last_computed: '2026-05-19T06:43:15Z'
+source: rolling
+sigmas:
+  AMD: 0.0268
+  ASHR: 0.0131
+  BTC: 0.0198
+  DIA: 0.0088
+  EEM: 0.0128
+  ETH: 0.03
+  EWW: 0.0134
+  EWY: 0.015
+  GDX: 0.0181
+  GDXJ: 0.0195
+  IBB: 0.0112
+  INDY: 0.0101
+  ITA: 0.0105
+  IWM: 0.0105
+  IYR: 0.013
+  KRE: 0.0157
+  NVDA: 0.0278
+  QQQ: 0.0126
+  SOL: 0.0457
+  SOXX: 0.0145
+  SPY: 0.0087
+  TSLA: 0.026
+  UNG: 0.0208
+  VIX: 0.0603
+  XLC: 0.0101
+  XLF: 0.0139
+  XLK: 0.0119
+  XLU: 0.0088
+  XLV: 0.0081
+  XRP: 0.0369
+fallback_underlyings:
+- AMD
+- ASHR
+- BTC
+- DIA
+- EEM
+- ETH
+- EWW
+- EWY
+- GDX
+- GDXJ
+- IBB
+- INDY
+- ITA
+- IWM
+- IYR
+- KRE
+- NVDA
+- QQQ
+- SOL
+- SOXX
+- SPY
+- TSLA
+- UNG
+- VIX
+- XLC
+- XLF
+- XLK
+- XLU
+- XLV
+- XRP

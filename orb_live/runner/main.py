@@ -86,7 +86,7 @@ def _build_components(args: argparse.Namespace):
     from orb_live.runner.session_runner import SessionRunner
 
     cfg    = load_live_config()
-    logger = get_logger()
+    logger = get_logger(__name__)
 
     # Session date
     if args.session_date:

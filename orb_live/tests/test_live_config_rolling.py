@@ -115,15 +115,24 @@ def test_use_rolling_false_uses_seed_values(tmp_path):
 
 
 def test_universe_underlyings_discovered(tmp_path):
+    """
+    build_live_ps_filters iterates UNIVERSE (not SIGMA.keys()) so every
+    underlying referenced by an active ETF gets a ps_filter when its parquet
+    exists. Verify the five previously-missing underlyings produce
+    parquet-derived thresholds distinct from their seed values.
+    """
     from orb_live.config.live_config import build_live_ps_filters
     from reference._production_run import SIGMA
 
-    # ASHR/EWW/ITA/IYR/XLU are in UNIVERSE but absent from SIGMA.
-    # When their parquets exist, they must produce ps_filter entries.
-    missing_from_sigma = ["ASHR", "EWW", "ITA", "IYR", "XLU"]
-    for ul in missing_from_sigma:
-        assert ul not in SIGMA, f"test assumption broken: {ul} is now in SIGMA"
-        _make_parquet(tmp_path, ul, seed=abs(hash(ul)) % 10_000)
+    ul_to_sym = {
+        "ASHR": "CHAU",
+        "EWW":  "MEXX",
+        "ITA":  "DFEN",
+        "IYR":  "URE",
+        "XLU":  "UTSL",
+    }
+    dfs = {ul: _make_parquet(tmp_path, ul, seed=abs(hash(ul)) % 10_000)
+           for ul in ul_to_sym}
 
     filters = build_live_ps_filters(
         use_rolling=True,
@@ -133,17 +142,12 @@ def test_universe_underlyings_discovered(tmp_path):
         k=1.25,
     )
 
-    # The ETFs that use these underlyings
-    ul_to_sym = {
-        "ASHR": "CHAU",
-        "EWW":  "MEXX",
-        "ITA":  "DFEN",
-        "IYR":  "URE",
-        "XLU":  "UTSL",
-    }
     for ul, sym in ul_to_sym.items():
-        assert sym in filters, (
-            f"{sym} (underlying={ul}) should have a ps_filter when parquet exists"
+        assert sym in filters, f"{sym} (underlying={ul}) missing from filters"
+        # Synthetic parquet sigma should match expected, not seed
+        expected_thr = _expected_sigma(dfs[ul]) * 1.25
+        assert abs(filters[sym][1] - expected_thr) < 1e-9, (
+            f"{sym}: threshold {filters[sym][1]:.6f} != parquet-derived {expected_thr:.6f}"
         )
 
 

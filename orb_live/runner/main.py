@@ -151,7 +151,61 @@ def _build_components(args: argparse.Namespace):
         logger=logger,
     )
 
-    return runner, session_date
+    return runner, clock, session_date
+
+
+def _run_daemon(
+    runner,
+    clock,
+    recover: bool = False,
+    _sleep=None,
+    _shutdown=None,
+    _sleep_interval: float = 60.0,
+) -> None:
+    """
+    Daemon loop: sleep until 08:30 ET on the next market day, run a session,
+    then repeat until SIGTERM/SIGINT.
+
+    Parameters prefixed with _ are injection points for testing only.
+    """
+    import time as _time
+    import signal as _signal
+
+    _sleep_fn = _sleep or _time.sleep
+    shutdown   = _shutdown if _shutdown is not None else [False]
+
+    if _shutdown is None:
+        def _on_signal(signum, frame):
+            shutdown[0] = True
+        _signal.signal(_signal.SIGTERM, _on_signal)
+        _signal.signal(_signal.SIGINT,  _on_signal)
+
+    while not shutdown[0]:
+        next_pm = clock.next_premarket_start()
+        now     = clock.now_et()
+        secs    = (next_pm - now).total_seconds()
+
+        if secs > 1:
+            remaining = secs
+            while not shutdown[0] and remaining > 0:
+                chunk = min(_sleep_interval, remaining)
+                _sleep_fn(chunk)
+                remaining -= chunk
+            if shutdown[0]:
+                break
+
+        if shutdown[0]:
+            break
+
+        session_date = next_pm.date()
+        try:
+            if recover:
+                runner.recover(session_date)
+                recover = False
+            else:
+                runner.run_session(session_date)
+        except SystemExit:
+            break
 
 
 def main() -> None:
@@ -160,12 +214,17 @@ def main() -> None:
     if args.live:
         _confirm_live()
 
-    runner, session_date = _build_components(args)
+    runner, clock, session_date = _build_components(args)
 
-    if args.recover:
-        runner.recover(session_date)
+    if args.session_date:
+        # One-shot: run the specified date immediately
+        if args.recover:
+            runner.recover(session_date)
+        else:
+            runner.run_session(session_date)
     else:
-        runner.run_session(session_date)
+        # Daemon mode: sleep until next 08:30 ET pre-market, then loop
+        _run_daemon(runner, clock, recover=args.recover)
 
 
 if __name__ == "__main__":

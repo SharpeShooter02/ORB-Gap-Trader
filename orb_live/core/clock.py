@@ -4,14 +4,15 @@ core/clock.py — Market timing helpers.
 All times are Eastern.  Uses zoneinfo (Python 3.9+) for DST-safe conversions.
 """
 
-from datetime import datetime, time as dtime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-MARKET_OPEN  = dtime(9, 30)
-MARKET_CLOSE = dtime(16, 0)
+MARKET_OPEN    = dtime(9, 30)
+MARKET_CLOSE   = dtime(16, 0)
 HALF_DAY_CLOSE = dtime(13, 0)
+PREMARKET_START = dtime(8, 30)
 
 # Alpaca is imported lazily so that imports don't fail without credentials.
 _alpaca_client = None
@@ -91,6 +92,52 @@ class MarketClock:
 
     def seconds_until_eod(self, hour: int = 16, minute: int = 0) -> float:
         return (self.eod_exit_et(hour, minute) - self.now_et()).total_seconds()
+
+    # ── Next-session helpers ──────────────────────────────────────────────────
+
+    def next_market_day(self) -> date:
+        """
+        Return the date of the next market session whose pre-market window
+        (08:30 ET) has not yet started.  If the current time is before 08:30
+        today on a weekday, returns today.  Uses Alpaca for holiday awareness
+        when a client is available; falls back to weekday arithmetic otherwise.
+        """
+        now   = self.now_et()
+        today = now.date()
+        now_t = now.time()
+
+        if self._client is not None:
+            try:
+                clk = self._client.get_clock()
+                if clk.is_open:
+                    # Market is active — today's session is in progress
+                    return today
+                next_open_date = clk.next_open.astimezone(ET).date()
+                # next_open is today and pre-market hasn't started yet → today
+                if next_open_date == today and now_t < PREMARKET_START:
+                    return today
+                return next_open_date
+            except Exception:
+                pass
+
+        # Fallback: naive weekday arithmetic (ignores holidays).
+        # Return today if the market session hasn't closed yet (before 16:00),
+        # so mid-session startups trigger an immediate run rather than sleeping.
+        today_eod = now.replace(
+            hour=MARKET_CLOSE.hour, minute=MARKET_CLOSE.minute,
+            second=0, microsecond=0,
+        )
+        if today.weekday() < 5 and now < today_eod:
+            return today
+        target = today + timedelta(days=1)
+        while target.weekday() >= 5:
+            target += timedelta(days=1)
+        return target
+
+    def next_premarket_start(self) -> datetime:
+        """Return the next 08:30 ET on a market day as an aware datetime."""
+        next_day = self.next_market_day()
+        return datetime.combine(next_day, PREMARKET_START).replace(tzinfo=ET)
 
     # ── Phase detection ───────────────────────────────────────────────────────
 

@@ -22,7 +22,7 @@ import pandas as pd
 import yaml
 
 import orb_live  # noqa: F401 — sys.path setup
-from reference._production_run import SIGMA
+from reference._production_run import SIGMA, UNIVERSE
 from orb_live.config.live_config import _SIGMA_OVERRIDE_FILE
 
 
@@ -49,6 +49,8 @@ def compute_sigma(
     )
     if df.empty or len(df) < 30:
         raise ValueError(f"Insufficient data for {underlying}: {len(df)} rows")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
     returns = df["Close"].pct_change().dropna().abs()
     return float(returns.std()), len(returns)
 
@@ -63,7 +65,8 @@ def recalibrate_all(
     Returns a DataFrame with columns:
         underlying, ref_sigma, new_sigma, n_obs, delta_pct, flag
     """
-    targets = underlyings or list(SIGMA.keys())
+    all_universe_uls = sorted({info["underlying"] for info in UNIVERSE.values()})
+    targets = underlyings or all_universe_uls
     rows = []
     for ul in targets:
         try:

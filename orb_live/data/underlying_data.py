@@ -301,6 +301,8 @@ def fetch_prev_close(underlying: str, as_of: "Optional[date]" = None) -> "Option
                      progress=False, auto_adjust=True)
     if df.empty:
         return None
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
     df = df[df.index.normalize() < end] if as_of else df
     if df.empty:
         return None
@@ -319,8 +321,10 @@ def fetch_prev_two_closes(underlying: str) -> "tuple[Optional[float], Optional[f
                      progress=False, auto_adjust=True)
     if len(df) < 2:
         return None, None
-    closes = df["Close"].values
-    return float(closes[-1]), float(closes[-2])
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    closes = df["Close"]
+    return float(closes.iloc[-1]), float(closes.iloc[-2])
 
 
 def compute_prev_session_move(underlying: str) -> "Optional[float]":

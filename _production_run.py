@@ -25,8 +25,6 @@ ACTIVE = [
     "SQQQ",   # QQQ  3x bear
     "UPRO",   # SPY  3x bull
     "SPXS",   # SPY  3x bear
-    "URTY",   # IWM  3x bull
-    "TZA",    # IWM  3x bear  (SRTY cut: weaker, 95%+ co-fire with TZA)
     "UDOW",   # DIA  3x bull
     "SDOW",   # DIA  3x bear
     "FNGD",   # FANG 3x bear  (FNGU cut: duplicate QQQ exposure)

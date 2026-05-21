@@ -6,6 +6,8 @@ without network access.  All cases verify observable side effects (listener
 calls, dispatch order, reconnect backoff, missed-bar replay).
 """
 
+import threading
+import time as _time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Optional
@@ -258,3 +260,136 @@ def test_h_reconnect_backoff_doubles_each_attempt():
 
     # 3 failures → slept 1, 2, 4; 4th call is clean exit → no sleep after (loop breaks)
     assert sleep_calls == [1.0, 2.0, 4.0]
+
+
+# ── Session-lifecycle tests (subscribe/unsubscribe) ───────────────────────────
+
+class _BlockingAlpaca:
+    """
+    Stub whose subscribe_bars BLOCKS until stop_bars_stream() is called.
+    Resets automatically for each new subscribe_bars invocation so that
+    re-subscribe tests don't see a pre-set event.
+    """
+    def __init__(self):
+        self._stop_event = threading.Event()
+        self.subscribe_calls: list[list[str]] = []
+        self.stop_calls = 0
+
+    def subscribe_bars(self, symbols, callback):
+        self._stop_event.clear()          # reset for each new subscription
+        self.subscribe_calls.append(list(symbols))
+        self._stop_event.wait()           # blocks until stop_bars_stream()
+
+    def stop_bars_stream(self):
+        self.stop_calls += 1
+        self._stop_event.set()
+
+    def get_intraday_bars(self, *args, **kwargs):
+        return pd.DataFrame()
+
+
+def _wait_for(condition, timeout=2.0, interval=0.01) -> bool:
+    """Spin-wait until condition() is True or timeout expires."""
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if condition():
+            return True
+        _time.sleep(interval)
+    return False
+
+
+def test_i_unsubscribe_terminates_streaming_thread():
+    """
+    unsubscribe() must wait for the streaming thread to fully exit before
+    returning — not just set a flag and return immediately.
+    """
+    from orb_live.runner.bar_router import BarRouter
+
+    alpaca = _BlockingAlpaca()
+    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+
+    router.subscribe(["TQQQ"])
+    assert _wait_for(lambda: router._thread is not None and router._thread.is_alive()), \
+        "streaming thread did not start"
+
+    router.unsubscribe()
+
+    assert not router._running
+    assert router._symbols == []
+    # Thread must be dead; join would have waited in unsubscribe()
+    assert router._thread is None or not router._thread.is_alive()
+
+
+def test_j_subscribe_idempotent_same_symbols():
+    """
+    Calling subscribe() twice with the same symbol set must not spawn a
+    second streaming thread or open a second WebSocket connection.
+    """
+    from orb_live.runner.bar_router import BarRouter
+
+    alpaca = _BlockingAlpaca()
+    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+
+    router.subscribe(["TQQQ", "SQQQ"])
+    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 1)
+    thread1 = router._thread
+
+    router.subscribe(["TQQQ", "SQQQ"])  # same symbols — should be no-op
+
+    assert router._thread is thread1            # same thread object
+    assert len(alpaca.subscribe_calls) == 1     # only one subscribe_bars call
+
+    router.unsubscribe()
+
+
+def test_k_subscribe_different_symbols_replaces_stream():
+    """
+    Subscribing with a different symbol set must tear down the old WebSocket
+    (stop_bars_stream called, old thread dead) then start a fresh one.
+    """
+    from orb_live.runner.bar_router import BarRouter
+
+    alpaca = _BlockingAlpaca()
+    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+
+    router.subscribe(["TQQQ", "SQQQ"])
+    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 1)
+    thread1 = router._thread
+
+    router.subscribe(["SOXL", "SOXS"])          # different symbols
+
+    # Old thread must be dead — unsubscribe() was called internally
+    assert not thread1.is_alive(), "old streaming thread still alive after re-subscribe"
+    assert alpaca.stop_calls >= 1, "stop_bars_stream was not called on re-subscribe"
+    # New thread is live with the new symbols
+    assert set(router._symbols) == {"SOXL", "SOXS"}
+    assert _wait_for(lambda: router._thread is not None and router._thread.is_alive()), \
+        "new streaming thread did not start"
+
+    router.unsubscribe()
+
+
+def test_l_unsubscribe_then_resubscribe_lifecycle():
+    """
+    Full lifecycle: subscribe A → unsubscribe → subscribe B.
+    After the second subscribe, only B's symbols are active.
+    """
+    from orb_live.runner.bar_router import BarRouter
+
+    alpaca = _BlockingAlpaca()
+    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+
+    router.subscribe(["TQQQ"])
+    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 1)
+
+    router.unsubscribe()
+    assert router._symbols == []
+    assert not router._running
+
+    router.subscribe(["SOXL"])
+    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 2), \
+        "second subscribe_bars call never happened"
+    assert set(router._symbols) == {"SOXL"}
+    assert router._running
+
+    router.unsubscribe()

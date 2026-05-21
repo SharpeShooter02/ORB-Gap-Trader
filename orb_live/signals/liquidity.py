@@ -104,8 +104,10 @@ class PreFlightCheck:
             return "not_tradable", warnings
 
         status = asset.get("status", "active")
-        if status != "active":
-            return f"asset_status_{status}", warnings
+        # Normalize alpaca-py enum values (e.g. AssetStatus.ACTIVE → "active")
+        status_str = (status.value if hasattr(status, "value") else str(status)).lower()
+        if status_str != "active":
+            return "asset_not_active", warnings
 
         if gap_direction == -1:
             if not self._cfg.allow_htb_shorts and not asset.get("easy_to_borrow", True):

@@ -82,12 +82,23 @@ class BarRouter:
         """
         Start background WebSocket streaming for the given symbols.
         Non-blocking: spawns a daemon thread.
+
+        Idempotent:
+          - Same symbols already streaming → no-op.
+          - Different symbols (or no stream running) → tears down any existing
+            stream cleanly before starting the new one.
         """
+        if self._running and set(symbols) == set(self._symbols):
+            return  # already streaming these exact symbols
+
+        if self._running:
+            self.unsubscribe()  # clean teardown before restarting
+
         self._symbols = list(symbols)
         with self._ts_lock:
             self._last_bar_ts = {s: None for s in symbols}
-        self._running   = True
-        self._degraded  = False
+        self._running  = True
+        self._degraded = False
         self._thread = threading.Thread(
             target=self._stream_loop, daemon=True, name="BarRouter"
         )
@@ -107,8 +118,33 @@ class BarRouter:
         return (datetime.now(ET) - self._ws_connected_at).total_seconds() / 60.0
 
     def unsubscribe(self) -> None:
-        """Signal the streaming thread to stop on next reconnect cycle."""
+        """
+        Stop streaming: close the WebSocket connection, wait for the streaming
+        thread to fully exit, then reset subscription state.
+
+        Blocks until the thread is dead (or times out after 10 s).  This
+        ensures the Alpaca WebSocket connection is fully released before the
+        next subscribe() call, preventing HTTP 429 'connection limit exceeded'.
+        """
         self._running = False
+        # Close the WebSocket so subscribe_bars() returns promptly
+        stop_fn = getattr(self._alpaca, "stop_bars_stream", None)
+        if stop_fn is not None:
+            try:
+                stop_fn()
+            except Exception:
+                pass
+        # Wait for threads to fully exit before returning
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=10.0)
+        if self._refresh_thread is not None and self._refresh_thread.is_alive():
+            self._refresh_thread.join(timeout=5.0)
+        # Reset state so the next subscribe() starts with a clean slate
+        self._thread         = None
+        self._refresh_thread = None
+        self._symbols        = []
+        self._ws_connected_at = None
+        self._degraded        = False
 
     def detect_missed_bars(
         self,

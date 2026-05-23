@@ -96,26 +96,46 @@ class MarketClock:
         """
         Return the date of the next market session whose pre-market window
         (08:30 ET) has not yet started.  If the current time is before 08:30
-        today on a weekday, returns today.  Uses Alpaca for holiday awareness
-        when a client is available; falls back to weekday arithmetic otherwise.
+        today on a weekday, returns today.  Uses the broker client for holiday
+        awareness when one is available; falls back to weekday arithmetic
+        otherwise.
+
+        The broker API call is bounded to 10 seconds so a slow or unreachable
+        endpoint degrades gracefully to the naive weekday fallback rather than
+        blocking the daemon loop indefinitely.
         """
+        import threading as _threading
+
         now   = self.now_et()
         today = now.date()
         now_t = now.time()
 
         if self._client is not None:
-            try:
-                clk = self._client.get_clock()
-                if clk.is_open:
-                    # Market is active — today's session is in progress
-                    return today
-                next_open_date = clk.next_open.astimezone(ET).date()
-                # next_open is today and pre-market hasn't started yet → today
-                if next_open_date == today and now_t < PREMARKET_START:
-                    return today
-                return next_open_date
-            except Exception:
-                pass
+            _clock_result: list = [None]
+
+            def _fetch():
+                try:
+                    _clock_result[0] = self._client.get_clock()
+                except Exception:
+                    pass
+
+            _t = _threading.Thread(target=_fetch, daemon=True)
+            _t.start()
+            _t.join(timeout=10.0)
+
+            clk = _clock_result[0]
+            if clk is not None:
+                try:
+                    if clk.is_open:
+                        # Market is active — today's session is in progress
+                        return today
+                    next_open_date = clk.next_open.astimezone(ET).date()
+                    # next_open is today and pre-market hasn't started yet → today
+                    if next_open_date == today and now_t < PREMARKET_START:
+                        return today
+                    return next_open_date
+                except Exception:
+                    pass
 
         # Fallback: naive weekday arithmetic (ignores holidays).
         # Return today if the market session hasn't closed yet (before 16:00),

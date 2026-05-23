@@ -76,11 +76,11 @@ def build_broker_from_env(paper: bool = True):
     return build_client_from_env(paper=paper)
 
 
-def _build_components(args: argparse.Namespace):
+def _build_components(args: argparse.Namespace, _log=None):
     """
     Construct all session components from config + env.
 
-    Returns (runner, clock, session_date).
+    Returns (runner, clock, health_server, session_date).
     """
     import orb_live  # noqa: F401 — path setup
 
@@ -94,13 +94,17 @@ def _build_components(args: argparse.Namespace):
     from orb_live.execution.order_policy import MarketableLimitPolicy
     from orb_live.execution.position_manager import LivePositionManager
     from orb_live.execution.risk_gate import RiskGate
+    from orb_live.ops.health_check import HealthServer
     from orb_live.signals.pre_market import PreMarketJob
     from orb_live.runner.bar_router import BarRouter
     from orb_live.runner.strategy_engine import StrategyEngine
     from orb_live.runner.session_runner import SessionRunner
 
-    cfg    = load_live_config()
-    logger = get_logger(__name__)
+    logger = _log or get_logger(__name__)
+
+    logger.info("loading_config")
+    cfg = load_live_config()
+    logger.info("config_loaded", n_symbols=len(cfg.symbols))
 
     # Session date
     if args.session_date:
@@ -108,20 +112,26 @@ def _build_components(args: argparse.Namespace):
     else:
         session_date = datetime.now(tz=ET).date()
 
-    # Broker client
+    # Broker client — constructor only; no API calls here
     paper = not args.live
+    logger.info("constructing_broker", paper=paper)
     real_client = build_broker_from_env(paper=paper)
+    logger.info("broker_constructed")
 
     if args.dry_run:
         from orb_live.runner.dry_run import DryRunAlpaca
+        logger.info("fetching_equity_for_dry_run")
         starting_equity = float(real_client.get_account().get("equity", 100_000.0))
         broker = DryRunAlpaca(real_client, starting_equity=starting_equity)
+        logger.info("dry_run_broker_ready", starting_equity=starting_equity)
     else:
         broker = real_client
 
     # State store
+    logger.info("initialising_state_store", path=str(cfg.db_path))
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
     store = StateStore(cfg.db_path)
+    logger.info("state_store_ready")
 
     # Supporting components
     bar_cache    = BarCache()
@@ -165,7 +175,17 @@ def _build_components(args: argparse.Namespace):
         logger=logger,
     )
 
-    return runner, clock, session_date
+    # Health server — daemon thread, non-blocking
+    health_server = HealthServer(
+        state_store=store,
+        broker=broker,
+        bar_router=bar_router,
+        clock=clock,
+        logger=logger,
+    )
+
+    logger.info("components_ready", session_date=str(session_date))
+    return runner, clock, health_server, session_date
 
 
 def _run_daemon(
@@ -184,6 +204,8 @@ def _run_daemon(
     """
     import time as _time
     import signal as _signal
+    from orb_live.core.logger import get_logger
+    _log = get_logger(__name__)
 
     _sleep_fn = _sleep or _time.sleep
     shutdown   = _shutdown if _shutdown is not None else [False]
@@ -199,10 +221,18 @@ def _run_daemon(
         now     = clock.now_et()
         secs    = (next_pm - now).total_seconds()
 
+        _log.info(
+            "daemon_loop_iter",
+            now=now.isoformat(),
+            next_premarket=next_pm.isoformat(),
+            wait_seconds=round(secs, 1),
+        )
+
         if secs > 1:
             remaining = secs
             while not shutdown[0] and remaining > 0:
                 chunk = min(_sleep_interval, remaining)
+                _log.info("daemon_loop_sleep", duration_seconds=round(chunk, 1))
                 _sleep_fn(chunk)
                 remaining -= chunk
             if shutdown[0]:
@@ -212,6 +242,7 @@ def _run_daemon(
             break
 
         session_date = next_pm.date()
+        _log.info("daemon_session_starting", session_date=str(session_date))
         try:
             if recover:
                 runner.recover(session_date)
@@ -223,22 +254,37 @@ def _run_daemon(
 
 
 def main() -> None:
+    # Configure logging and emit the very first log line BEFORE any other work.
+    # This makes startup hangs visible immediately in journald / stdout.
+    from orb_live.core.logger import configure_logging, get_logger
+    configure_logging()
+    _log = get_logger(__name__)
+
     args = _parse_args()
+    _log.info("runner_starting", argv=sys.argv[1:])
 
     if args.live:
         _confirm_live()
 
-    runner, clock, session_date = _build_components(args)
+    runner, clock, health_server, session_date = _build_components(args, _log)
 
-    if args.session_date:
-        # One-shot: run the specified date immediately
-        if args.recover:
-            runner.recover(session_date)
+    # Health server runs in a daemon thread — starts immediately so /health
+    # responds even while the daemon loop is sleeping before market open.
+    health_server.start()
+    _log.info("health_server_listening", port=8080)
+
+    try:
+        if args.session_date:
+            # One-shot: run the specified date immediately
+            if args.recover:
+                runner.recover(session_date)
+            else:
+                runner.run_session(session_date)
         else:
-            runner.run_session(session_date)
-    else:
-        # Daemon mode: sleep until next 08:30 ET pre-market, then loop
-        _run_daemon(runner, clock, recover=args.recover)
+            # Daemon mode: sleep until next 08:30 ET pre-market, then loop
+            _run_daemon(runner, clock, recover=args.recover)
+    finally:
+        health_server.stop()
 
 
 if __name__ == "__main__":

@@ -852,6 +852,27 @@ class TestGetIntradayBars:
         assert " " in end_str        # space between date and time, not dash
         assert not end_str.startswith("-")
 
+    def test_get_intraday_bars_returns_empty_on_timeout(self):
+        client = self._client()
+        client._ib.reqHistoricalData.side_effect = Exception("Timed out")
+
+        start = datetime(2026, 5, 22, 9, 30, tzinfo=_ET)
+        end   = datetime(2026, 5, 22, 10, 0, tzinfo=_ET)
+        df = client.get_intraday_bars("TQQQ", start, end)
+
+        assert df.empty
+
+    def test_get_intraday_bars_passes_timeout_kwarg(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = []
+
+        start = datetime(2026, 5, 22, 9, 30, tzinfo=_ET)
+        end   = datetime(2026, 5, 22, 10, 0, tzinfo=_ET)
+        client.get_intraday_bars("TQQQ", start, end)
+
+        call_kwargs = client._ib.reqHistoricalData.call_args.kwargs
+        assert call_kwargs.get("timeout") == 15
+
 
 # ── subscribe_bars / stop_bars_stream ─────────────────────────────────────────
 

@@ -605,15 +605,26 @@ class IBClient(BrokerClient):
         else:
             end_dt_str = end.strftime("%Y%m%d %H:%M:%S US/Eastern")
 
-        raw = self._ib.reqHistoricalData(
-            contract,
-            endDateTime=end_dt_str,
-            durationStr=duration_str,
-            barSizeSetting=bar_size,
-            whatToShow="TRADES",
-            useRTH=False,
-            formatDate=2,
-        )
+        try:
+            raw = self._ib.reqHistoricalData(
+                contract,
+                endDateTime=end_dt_str,
+                durationStr=duration_str,
+                barSizeSetting=bar_size,
+                whatToShow="TRADES",
+                useRTH=False,
+                formatDate=2,
+                timeout=15,
+            )
+        except Exception as exc:
+            if self._log:
+                self._log.warning(
+                    "reqHistoricalData_failed",
+                    symbol=symbol,
+                    duration=duration_str,
+                    error=str(exc),
+                )
+            return _empty
 
         if not raw:
             return _empty

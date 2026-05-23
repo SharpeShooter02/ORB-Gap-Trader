@@ -1,17 +1,25 @@
 """
-tests/test_ib_client.py — Unit tests for IBClient (Part 1).
+tests/test_ib_client.py — Unit tests for IBClient (Parts 1-2).
 
 All IB Gateway network calls are mocked so these run without a live connection.
 """
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from orb_live.data.ib_client import IBClient, build_client_from_env
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _et(year, month, day, hour, minute=0) -> datetime:
+    return datetime(year, month, day, hour, minute, tzinfo=_ET)
 
 
 def _make_account_value(tag: str, value: str, currency: str = "USD") -> SimpleNamespace:
@@ -233,3 +241,189 @@ class TestBuildClientFromEnv:
         assert client._host      == "192.168.1.100"
         assert client._port      == 7497
         assert client._client_id == 5
+
+
+# ── Asset metadata ────────────────────────────────────────────────────────────
+
+def _make_qualified_contract(symbol: str, con_id: int, exchange: str) -> SimpleNamespace:
+    return SimpleNamespace(symbol=symbol, conId=con_id, primaryExchange=exchange)
+
+
+class TestGetAsset:
+    def test_get_asset_caches(self):
+        """qualifyContracts must be called exactly once across two identical lookups."""
+        qualified = [_make_qualified_contract("SOXL", 99001, "ARCA")]
+
+        with patch("orb_live.data.ib_client.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.qualifyContracts.return_value = qualified
+            MockIB.return_value = mock_ib
+
+            client = IBClient(paper=True)
+            client.get_asset("SOXL")
+            client.get_asset("SOXL")
+
+        mock_ib.qualifyContracts.assert_called_once()
+
+    def test_get_asset_qualified(self):
+        qualified = [_make_qualified_contract("SOXL", 12345, "ARCA")]
+
+        with patch("orb_live.data.ib_client.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.qualifyContracts.return_value = qualified
+            MockIB.return_value = mock_ib
+
+            client = IBClient(paper=True)
+            asset = client.get_asset("SOXL")
+
+        assert asset["symbol"]           == "SOXL"
+        assert asset["tradable"]         is True
+        assert asset["shortable"]        is True
+        assert asset["status"]           == "active"
+        assert asset["primary_exchange"] == "ARCA"
+        assert asset["conId"]            == 12345
+
+    def test_get_asset_not_found(self):
+        with patch("orb_live.data.ib_client.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.qualifyContracts.return_value = []
+            MockIB.return_value = mock_ib
+
+            client = IBClient(paper=True)
+            asset = client.get_asset("BADTICKER")
+
+        assert asset["symbol"]   == "BADTICKER"
+        assert asset["tradable"] is False
+        assert asset["status"]   == "not_found"
+        assert asset["conId"]    is None
+
+    def test_get_asset_exception_returns_not_found(self):
+        with patch("orb_live.data.ib_client.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.qualifyContracts.side_effect = RuntimeError("IB error")
+            MockIB.return_value = mock_ib
+
+            client = IBClient(paper=True)
+            asset = client.get_asset("FAIL")
+
+        assert asset["tradable"] is False
+        assert asset["status"]   == "not_found"
+
+
+# ── Market clock ──────────────────────────────────────────────────────────────
+
+class TestGetClock:
+    def _client(self) -> IBClient:
+        with patch("orb_live.data.ib_client.IB"):
+            return IBClient(paper=True)
+
+    def test_get_clock_during_session(self):
+        # 2026-05-19 is Tuesday — regular trading day
+        client = self._client()
+        with patch.object(client, "_now_et", return_value=_et(2026, 5, 19, 11)):
+            clock = client.get_clock()
+
+        assert clock["is_open"] is True
+        assert clock["next_close"].date() == date(2026, 5, 19)
+        assert clock["next_close"].hour   == 16
+        assert clock["next_close"].minute == 0
+        assert clock["next_open"].date()  > date(2026, 5, 19)
+
+    def test_get_clock_premarket(self):
+        client = self._client()
+        with patch.object(client, "_now_et", return_value=_et(2026, 5, 19, 8)):
+            clock = client.get_clock()
+
+        assert clock["is_open"] is False
+        assert clock["next_open"].date()   == date(2026, 5, 19)
+        assert clock["next_open"].hour     == 9
+        assert clock["next_open"].minute   == 30
+        assert clock["next_close"].date()  == date(2026, 5, 19)
+
+    def test_get_clock_after_hours(self):
+        # 2026-05-19 (Tue) at 17:00 — next open is Wed May 20
+        client = self._client()
+        with patch.object(client, "_now_et", return_value=_et(2026, 5, 19, 17)):
+            clock = client.get_clock()
+
+        assert clock["is_open"] is False
+        assert clock["next_open"].date() == date(2026, 5, 20)
+        assert clock["next_open"].hour   == 9
+
+    def test_get_clock_weekend(self):
+        # 2026-05-30 (Sat) at noon — next open is Mon June 1 (no holiday)
+        client = self._client()
+        with patch.object(client, "_now_et", return_value=_et(2026, 5, 30, 12)):
+            clock = client.get_clock()
+
+        assert clock["is_open"] is False
+        assert clock["next_open"].date() == date(2026, 6, 1)
+        assert clock["next_open"].hour   == 9
+
+    def test_get_clock_friday_evening(self):
+        # 2026-05-29 (Fri) at 17:00 — next open is Mon June 1 (no holiday)
+        client = self._client()
+        with patch.object(client, "_now_et", return_value=_et(2026, 5, 29, 17)):
+            clock = client.get_clock()
+
+        assert clock["is_open"] is False
+        assert clock["next_open"].date() == date(2026, 6, 1)
+
+    def test_get_clock_before_holiday(self):
+        # 2026-05-22 (Fri) at 17:00 — next open skips Sat/Sun/Memorial Day Mon 5/25
+        # → Tuesday 2026-05-26
+        client = self._client()
+        with patch.object(client, "_now_et", return_value=_et(2026, 5, 22, 17)):
+            clock = client.get_clock()
+
+        assert clock["is_open"] is False
+        assert clock["next_open"].date() == date(2026, 5, 26)
+
+    def test_get_clock_timestamp_matches_now(self):
+        fixed = _et(2026, 5, 19, 11, 15)
+        client = self._client()
+        with patch.object(client, "_now_et", return_value=fixed):
+            clock = client.get_clock()
+
+        assert clock["timestamp"] == fixed
+
+    def test_is_market_open_delegates_to_get_clock(self):
+        client = self._client()
+        with patch.object(client, "get_clock", return_value={"is_open": True}):
+            assert client.is_market_open() is True
+        with patch.object(client, "get_clock", return_value={"is_open": False}):
+            assert client.is_market_open() is False
+
+
+class TestIsHoliday:
+    def _client(self) -> IBClient:
+        with patch("orb_live.data.ib_client.IB"):
+            return IBClient(paper=True)
+
+    def test_is_holiday_known_dates(self):
+        client = self._client()
+        assert client._is_holiday(date(2026, 5, 25)) is True   # Memorial Day
+        assert client._is_holiday(date(2026, 7, 3))  is True   # Independence Day (observed)
+        assert client._is_holiday(date(2026, 12, 25)) is True  # Christmas
+        assert client._is_holiday(date(2026, 1, 19)) is True   # MLK Day
+        assert client._is_holiday(date(2026, 11, 26)) is True  # Thanksgiving
+
+    def test_regular_days_are_not_holidays(self):
+        client = self._client()
+        assert client._is_holiday(date(2026, 5, 26)) is False  # day after Memorial Day
+        assert client._is_holiday(date(2026, 7, 6))  is False  # Mon after July 4 observed
+        assert client._is_holiday(date(2026, 12, 24)) is False # Christmas Eve (not a holiday)
+
+    def test_is_market_day_false_for_weekend(self):
+        client = self._client()
+        assert client._is_market_day(date(2026, 5, 23)) is False  # Saturday
+        assert client._is_market_day(date(2026, 5, 24)) is False  # Sunday
+
+    def test_is_market_day_false_for_holiday(self):
+        client = self._client()
+        assert client._is_market_day(date(2026, 5, 25)) is False  # Memorial Day
+
+    def test_next_market_day_skips_weekend_and_holiday(self):
+        client = self._client()
+        # From Sat May 23 → skips Sun + Mon Memorial Day → Tue May 26
+        assert client._next_market_day(date(2026, 5, 23)) == date(2026, 5, 26)

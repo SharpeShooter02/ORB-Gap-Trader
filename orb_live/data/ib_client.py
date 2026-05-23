@@ -1,8 +1,9 @@
 """
-data/ib_client.py — Interactive Brokers client (Part 1: connection + account).
+data/ib_client.py — Interactive Brokers client (Parts 1-2: connection, account,
+asset metadata, and market clock).
 
 Implements BrokerClient for IB Gateway / TWS.  Thin synchronous wrapper
-around ib_async.IB.  Parts 2-4 (market data, orders, streaming) are stubbed
+around ib_async.IB.  Parts 3-4 (market data, orders, streaming) are stubbed
 as NotImplementedError and will be implemented later.
 
 Config (read by build_client_from_env):
@@ -15,12 +16,16 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import date, datetime, time as dtime, timedelta
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ib_async import IB
+from ib_async import IB, Stock
 from orb_live.data.broker_client import BrokerClient
+
+_ET = ZoneInfo("America/New_York")
 
 
 class IBClient(BrokerClient):
@@ -30,13 +35,34 @@ class IBClient(BrokerClient):
     Call connect() before using any data or account methods.
     """
 
+    # Hard-coded NYSE holidays for 2025-2027.
+    # Used when pandas_market_calendars is not installed.
+    _US_HOLIDAYS: frozenset[date] = frozenset({
+        # 2025
+        date(2025, 1, 1),  date(2025, 1, 20), date(2025, 2, 17),
+        date(2025, 4, 18), date(2025, 5, 26), date(2025, 6, 19),
+        date(2025, 7, 4),  date(2025, 9, 1),  date(2025, 11, 27),
+        date(2025, 12, 25),
+        # 2026
+        date(2026, 1, 1),  date(2026, 1, 19), date(2026, 2, 16),
+        date(2026, 4, 3),  date(2026, 5, 25), date(2026, 6, 19),
+        date(2026, 7, 3),  date(2026, 9, 7),  date(2026, 11, 26),
+        date(2026, 12, 25),
+        # 2027
+        date(2027, 1, 1),  date(2027, 1, 18), date(2027, 2, 15),
+        date(2027, 3, 26), date(2027, 5, 31), date(2027, 6, 18),
+        date(2027, 7, 5),  date(2027, 9, 6),  date(2027, 11, 25),
+        date(2027, 12, 24),
+    })
+
     def __init__(self, paper: bool = True, **kwargs):
-        self._paper     = paper
-        self._host      = kwargs.get("host",      "127.0.0.1")
-        self._port      = kwargs.get("port",      4002 if paper else 4001)
-        self._client_id = kwargs.get("client_id", 1)
-        self._log       = kwargs.get("logger")
-        self._ib        = IB()
+        self._paper       = paper
+        self._host        = kwargs.get("host",      "127.0.0.1")
+        self._port        = kwargs.get("port",      4002 if paper else 4001)
+        self._client_id   = kwargs.get("client_id", 1)
+        self._log         = kwargs.get("logger")
+        self._ib          = IB()
+        self._asset_cache: dict[str, dict] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -132,24 +158,136 @@ class IBClient(BrokerClient):
                 return pos
         return None
 
-    # ── Clock (not available from IB — use MarketClock without broker_client) ──
+    # ── Clock ────────────────────────────────────────────────────────────────
+    # Computed locally from system time + hard-coded NYSE schedule.
+    # IB does not expose a REST clock endpoint; we do not call the broker here.
 
-    def get_clock(self):
-        raise NotImplementedError(
-            "IBClient does not expose a market clock; "
-            "use MarketClock(broker_client=None) for IB sessions"
-        )
+    def get_clock(self) -> dict:
+        """
+        Return a market-clock snapshot computed from local time.
+
+        Keys: is_open (bool), next_open (datetime ET), next_close (datetime ET),
+              timestamp (datetime ET, current moment).
+
+        NOTE: Pass MarketClock(broker_client=None) for session-level timing;
+        this method exists so IBClient satisfies the BrokerClient interface.
+        Half-day detection is not supported here (Part 4).
+        """
+        now_et = self._now_et()
+        today  = now_et.date()
+
+        market_open_today  = datetime.combine(today, dtime(9, 30), tzinfo=_ET)
+        market_close_today = datetime.combine(today, dtime(16, 0), tzinfo=_ET)
+
+        if self._is_market_day(today):
+            if now_et < market_open_today:
+                is_open    = False
+                next_open  = market_open_today
+                next_close = market_close_today
+            elif now_et < market_close_today:
+                is_open = True
+                next_day  = self._next_market_day(today + timedelta(days=1))
+                next_open  = datetime.combine(next_day, dtime(9, 30), tzinfo=_ET)
+                next_close = market_close_today
+            else:
+                is_open   = False
+                next_day  = self._next_market_day(today + timedelta(days=1))
+                next_open  = datetime.combine(next_day, dtime(9, 30), tzinfo=_ET)
+                next_close = datetime.combine(next_day, dtime(16, 0), tzinfo=_ET)
+        else:
+            is_open  = False
+            next_day = self._next_market_day(today)
+            next_open  = datetime.combine(next_day, dtime(9, 30), tzinfo=_ET)
+            next_close = datetime.combine(next_day, dtime(16, 0), tzinfo=_ET)
+
+        return {
+            "is_open":    is_open,
+            "next_open":  next_open,
+            "next_close": next_close,
+            "timestamp":  now_et,
+        }
 
     def is_market_open(self) -> bool:
-        raise NotImplementedError(
-            "IBClient does not expose is_market_open; "
-            "use MarketClock(broker_client=None) for IB sessions"
-        )
+        return self.get_clock()["is_open"]
 
-    # ── Asset metadata (Part 2) ───────────────────────────────────────────────
+    # ── Clock helpers ─────────────────────────────────────────────────────────
+
+    def _now_et(self) -> datetime:
+        return datetime.now(tz=_ET)
+
+    def _is_holiday(self, d: date) -> bool:
+        """True if d is a US market holiday (weekday check is caller's responsibility)."""
+        try:
+            import pandas_market_calendars as mcal  # optional dependency
+            nyse     = mcal.get_calendar("NYSE")
+            schedule = nyse.schedule(
+                start_date=d.strftime("%Y-%m-%d"),
+                end_date=d.strftime("%Y-%m-%d"),
+            )
+            return bool(schedule.empty)
+        except ImportError:
+            pass
+        return d in self._US_HOLIDAYS
+
+    def _is_market_day(self, d: date) -> bool:
+        return d.weekday() < 5 and not self._is_holiday(d)
+
+    def _next_market_day(self, from_date: date) -> date:
+        """First market day on or after from_date."""
+        d = from_date
+        for _ in range(14):  # safety: longest US holiday stretch < 7 calendar days
+            if self._is_market_day(d):
+                return d
+            d += timedelta(days=1)
+        return d
+
+    # ── Asset metadata ────────────────────────────────────────────────────────
 
     def get_asset(self, symbol: str) -> dict:
-        raise NotImplementedError("IBClient.get_asset — Part 2")
+        """
+        Return asset metadata for symbol, qualifying the contract via IB.
+
+        Results are cached in self._asset_cache for the lifetime of the client.
+        """
+        if symbol in self._asset_cache:
+            return self._asset_cache[symbol]
+
+        contract = Stock(symbol, "SMART", "USD")
+        try:
+            qualified = self._ib.qualifyContracts(contract)
+            if qualified:
+                c = qualified[0]
+                result = {
+                    "symbol":           symbol,
+                    "tradable":         True,
+                    # TODO: implement real shortability check via reqMktData(genericTickList='236')
+                    # when market data subscription is available. For now, assume shortable.
+                    "shortable":        True,
+                    "status":           "active",
+                    "primary_exchange": c.primaryExchange,
+                    "conId":            c.conId,
+                }
+            else:
+                result = {
+                    "symbol":           symbol,
+                    "tradable":         False,
+                    "shortable":        False,
+                    "status":           "not_found",
+                    "primary_exchange": None,
+                    "conId":            None,
+                }
+        except Exception:
+            result = {
+                "symbol":           symbol,
+                "tradable":         False,
+                "shortable":        False,
+                "status":           "not_found",
+                "primary_exchange": None,
+                "conId":            None,
+            }
+
+        self._asset_cache[symbol] = result
+        return result
 
     # ── Bars (Part 3) ─────────────────────────────────────────────────────────
 

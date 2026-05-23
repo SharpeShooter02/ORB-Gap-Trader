@@ -14,6 +14,9 @@ Prerequisites:
 from __future__ import annotations
 
 import os
+import time
+from datetime import datetime, timezone
+
 import pytest
 
 RUN_IB = os.environ.get("RUN_IB_INTEGRATION") == "1"
@@ -64,3 +67,68 @@ class TestIBClientLive:
         assert client.is_connected() is False
         # reconnect so later fixtures still work
         client.connect()
+
+
+@skip_unless_ib
+class TestIBClientAssetLive:
+    @pytest.fixture(scope="class")
+    def client(self):
+        from orb_live.data.ib_client import build_client_from_env
+        c = build_client_from_env(paper=True)
+        c.connect()
+        yield c
+        c.disconnect()
+
+    def test_live_get_asset_soxl(self, client):
+        asset = client.get_asset("SOXL")
+        assert asset["symbol"]   == "SOXL"
+        assert asset["tradable"] is True
+        assert asset["status"]   == "active"
+        assert asset["conId"]    is not None and asset["conId"] > 0
+        assert asset["primary_exchange"] in ("ARCA", "NASDAQ", "NYSE", "BATS")
+
+    def test_live_get_asset_invalid(self, client):
+        asset = client.get_asset("INVALIDXYZ")
+        assert asset["tradable"] is False
+        assert asset["status"]   == "not_found"
+
+    def test_live_get_asset_cache(self, client):
+        # First call (may be cache-warm from previous test); do an uncached symbol
+        t0 = time.perf_counter()
+        asset1 = client.get_asset("TQQQ")
+        t1 = time.perf_counter()
+        # Second call must come from cache (< 10ms)
+        asset2 = client.get_asset("TQQQ")
+        t2 = time.perf_counter()
+
+        assert asset1 == asset2
+        second_call_ms = (t2 - t1) * 1000
+        assert second_call_ms < 10, f"Cache miss: second call took {second_call_ms:.1f}ms"
+
+
+@skip_unless_ib
+class TestIBClientClockLive:
+    @pytest.fixture(scope="class")
+    def client(self):
+        from orb_live.data.ib_client import build_client_from_env
+        # clock methods don't need a live connection, but use the connected
+        # client for consistency with other live tests
+        c = build_client_from_env(paper=True)
+        c.connect()
+        yield c
+        c.disconnect()
+
+    def test_live_get_clock_consistent(self, client):
+        before = datetime.now(tz=timezone.utc)
+        clock  = client.get_clock()
+        after  = datetime.now(tz=timezone.utc)
+
+        ts_utc = clock["timestamp"].astimezone(timezone.utc)
+        assert before <= ts_utc <= after, "clock timestamp is not within the expected range"
+
+    def test_live_get_clock_sensible(self, client):
+        clock = client.get_clock()
+        assert isinstance(clock["is_open"], bool)
+        assert clock["next_open"]  < clock["next_close"] or not clock["is_open"]
+        assert clock["next_open"].tzinfo  is not None
+        assert clock["next_close"].tzinfo is not None

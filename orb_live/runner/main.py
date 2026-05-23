@@ -254,6 +254,10 @@ def _run_daemon(
 
 
 def main() -> None:
+    # Load .env from the project root (no-op if file is absent).
+    from dotenv import load_dotenv
+    load_dotenv()
+
     # Configure logging and emit the very first log line BEFORE any other work.
     # This makes startup hangs visible immediately in journald / stdout.
     from orb_live.core.logger import configure_logging, get_logger

@@ -44,8 +44,8 @@ class BarRouter:
     is dispatched.
     """
 
-    def __init__(self, alpaca, state_store, bar_cache, logger=None):
-        self._alpaca    = alpaca
+    def __init__(self, broker, state_store, bar_cache, logger=None):
+        self._broker    = broker
         self._store     = state_store
         self._cache     = bar_cache
         self._log       = logger  # None OK; structlog when provided
@@ -128,7 +128,7 @@ class BarRouter:
         """
         self._running = False
         # Close the WebSocket so subscribe_bars() returns promptly
-        stop_fn = getattr(self._alpaca, "stop_bars_stream", None)
+        stop_fn = getattr(self._broker, "stop_bars_stream", None)
         if stop_fn is not None:
             try:
                 stop_fn()
@@ -171,7 +171,7 @@ class BarRouter:
         fetch_end   = current_ts
 
         try:
-            df = self._alpaca.get_intraday_bars(symbol, fetch_start, fetch_end)
+            df = self._broker.get_intraday_bars(symbol, fetch_start, fetch_end)
         except Exception as exc:
             self._log.warning("missed_bar_fetch_failed", symbol=symbol, exc=str(exc))
             return []
@@ -264,7 +264,7 @@ class BarRouter:
             self._ws_connected_at = connect_start
             try:
                 # subscribe_bars blocks until the stream terminates
-                self._alpaca.subscribe_bars(self._symbols, self._on_stream_bar)
+                self._broker.subscribe_bars(self._symbols, self._on_stream_bar)
                 backoff = RECONNECT_BACKOFF_INIT  # clean exit → reset backoff
                 _fail_start = None
             except Exception as exc:
@@ -312,7 +312,7 @@ class BarRouter:
             self._log.info("ws_token_refresh",
                            age_hours=round(age_s / 3600, 2),
                            ts=datetime.now(ET).isoformat())
-        stop_fn = getattr(self._alpaca, "stop_bars_stream", None)
+        stop_fn = getattr(self._broker, "stop_bars_stream", None)
         if stop_fn is not None:
             try:
                 stop_fn()
@@ -345,7 +345,7 @@ class BarRouter:
                 now = datetime.now(ET)
                 for symbol in self._symbols:
                     start = now - timedelta(minutes=2)
-                    df = self._alpaca.get_intraday_bars(symbol, start, now)
+                    df = self._broker.get_intraday_bars(symbol, start, now)
                     if df is not None and not df.empty:
                         row = df.iloc[-1]
                         close = float(row["close"])

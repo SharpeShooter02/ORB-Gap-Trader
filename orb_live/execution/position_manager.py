@@ -128,7 +128,7 @@ class LivePositionManager:
 
     def __init__(
         self,
-        alpaca,
+        broker,
         policy: "MarketableLimitPolicy",
         state_store: "StateStore",
         risk_gate: "RiskGate",
@@ -142,7 +142,7 @@ class LivePositionManager:
                 "Production uses 'ema_crossback'."
             )
 
-        self._alpaca     = alpaca
+        self._broker     = broker
         self._policy     = policy
         self._store      = state_store
         self._gate       = risk_gate
@@ -186,7 +186,7 @@ class LivePositionManager:
         }
 
         # Gate check
-        current_equity  = float(self._alpaca.get_account().get("equity", 0))
+        current_equity  = float(self._broker.get_account().get("equity", 0))
         intended_dollars = entry["entry_price"] * entry["shares"]
         ok, reason = self._gate.authorize_entry(
             symbol=symbol,
@@ -468,7 +468,7 @@ class LivePositionManager:
                 results[sym] = "skipped_not_open"
                 continue
 
-            broker_pos = self._alpaca.get_position(sym)
+            broker_pos = self._broker.get_position(sym)
             db_remaining = int(db_pos.get("remaining") or db_pos.get("qty", 0))
 
             if broker_pos is None:
@@ -541,7 +541,7 @@ class LivePositionManager:
                                    symbol=symbol, leg=leg, exc=str(exc))
             # Market fallback
             fallback_side = "sell" if pos.direction == 1 else "buy"
-            order = self._alpaca.submit_market_order(symbol, fallback_side, qty)
+            order = self._broker.submit_market_order(symbol, fallback_side, qty)
             order_id = order.get("alpaca_id", "")
             from orb_live.execution.order_policy import Fill
             from datetime import timezone
@@ -571,7 +571,7 @@ class LivePositionManager:
         try:
             if ref_price is None:
                 # Market order (no price reference)
-                order = self._alpaca.submit_market_order(
+                order = self._broker.submit_market_order(
                     symbol, side, pos.remaining
                 )
                 order_id = order.get("alpaca_id", "")
@@ -590,7 +590,7 @@ class LivePositionManager:
             if self._log:
                 self._log.critical("exit_all_failed_market_fallback",
                                    symbol=symbol, leg=leg, exc=str(exc))
-            order = self._alpaca.submit_market_order(symbol, side, pos.remaining)
+            order = self._broker.submit_market_order(symbol, side, pos.remaining)
             from orb_live.execution.order_policy import Fill
             fill = Fill(symbol=symbol, side=side, qty=pos.remaining,
                         avg_price=ref_price or 0.0,

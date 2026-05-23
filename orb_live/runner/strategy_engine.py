@@ -55,13 +55,13 @@ class StrategyEngine:
         position_manager: "LivePositionManager",
         config: "LiveConfig",
         state_store: "StateStore",
-        alpaca,
+        broker,
         logger=None,
     ):
         self._mgr    = position_manager
         self._cfg    = config
         self._store  = state_store
-        self._alpaca = alpaca
+        self._broker = broker
         self._log    = logger
 
         self._states:     dict[str, SymbolState] = {}
@@ -178,7 +178,7 @@ class StrategyEngine:
                 )
             return
 
-        current_equity = float(self._alpaca.get_account().get("equity", 100_000.0))
+        current_equity = float(self._broker.get_account().get("equity", 100_000.0))
         entry = compute_entry(
             bar_series, p2.orb, p2.gap_direction, scfg,
             current_equity=current_equity,

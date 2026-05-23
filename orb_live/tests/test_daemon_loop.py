@@ -27,13 +27,13 @@ class _FakeClock:
     def next_market_day(self) -> date:
         from orb_live.core.clock import MarketClock
         # Delegate to the real implementation via a throw-away instance
-        mc = MarketClock(alpaca_client=None)
+        mc = MarketClock(broker_client=None)
         mc.now_et = lambda: self._fixed_now  # type: ignore[method-assign]
         return mc.next_market_day()
 
     def next_premarket_start(self) -> datetime:
         from orb_live.core.clock import MarketClock
-        mc = MarketClock(alpaca_client=None)
+        mc = MarketClock(broker_client=None)
         mc.now_et = lambda: self._fixed_now  # type: ignore[method-assign]
         return mc.next_premarket_start()
 
@@ -45,7 +45,7 @@ def test_next_market_day_before_premarket_is_today():
     from orb_live.core.clock import MarketClock, PREMARKET_START
 
     fixed = datetime(2026, 5, 18, 3, 0, 0, tzinfo=ET)  # Monday 03:00
-    mc = MarketClock(alpaca_client=None)
+    mc = MarketClock(broker_client=None)
     mc.now_et = lambda: fixed  # type: ignore[method-assign]
 
     assert mc.next_market_day() == date(2026, 5, 18)
@@ -60,7 +60,7 @@ def test_next_market_day_after_close_friday_is_monday():
     from orb_live.core.clock import MarketClock, PREMARKET_START
 
     fixed = datetime(2026, 5, 22, 16, 30, 0, tzinfo=ET)  # Friday 16:30
-    mc = MarketClock(alpaca_client=None)
+    mc = MarketClock(broker_client=None)
     mc.now_et = lambda: fixed  # type: ignore[method-assign]
 
     assert mc.next_market_day() == date(2026, 5, 25)
@@ -75,7 +75,7 @@ def test_next_market_day_after_premarket_but_before_open_is_today():
     from orb_live.core.clock import MarketClock
 
     fixed = datetime(2026, 5, 18, 8, 45, 0, tzinfo=ET)  # Monday 08:45
-    mc = MarketClock(alpaca_client=None)
+    mc = MarketClock(broker_client=None)
     mc.now_et = lambda: fixed  # type: ignore[method-assign]
 
     # next_market_day returns today (pre-market passed this session)

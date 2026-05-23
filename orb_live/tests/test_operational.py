@@ -69,12 +69,12 @@ def _make_alpaca_stub(equity=100_000.0):
 
 
 def _make_health_server(
-    store=None, alpaca=None, router=None, clock=None, port=19999
+    store=None, broker=None, router=None, clock=None, port=19999
 ):
     from orb_live.ops.health_check import HealthServer
     return HealthServer(
         state_store=store or _make_store_stub(),
-        alpaca=alpaca or _make_alpaca_stub(),
+        broker=broker or _make_alpaca_stub(),
         bar_router=router or _make_router_stub(),
         clock=clock or _make_clock_stub(rth=False),
         port=port,
@@ -135,7 +135,7 @@ def test_op04_metrics_prometheus_format(tmp_store):
             return _cm()
 
     hs = _make_health_server(
-        store=_FakeStore(), alpaca=_FakeAlpaca(), router=router
+        store=_FakeStore(), broker=_FakeAlpaca(), router=router
     )
     hs.record_api_call()
     text = hs.get_metrics_response()

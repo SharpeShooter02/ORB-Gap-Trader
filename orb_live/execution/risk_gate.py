@@ -40,12 +40,12 @@ class RiskGate:
         self,
         live_cfg: "LiveConfig",
         state_store: "StateStore",
-        alpaca,
+        broker,
         logger=None,
     ):
         self._cfg       = live_cfg
         self._store     = state_store
-        self._alpaca    = alpaca
+        self._broker    = broker
         self._log       = logger
 
         self._starting_equity:   float = 0.0

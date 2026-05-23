@@ -40,7 +40,7 @@ class SessionRunner:
     def __init__(
         self,
         config,                # LiveConfig
-        alpaca,                # AlpacaClient | DryRunAlpaca | MockAlpaca
+        broker,                # BrokerClient | DryRunAlpaca | MockAlpaca
         state_store,           # StateStore
         bar_cache,             # BarCache
         bar_router,            # BarRouter
@@ -55,7 +55,7 @@ class SessionRunner:
         _sleep=None,           # injectable for tests; defaults to time.sleep
     ):
         self._cfg         = config
-        self._alpaca      = alpaca
+        self._broker      = broker
         self._store       = state_store
         self._cache       = bar_cache
         self._router      = bar_router
@@ -113,7 +113,7 @@ class SessionRunner:
     # ── Phase runners ──────────────────────────────────────────────────────────
 
     def _run_pre_market(self, session_date: date) -> None:
-        equity = float(self._alpaca.get_account().get("equity", 0.0))
+        equity = float(self._broker.get_account().get("equity", 0.0))
         self._gate.session_start(equity, session_date)
         self._store.upsert_day_state(session_date, phase="pre_market")
 
@@ -243,7 +243,7 @@ class SessionRunner:
         self._mgr.flatten_all("eod_sweep")
         self._store.upsert_day_state(session_date, phase="closed")
 
-        equity = float(self._alpaca.get_account().get("equity", 0.0))
+        equity = float(self._broker.get_account().get("equity", 0.0))
         self._store.record_equity(session_date, equity, equity, 0.0)
 
         from orb_live.ops.reports import generate_daily_report

@@ -73,13 +73,13 @@ class MarketableLimitPolicy:
 
     def __init__(
         self,
-        alpaca,
+        broker,
         live_cfg: "LiveConfig",
         state_store: "StateStore",
         logger=None,
         _sleep: Callable = _time.sleep,   # injectable for tests
     ):
-        self._alpaca  = alpaca
+        self._broker  = broker
         self._cfg     = live_cfg
         self._store   = state_store
         self._log     = logger
@@ -144,14 +144,14 @@ class MarketableLimitPolicy:
             bps = cfg.entry_slippage_bps if attempts == 1 else cfg.entry_slippage_max_bps
             limit = self._compute_limit(side, symbol, bps, reference_price)
             client_id = str(uuid.uuid4())
-            order = self._alpaca.submit_limit_order(symbol, side, qty - filled_qty, limit, client_id)
+            order = self._broker.submit_limit_order(symbol, side, qty - filled_qty, limit, client_id)
             order_id = order.get("alpaca_id", client_id)
 
             # Poll until filled or timeout
             deadline = _time.monotonic() + cfg.entry_repeg_seconds
             while _time.monotonic() < deadline:
                 self._sleep(_POLL_INTERVAL)
-                status = self._alpaca.get_order(order_id)
+                status = self._broker.get_order(order_id)
                 if status.get("status") in ("filled", "partially_filled", "cancelled", "expired"):
                     break
 
@@ -167,7 +167,7 @@ class MarketableLimitPolicy:
                 break
 
             # Cancel unfilled remainder before repegging
-            self._alpaca.cancel_order(order_id)
+            self._broker.cancel_order(order_id)
 
         if filled_qty == 0:
             reason = "unfilled"
@@ -195,13 +195,13 @@ class MarketableLimitPolicy:
             bps = int(cfg.exit_slippage_bps * bps_mult)
             limit = self._compute_limit(side, symbol, bps, reference_price)
             client_id = str(uuid.uuid4())
-            order = self._alpaca.submit_limit_order(symbol, side, qty, limit, client_id)
+            order = self._broker.submit_limit_order(symbol, side, qty, limit, client_id)
             order_id = order.get("alpaca_id", client_id)
 
             deadline = _time.monotonic() + cfg.entry_repeg_seconds
             while _time.monotonic() < deadline:
                 self._sleep(_POLL_INTERVAL)
-                status = self._alpaca.get_order(order_id)
+                status = self._broker.get_order(order_id)
                 if status.get("status") in ("filled", "partially_filled", "cancelled", "expired"):
                     break
 
@@ -216,7 +216,7 @@ class MarketableLimitPolicy:
                 filled_qty   += fq
                 filled_price = (filled_price * (filled_qty - fq) + fp * fq) / filled_qty
                 qty -= fq
-                self._alpaca.cancel_order(order_id)
+                self._broker.cancel_order(order_id)
 
         if filled_qty < qty and attempt >= 3:
             if self._log:
@@ -240,13 +240,13 @@ class MarketableLimitPolicy:
 
         if cfg.stop_order_type == "market":
             client_id = str(uuid.uuid4())
-            order = self._alpaca.submit_market_order(symbol, side, qty, client_id)
+            order = self._broker.submit_market_order(symbol, side, qty, client_id)
             order_id = order.get("alpaca_id", client_id)
             # Wait for fill (market orders are typically immediate)
             deadline = _time.monotonic() + cfg.entry_repeg_seconds * 2
             while _time.monotonic() < deadline:
                 self._sleep(_POLL_INTERVAL)
-                status = self._alpaca.get_order(order_id)
+                status = self._broker.get_order(order_id)
                 if status.get("status") in ("filled", "cancelled", "expired"):
                     break
             fq = int(float(status.get("filled_qty", 0) or 0))
@@ -263,12 +263,12 @@ class MarketableLimitPolicy:
                 self._log.critical("stop_limit_failed_falling_back_to_market",
                                    symbol=symbol, qty=qty)
             client_id = str(uuid.uuid4())
-            order = self._alpaca.submit_market_order(symbol, side, qty, client_id)
+            order = self._broker.submit_market_order(symbol, side, qty, client_id)
             order_id = order.get("alpaca_id", client_id)
             deadline = _time.monotonic() + cfg.entry_repeg_seconds * 2
             while _time.monotonic() < deadline:
                 self._sleep(_POLL_INTERVAL)
-                status = self._alpaca.get_order(order_id)
+                status = self._broker.get_order(order_id)
                 if status.get("status") in ("filled", "cancelled", "expired"):
                     break
             fq = int(float(status.get("filled_qty", 0) or 0))
@@ -280,7 +280,7 @@ class MarketableLimitPolicy:
                        reference_price: Optional[float]) -> float:
         """Compute a marketable limit price from NBBO or reference_price."""
         if reference_price is None:
-            q = self._alpaca.get_latest_quote(symbol)
+            q = self._broker.get_latest_quote(symbol)
             reference_price = float(q.get("ask", 0)) if side == "buy" else float(q.get("bid", 0))
         factor = bps / 10_000.0
         if side == "buy":

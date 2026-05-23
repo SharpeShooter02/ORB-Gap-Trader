@@ -79,7 +79,7 @@ def _build_mgr(mock_alpaca, tmp_store,
     gate.session_start(100_000.0, TRADE_DATE)
 
     return LivePositionManager(
-        alpaca=mock_alpaca,
+        broker=mock_alpaca,
         policy=policy,
         state_store=tmp_store,
         risk_gate=gate,

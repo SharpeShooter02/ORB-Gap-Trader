@@ -45,7 +45,7 @@ class HealthServer:
     def __init__(
         self,
         state_store,
-        alpaca,
+        broker,
         bar_router,
         clock,
         session_state_fn: Optional[Callable[[], dict]] = None,
@@ -53,7 +53,7 @@ class HealthServer:
         logger=None,
     ):
         self._store            = state_store
-        self._alpaca           = alpaca
+        self._broker           = broker
         self._router           = bar_router
         self._clock            = clock
         self._session_state_fn = session_state_fn or (lambda: {})
@@ -253,7 +253,7 @@ class HealthServer:
             pass
 
         try:
-            equity = float(self._alpaca.get_account().get("equity", 0.0))
+            equity = float(self._broker.get_account().get("equity", 0.0))
             self.record_api_call()
             lines += ["# HELP orb_account_equity_gauge Account equity ($)",
                       "# TYPE orb_account_equity_gauge gauge",

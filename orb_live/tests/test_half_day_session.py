@@ -69,7 +69,7 @@ def test_1_half_day_sleeps_to_1300_not_1600(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        alpaca=mock_alpaca,
+        broker=mock_alpaca,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),
@@ -106,7 +106,7 @@ def test_2_full_day_sleeps_to_1600(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        alpaca=mock_alpaca,
+        broker=mock_alpaca,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),
@@ -147,7 +147,7 @@ def test_3_half_day_warning_fires(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        alpaca=mock_alpaca,
+        broker=mock_alpaca,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),
@@ -186,7 +186,7 @@ def test_4_full_day_no_half_day_warning(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        alpaca=mock_alpaca,
+        broker=mock_alpaca,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),

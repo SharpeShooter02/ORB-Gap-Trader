@@ -119,7 +119,7 @@ def _build_live_stack(tmp_store, mock_alpaca, tp3_ema_value=100.0):
     gate.session_start(100_000.0, TDATE)
 
     mgr = LivePositionManager(
-        alpaca=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_alpaca, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store=indicators_store, config=scfg,
     )
 

@@ -22,6 +22,8 @@ from typing import Optional, Callable
 
 import pandas as pd
 
+from orb_live.data.broker_client import BrokerClient
+
 logger = logging.getLogger(__name__)
 
 # ── Retry helper ──────────────────────────────────────────────────────────────
@@ -72,7 +74,7 @@ class OrderResult:
 
 # ── AlpacaClient ──────────────────────────────────────────────────────────────
 
-class AlpacaClient:
+class AlpacaClient(BrokerClient):
     """
     Unified wrapper around the alpaca-py SDK.
 
@@ -99,6 +101,17 @@ class AlpacaClient:
         self._paper = paper
         self._asset_cache: dict[str, dict] = {}
         self._active_stream = None  # live StockDataStream; set during subscribe_bars
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def connect(self) -> None:
+        pass  # connection established at construction time via alpaca-py SDK
+
+    def disconnect(self) -> None:
+        self.stop_bars_stream()
+
+    def is_connected(self) -> bool:
+        return True
 
     # ── Account ───────────────────────────────────────────────────────────────
 

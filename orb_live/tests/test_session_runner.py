@@ -150,7 +150,7 @@ def _build_engine(mock_alpaca, tmp_store):
     indicators_store = {}
 
     mgr = LivePositionManager(
-        alpaca=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_alpaca, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store=indicators_store, config=scfg,
     )
     engine = StrategyEngine(mgr, cfg, tmp_store, mock_alpaca)
@@ -329,7 +329,7 @@ def test_i_indicator_updated_before_position_manager(mock_alpaca, tmp_store):
     indicators_store = {}
 
     mgr = LivePositionManager(
-        alpaca=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_alpaca, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store=indicators_store, config=scfg,
     )
 
@@ -362,7 +362,7 @@ def test_i_indicator_updated_before_position_manager(mock_alpaca, tmp_store):
     mgr.on_bar = _track_mgr
 
     runner = SessionRunner(
-        config=cfg, alpaca=mock_alpaca, state_store=tmp_store,
+        config=cfg, broker=mock_alpaca, state_store=tmp_store,
         bar_cache=_StubBarCache(), bar_router=router,
         pre_market_job=pre, strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,
@@ -403,7 +403,7 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_alpaca, tmp_store):
     gate.session_start(100_000.0, TDATE)
 
     mgr = LivePositionManager(
-        alpaca=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_alpaca, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store={}, config=cfg.strategy_config,
     )
     engine = StrategyEngine(mgr, cfg, tmp_store, mock_alpaca)
@@ -415,7 +415,7 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_alpaca, tmp_store):
 
     cache = _StubBarCache()
     runner = SessionRunner(
-        config=cfg, alpaca=mock_alpaca, state_store=tmp_store,
+        config=cfg, broker=mock_alpaca, state_store=tmp_store,
         bar_cache=cache, bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,

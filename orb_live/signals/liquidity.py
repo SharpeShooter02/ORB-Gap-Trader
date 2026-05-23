@@ -24,7 +24,7 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from orb_live.config.live_config import LiveConfig
     from orb_live.core.state_store import StateStore
-    from orb_live.data.alpaca_client import AlpacaClient
+    from orb_live.data.broker_client import BrokerClient
 
 
 # ── Result dataclass ──────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ class PreFlightCheck:
         self,
         config: "LiveConfig",
         store: "StateStore",
-        client: "AlpacaClient",
+        client: "BrokerClient",
         logger=None,
     ):
         self._cfg    = config

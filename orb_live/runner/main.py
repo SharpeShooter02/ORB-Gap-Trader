@@ -61,11 +61,26 @@ def _confirm_live() -> None:
         sys.exit(0)
 
 
+def build_broker_from_env(paper: bool = True):
+    """
+    Factory that selects a broker implementation based on the BROKER env var.
+
+    BROKER=alpaca (default) → AlpacaClient backed by Alpaca paper/live API.
+    BROKER=ib               → NotImplementedError (IBClient not yet implemented).
+    """
+    import os
+    broker_name = os.environ.get("BROKER", "alpaca").lower()
+    if broker_name == "ib":
+        raise NotImplementedError("IBClient is not yet implemented")
+    from orb_live.data.alpaca_client import build_client_from_env
+    return build_client_from_env(paper=paper)
+
+
 def _build_components(args: argparse.Namespace):
     """
     Construct all session components from config + env.
 
-    Returns (runner, session_date).
+    Returns (runner, clock, session_date).
     """
     import orb_live  # noqa: F401 — path setup
 
@@ -73,7 +88,6 @@ def _build_components(args: argparse.Namespace):
     from orb_live.core.state_store import StateStore
     from orb_live.core.logger import get_logger
     from orb_live.core.clock import MarketClock
-    from orb_live.data.alpaca_client import build_client_from_env
     from orb_live.data.bar_cache import BarCache
     from orb_live.data.underlying_data import UnderlyingDataStore
     from orb_live.execution.indicators import RollingIndicators
@@ -94,16 +108,16 @@ def _build_components(args: argparse.Namespace):
     else:
         session_date = datetime.now(tz=ET).date()
 
-    # Alpaca client
+    # Broker client
     paper = not args.live
-    real_client = build_client_from_env(paper=paper)
+    real_client = build_broker_from_env(paper=paper)
 
     if args.dry_run:
         from orb_live.runner.dry_run import DryRunAlpaca
         starting_equity = float(real_client.get_account().get("equity", 100_000.0))
-        alpaca = DryRunAlpaca(real_client, starting_equity=starting_equity)
+        broker = DryRunAlpaca(real_client, starting_equity=starting_equity)
     else:
-        alpaca = real_client
+        broker = real_client
 
     # State store
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,17 +125,17 @@ def _build_components(args: argparse.Namespace):
 
     # Supporting components
     bar_cache    = BarCache()
-    clock        = MarketClock(alpaca_client=real_client)
+    clock        = MarketClock(broker_client=real_client)
     ul_store     = UnderlyingDataStore(cfg.data_dir)
 
     # Execution layer
-    policy = MarketableLimitPolicy(alpaca, cfg, store)
-    gate   = RiskGate(cfg, store, alpaca, logger=logger)
+    policy = MarketableLimitPolicy(broker, cfg, store)
+    gate   = RiskGate(cfg, store, broker, logger=logger)
 
     indicators_store: dict = {}
 
     mgr = LivePositionManager(
-        alpaca=alpaca,
+        broker=broker,
         policy=policy,
         state_store=store,
         risk_gate=gate,
@@ -131,13 +145,13 @@ def _build_components(args: argparse.Namespace):
     )
 
     # Runner components
-    bar_router   = BarRouter(alpaca, store, bar_cache, logger=logger)
-    pre_market   = PreMarketJob(cfg, store, alpaca, ul_store, logger=logger)
-    engine       = StrategyEngine(mgr, cfg, store, alpaca, logger=logger)
+    bar_router   = BarRouter(broker, store, bar_cache, logger=logger)
+    pre_market   = PreMarketJob(cfg, store, broker, ul_store, logger=logger)
+    engine       = StrategyEngine(mgr, cfg, store, broker, logger=logger)
 
     runner = SessionRunner(
         config=cfg,
-        alpaca=alpaca,
+        broker=broker,
         state_store=store,
         bar_cache=bar_cache,
         bar_router=bar_router,

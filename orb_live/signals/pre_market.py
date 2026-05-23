@@ -48,7 +48,7 @@ from orb_live.signals.liquidity import PreFlightCheck, CandidateDecision
 if TYPE_CHECKING:
     from orb_live.config.live_config import LiveConfig
     from orb_live.core.state_store import StateStore
-    from orb_live.data.alpaca_client import AlpacaClient
+    from orb_live.data.broker_client import BrokerClient
     from orb_live.data.underlying_data import UnderlyingDataStore
 
 
@@ -109,7 +109,7 @@ class PreMarketJob:
         self,
         live_cfg: "LiveConfig",
         store: "StateStore",
-        client: "AlpacaClient",
+        client: "BrokerClient",
         underlying_store: "UnderlyingDataStore",
         logger=None,
     ):

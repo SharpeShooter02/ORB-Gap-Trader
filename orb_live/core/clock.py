@@ -14,18 +14,15 @@ MARKET_CLOSE   = dtime(16, 0)
 HALF_DAY_CLOSE = dtime(13, 0)
 PREMARKET_START = dtime(8, 30)
 
-# Alpaca is imported lazily so that imports don't fail without credentials.
-_alpaca_client = None
-
 
 class MarketClock:
     """
-    Wraps market timing logic.  Optionally backed by an Alpaca trading client
-    for authoritative half-day / holiday awareness.
+    Wraps market timing logic.  Optionally backed by a broker client for
+    authoritative half-day / holiday awareness.
     """
 
-    def __init__(self, alpaca_client=None):
-        self._client = alpaca_client
+    def __init__(self, broker_client=None):
+        self._client = broker_client
 
     # ── Time helpers ──────────────────────────────────────────────────────────
 

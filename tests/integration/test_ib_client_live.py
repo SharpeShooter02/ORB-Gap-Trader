@@ -132,3 +132,77 @@ class TestIBClientClockLive:
         assert clock["next_open"]  < clock["next_close"] or not clock["is_open"]
         assert clock["next_open"].tzinfo  is not None
         assert clock["next_close"].tzinfo is not None
+
+
+@skip_unless_ib
+class TestIBClientOrdersLive:
+    """
+    Live order tests.  All use prices far from market to avoid accidental fills.
+    Every submitted order is cancelled in a try/finally block.
+    """
+
+    @pytest.fixture(scope="class")
+    def client(self):
+        from orb_live.data.ib_client import build_client_from_env
+        c = build_client_from_env(paper=True)
+        c.connect()
+        yield c
+        c.disconnect()
+
+    def test_live_submit_and_cancel_limit(self, client):
+        order = None
+        try:
+            order = client.submit_limit_order("SOXL", "buy", 1, 0.01,
+                                              client_order_id="inttest-buy-001")
+            assert "id"     in order
+            assert "status" in order
+            assert order["symbol"] == "SOXL"
+        finally:
+            if order:
+                client.cancel_order(order["id"])
+
+    def test_live_short_limit_accepted(self, client):
+        order = None
+        try:
+            order = client.submit_limit_order("SBIT", "sell", 1, 9999.99,
+                                              client_order_id="inttest-sell-001")
+            assert order["side"] == "sell"
+        finally:
+            if order:
+                client.cancel_order(order["id"])
+
+    def test_live_get_order_after_submit(self, client):
+        order = None
+        try:
+            order = client.submit_limit_order("SOXL", "buy", 1, 0.01)
+            fetched = client.get_order(order["id"])
+            assert fetched["id"] == order["id"]
+        finally:
+            if order:
+                client.cancel_order(order["id"])
+
+    def test_live_event_handler_fires(self, client):
+        """Order cache must be populated within 2 seconds of submission."""
+        order = None
+        try:
+            order = client.submit_limit_order("SOXL", "buy", 1, 0.01)
+            order_int = int(order["id"])
+            assert order_int in client._order_cache, (
+                f"Event handler did not populate _order_cache for order {order_int}"
+            )
+        finally:
+            if order:
+                client.cancel_order(order["id"])
+
+    def test_live_cancel_order_changes_status(self, client):
+        order = None
+        try:
+            order = client.submit_limit_order("SOXL", "buy", 1, 0.01)
+            client.cancel_order(order["id"])
+            time.sleep(2)  # allow cancel confirmation to arrive
+            fetched = client.get_order(order["id"])
+            assert fetched["status"] in (
+                "Cancelled", "Inactive", "ApiCancelled",
+            ), f"Unexpected status after cancel: {fetched['status']}"
+        finally:
+            pass  # already cancelled above

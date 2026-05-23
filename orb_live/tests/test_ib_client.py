@@ -427,3 +427,245 @@ class TestIsHoliday:
         client = self._client()
         # From Sat May 23 → skips Sun + Mon Memorial Day → Tue May 26
         assert client._next_market_day(date(2026, 5, 23)) == date(2026, 5, 26)
+
+
+# ── Orders ────────────────────────────────────────────────────────────────────
+
+def _make_trade(
+    order_id: int = 1,
+    symbol: str = "TQQQ",
+    action: str = "BUY",
+    order_type: str = "LMT",
+    total_qty: float = 100.0,
+    lmt_price: float = 50.0,
+    status: str = "Submitted",
+    filled: float = 0.0,
+    avg_fill: float = 0.0,
+    remaining: float = 100.0,
+    order_ref: str | None = None,
+) -> SimpleNamespace:
+    order = SimpleNamespace(
+        orderId=order_id,
+        action=action,
+        orderType=order_type,
+        totalQuantity=total_qty,
+        lmtPrice=lmt_price,
+        orderRef=order_ref,
+    )
+    order_status = SimpleNamespace(
+        status=status,
+        filled=filled,
+        avgFillPrice=avg_fill,
+        remaining=remaining,
+    )
+    contract = SimpleNamespace(symbol=symbol)
+    return SimpleNamespace(order=order, orderStatus=order_status, contract=contract)
+
+
+def _client_with_asset(symbol: str = "TQQQ", tradable: bool = True) -> IBClient:
+    """Return an IBClient whose asset + contract caches are pre-populated."""
+    with patch("orb_live.data.ib_client.IB") as MockIB:
+        mock_ib = MagicMock()
+        MockIB.return_value = mock_ib
+        client = IBClient(paper=True)
+
+    client._asset_cache[symbol] = {
+        "symbol": symbol, "tradable": tradable, "shortable": True,
+        "status": "active" if tradable else "not_found",
+        "primary_exchange": "ARCA", "conId": 12345,
+    }
+    fake_contract = SimpleNamespace(symbol=symbol, conId=12345, primaryExchange="ARCA")
+    client._contract_cache[symbol] = fake_contract if tradable else None
+    return client
+
+
+class TestSubmitLimitOrder:
+    def test_submit_limit_order_returns_dict(self):
+        client = _client_with_asset("TQQQ")
+        # The mock trade's orderRef must match what submit_limit_order will set,
+        # because _trade_to_dict reads from the trade object returned by placeOrder.
+        trade  = _make_trade(order_id=42, symbol="TQQQ", action="BUY",
+                              order_type="LMT", lmt_price=50.0, status="Submitted",
+                              order_ref="uuid-abc")
+
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = trade
+
+        result = client.submit_limit_order("TQQQ", "buy", 100, 50.0,
+                                           client_order_id="uuid-abc")
+
+        assert result["id"]            == "42"
+        assert result["symbol"]        == "TQQQ"
+        assert result["side"]          == "buy"
+        assert result["qty"]           == pytest.approx(100.0)
+        assert result["limit_price"]   == pytest.approx(50.0)
+        assert result["status"]        == "Submitted"
+        assert result["filled_qty"]    == pytest.approx(0.0)
+        assert result["client_order_id"] == "uuid-abc"
+
+    def test_submit_limit_order_caches(self):
+        client = _client_with_asset("TQQQ")
+        trade  = _make_trade(order_id=7)
+
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = trade
+
+        client.submit_limit_order("TQQQ", "buy", 10, 50.0)
+        assert 7 in client._order_cache
+
+    def test_submit_limit_order_rejects_non_tradable(self):
+        client = _client_with_asset("BADTICKER", tradable=False)
+        client._ib.isConnected.return_value = True
+
+        with pytest.raises(ValueError, match="not tradable"):
+            client.submit_limit_order("BADTICKER", "buy", 10, 0.01)
+
+    def test_submit_limit_order_raises_when_disconnected(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = False
+
+        with pytest.raises(ConnectionError):
+            client.submit_limit_order("TQQQ", "buy", 10, 50.0)
+
+
+class TestSubmitMarketOrder:
+    def test_submit_market_order_uses_marketorder(self):
+        """placeOrder must be called with a MarketOrder (not LimitOrder)."""
+        client = _client_with_asset("SOXL")
+        # action="SELL" so the mock trade reflects what submit_market_order passes
+        trade  = _make_trade(order_id=99, action="SELL", order_type="MKT", lmt_price=0.0)
+
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = trade
+
+        result = client.submit_market_order("SOXL", "sell", 50)
+
+        client._ib.placeOrder.assert_called_once()
+        _, placed_order = client._ib.placeOrder.call_args[0]
+        assert placed_order.__class__.__name__ == "MarketOrder"
+        assert result["side"] == "sell"
+
+    def test_submit_market_order_rejects_non_tradable(self):
+        client = _client_with_asset("BADTICKER", tradable=False)
+        client._ib.isConnected.return_value = True
+
+        with pytest.raises(ValueError, match="not tradable"):
+            client.submit_market_order("BADTICKER", "buy", 10)
+
+
+class TestGetOrder:
+    def test_get_order_from_cache(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        expected = {"id": "5", "status": "Filled"}
+        client._order_cache[5] = expected
+
+        assert client.get_order("5") is expected
+
+    def test_get_order_unknown_raises(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        with pytest.raises(KeyError, match="999"):
+            client.get_order("999")
+
+
+class TestCancelOrder:
+    def test_cancel_order_calls_ib(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        trade = _make_trade(order_id=10)
+        client._ib.trades.return_value = [trade]
+
+        result = client.cancel_order("10")
+
+        client._ib.cancelOrder.assert_called_once_with(trade.order)
+        assert result is True
+
+    def test_cancel_unknown_silent(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        client._ib.trades.return_value = []
+
+        result = client.cancel_order("9999")  # no exception
+        assert result is True
+
+
+class TestOrderEventHandlers:
+    def test_event_handler_updates_cache(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        trade = _make_trade(order_id=20, status="Submitted")
+        client._on_order_status(trade)
+
+        assert 20 in client._order_cache
+        assert client._order_cache[20]["status"] == "Submitted"
+
+    def test_filled_status_triggers_log(self):
+        mock_log = MagicMock()
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True, logger=mock_log)
+
+        trade = _make_trade(order_id=21, status="Filled", filled=100.0)
+        client._on_order_status(trade)
+
+        mock_log.info.assert_called_once()
+        call_kwargs = mock_log.info.call_args
+        assert "order_status_change" in call_kwargs[0] or "Filled" in str(call_kwargs)
+
+    def test_exec_details_updates_fill_fields(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        trade = _make_trade(order_id=30)
+        client._order_cache[30] = {"id": "30", "status": "Submitted"}
+
+        fill = SimpleNamespace(execution=SimpleNamespace(price=54.75, shares=50))
+        client._on_exec_details(trade, fill)
+
+        assert client._order_cache[30]["last_fill_price"] == pytest.approx(54.75)
+        assert client._order_cache[30]["last_fill_qty"]   == pytest.approx(50)
+
+    def test_exec_details_ignores_unknown_order(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        trade = _make_trade(order_id=9999)
+        fill  = SimpleNamespace(execution=SimpleNamespace(price=1.0, shares=1))
+        client._on_exec_details(trade, fill)  # must not raise
+        assert 9999 not in client._order_cache
+
+
+class TestTradeToDict:
+    def _client(self):
+        with patch("orb_live.data.ib_client.IB"):
+            return IBClient(paper=True)
+
+    def test_trade_to_dict_buy_side(self):
+        client = self._client()
+        trade  = _make_trade(action="BUY", order_type="LMT", lmt_price=55.0)
+        d = client._trade_to_dict(trade)
+        assert d["side"]        == "buy"
+        assert d["limit_price"] == pytest.approx(55.0)
+
+    def test_trade_to_dict_sell_side(self):
+        client = self._client()
+        trade  = _make_trade(action="SELL", order_type="LMT", lmt_price=60.0)
+        d = client._trade_to_dict(trade)
+        assert d["side"] == "sell"
+
+    def test_trade_to_dict_market_order_limit_price_is_none(self):
+        client = self._client()
+        trade  = _make_trade(order_type="MKT", lmt_price=0.0)
+        d = client._trade_to_dict(trade)
+        assert d["limit_price"] is None
+
+    def test_trade_to_dict_has_alpaca_id_alias(self):
+        client = self._client()
+        trade  = _make_trade(order_id=77)
+        d = client._trade_to_dict(trade)
+        assert d["alpaca_id"] == d["id"] == "77"

@@ -1,15 +1,20 @@
 """
-data/ib_client.py — Interactive Brokers client (Parts 1-2: connection, account,
-asset metadata, and market clock).
+data/ib_client.py — Interactive Brokers client (Parts 1-3: connection, account,
+asset metadata, market clock, and order operations).
 
 Implements BrokerClient for IB Gateway / TWS.  Thin synchronous wrapper
-around ib_async.IB.  Parts 3-4 (market data, orders, streaming) are stubbed
-as NotImplementedError and will be implemented later.
+around ib_async.IB.  Part 4 (market data / streaming) is stubbed as
+NotImplementedError and will be implemented later.
 
 Config (read by build_client_from_env):
     IB_HOST         127.0.0.1 (default)
     IB_PORT         4002 paper / 4001 live (default)
     IB_CLIENT_ID    1 (default)
+
+Order design — event-driven cache with polling interface:
+    IB sends order updates via callbacks (orderStatusEvent, execDetailsEvent).
+    The strategy layer polls via get_order(id).  The cache bridges the two:
+    event handlers update self._order_cache; get_order() reads from it.
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ib_async import IB, Stock
+from ib_async import IB, LimitOrder, MarketOrder, Stock
 from orb_live.data.broker_client import BrokerClient
 
 _ET = ZoneInfo("America/New_York")
@@ -56,13 +61,15 @@ class IBClient(BrokerClient):
     })
 
     def __init__(self, paper: bool = True, **kwargs):
-        self._paper       = paper
-        self._host        = kwargs.get("host",      "127.0.0.1")
-        self._port        = kwargs.get("port",      4002 if paper else 4001)
-        self._client_id   = kwargs.get("client_id", 1)
-        self._log         = kwargs.get("logger")
-        self._ib          = IB()
-        self._asset_cache: dict[str, dict] = {}
+        self._paper          = paper
+        self._host           = kwargs.get("host",      "127.0.0.1")
+        self._port           = kwargs.get("port",      4002 if paper else 4001)
+        self._client_id      = kwargs.get("client_id", 1)
+        self._log            = kwargs.get("logger")
+        self._ib             = IB()
+        self._asset_cache:    dict[str, dict]   = {}
+        self._contract_cache: dict[str, object] = {}
+        self._order_cache:    dict[int, dict]   = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -77,6 +84,9 @@ class IBClient(BrokerClient):
             raise ConnectionError(
                 f"IB Gateway not reachable at {self._host}:{self._port}"
             ) from exc
+        # Register order-event handlers so the cache stays current.
+        self._ib.orderStatusEvent += self._on_order_status
+        self._ib.execDetailsEvent += self._on_exec_details
         if self._log:
             self._log.info(
                 "ib_connected",
@@ -85,6 +95,11 @@ class IBClient(BrokerClient):
             )
 
     def disconnect(self) -> None:
+        try:
+            self._ib.orderStatusEvent -= self._on_order_status
+            self._ib.execDetailsEvent -= self._on_exec_details
+        except Exception:
+            pass
         self._ib.disconnect()
         if self._log:
             self._log.info("ib_disconnected")
@@ -185,13 +200,13 @@ class IBClient(BrokerClient):
                 next_open  = market_open_today
                 next_close = market_close_today
             elif now_et < market_close_today:
-                is_open = True
-                next_day  = self._next_market_day(today + timedelta(days=1))
+                is_open  = True
+                next_day = self._next_market_day(today + timedelta(days=1))
                 next_open  = datetime.combine(next_day, dtime(9, 30), tzinfo=_ET)
                 next_close = market_close_today
             else:
-                is_open   = False
-                next_day  = self._next_market_day(today + timedelta(days=1))
+                is_open  = False
+                next_day = self._next_market_day(today + timedelta(days=1))
                 next_open  = datetime.combine(next_day, dtime(9, 30), tzinfo=_ET)
                 next_close = datetime.combine(next_day, dtime(16, 0), tzinfo=_ET)
         else:
@@ -248,6 +263,8 @@ class IBClient(BrokerClient):
         Return asset metadata for symbol, qualifying the contract via IB.
 
         Results are cached in self._asset_cache for the lifetime of the client.
+        The qualified Contract object is cached in self._contract_cache and used
+        by order-submission methods.
         """
         if symbol in self._asset_cache:
             return self._asset_cache[symbol]
@@ -257,6 +274,7 @@ class IBClient(BrokerClient):
             qualified = self._ib.qualifyContracts(contract)
             if qualified:
                 c = qualified[0]
+                self._contract_cache[symbol] = c
                 result = {
                     "symbol":           symbol,
                     "tradable":         True,
@@ -268,6 +286,7 @@ class IBClient(BrokerClient):
                     "conId":            c.conId,
                 }
             else:
+                self._contract_cache[symbol] = None
                 result = {
                     "symbol":           symbol,
                     "tradable":         False,
@@ -277,6 +296,7 @@ class IBClient(BrokerClient):
                     "conId":            None,
                 }
         except Exception:
+            self._contract_cache[symbol] = None
             result = {
                 "symbol":           symbol,
                 "tradable":         False,
@@ -289,44 +309,7 @@ class IBClient(BrokerClient):
         self._asset_cache[symbol] = result
         return result
 
-    # ── Bars (Part 3) ─────────────────────────────────────────────────────────
-
-    def get_daily_bars(
-        self,
-        symbol: str,
-        lookback_days: int = 20,
-        feed: str = "iex",
-    ) -> pd.DataFrame:
-        raise NotImplementedError("IBClient.get_daily_bars — Part 3")
-
-    def get_intraday_bars(
-        self,
-        symbol: str,
-        start_dt,
-        end_dt,
-        timeframe: str = "1Min",
-        feed: str = "iex",
-    ) -> pd.DataFrame:
-        raise NotImplementedError("IBClient.get_intraday_bars — Part 3")
-
-    # ── Quote (Part 3) ────────────────────────────────────────────────────────
-
-    def get_latest_quote(self, symbol: str) -> dict:
-        raise NotImplementedError("IBClient.get_latest_quote — Part 3")
-
-    # ── Positions (additional) / Orders (Part 4) ──────────────────────────────
-
-    def close_position(self, symbol: str) -> Optional[dict]:
-        raise NotImplementedError("IBClient.close_position — Part 4")
-
-    def submit_market_order(
-        self,
-        symbol: str,
-        side: str,
-        qty: float,
-        client_order_id: Optional[str] = None,
-    ):
-        raise NotImplementedError("IBClient.submit_market_order — Part 4")
+    # ── Orders ────────────────────────────────────────────────────────────────
 
     def submit_limit_order(
         self,
@@ -335,8 +318,72 @@ class IBClient(BrokerClient):
         qty: float,
         limit_price: float,
         client_order_id: Optional[str] = None,
-    ):
-        raise NotImplementedError("IBClient.submit_limit_order — Part 4")
+        extended_hours: bool = False,
+        tif: str = "day",
+    ) -> dict:
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            raise ValueError(f"{symbol} is not tradable on IB")
+
+        contract = self._contract_cache[symbol]
+        action   = "BUY" if side.lower() == "buy" else "SELL"
+        order    = LimitOrder(action, qty, limit_price)
+        order.tif        = tif.upper()
+        order.outsideRth = extended_hours
+        if client_order_id:
+            order.orderRef = client_order_id
+
+        trade = self._ib.placeOrder(contract, order)
+        self._ib.sleep(0.5)
+
+        order_dict = self._trade_to_dict(trade)
+        self._order_cache[trade.order.orderId] = order_dict
+        return order_dict
+
+    def submit_market_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        client_order_id: Optional[str] = None,
+    ) -> dict:
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            raise ValueError(f"{symbol} is not tradable on IB")
+
+        contract = self._contract_cache[symbol]
+        action   = "BUY" if side.lower() == "buy" else "SELL"
+        order    = MarketOrder(action, qty)
+        if client_order_id:
+            order.orderRef = client_order_id
+
+        trade = self._ib.placeOrder(contract, order)
+        self._ib.sleep(0.5)
+
+        order_dict = self._trade_to_dict(trade)
+        self._order_cache[trade.order.orderId] = order_dict
+        return order_dict
+
+    def get_order(self, order_id: str) -> dict:
+        key = int(order_id)
+        if key not in self._order_cache:
+            raise KeyError(f"Order {order_id} not found in cache")
+        return self._order_cache[key]
+
+    def cancel_order(self, order_id: str) -> bool:
+        order_int = int(order_id)
+        matching  = [t for t in self._ib.trades() if t.order.orderId == order_int]
+        if not matching:
+            return True  # already done — idempotent success
+        self._ib.cancelOrder(matching[0].order)
+        self._ib.sleep(0.5)
+        return True
 
     def submit_stop_order(
         self,
@@ -348,28 +395,96 @@ class IBClient(BrokerClient):
     ):
         raise NotImplementedError("IBClient.submit_stop_order — Part 4")
 
-    def cancel_order(self, order_id: str) -> bool:
-        raise NotImplementedError("IBClient.cancel_order — Part 4")
-
     def cancel_all_orders(self) -> int:
         raise NotImplementedError("IBClient.cancel_all_orders — Part 4")
+
+    def close_position(self, symbol: str) -> Optional[dict]:
+        raise NotImplementedError("IBClient.close_position — Part 4")
 
     def close_all_positions(self) -> None:
         raise NotImplementedError("IBClient.close_all_positions — Part 4")
 
-    def get_order(self, order_id: str) -> Optional[dict]:
-        raise NotImplementedError("IBClient.get_order — Part 4")
-
     def list_orders(self, status: str = "open") -> list[dict]:
         raise NotImplementedError("IBClient.list_orders — Part 4")
 
-    # ── Streaming (Part 3) ────────────────────────────────────────────────────
+    # ── Order event handlers (private) ────────────────────────────────────────
+
+    def _on_order_status(self, trade) -> None:
+        """Update the order cache whenever IB pushes a status change."""
+        order_id = trade.order.orderId
+        self._order_cache[order_id] = self._trade_to_dict(trade)
+
+        status = trade.orderStatus.status
+        if status in ("Filled", "Cancelled", "Inactive"):
+            if self._log:
+                self._log.info(
+                    "order_status_change",
+                    order_id=order_id,
+                    symbol=trade.contract.symbol,
+                    status=status,
+                    filled=trade.orderStatus.filled,
+                )
+
+    def _on_exec_details(self, trade, fill) -> None:
+        """Capture fill price/qty from each execution report."""
+        order_id = trade.order.orderId
+        if order_id in self._order_cache:
+            self._order_cache[order_id]["last_fill_price"] = fill.execution.price
+            self._order_cache[order_id]["last_fill_qty"]   = fill.execution.shares
+
+    def _trade_to_dict(self, trade) -> dict:
+        """Normalise an ib_async Trade object to our standard order dict."""
+        oid   = trade.order.orderId
+        lmt   = (float(trade.order.lmtPrice)
+                 if trade.order.orderType == "LMT" else None)
+        price = trade.orderStatus.avgFillPrice
+        return {
+            "id":              str(oid),
+            "alpaca_id":       str(oid),   # compatibility alias for order_policy.py
+            "symbol":          trade.contract.symbol,
+            "side":            "buy" if trade.order.action == "BUY" else "sell",
+            "qty":             float(trade.order.totalQuantity),
+            "limit_price":     lmt,
+            "status":          trade.orderStatus.status,
+            "filled_qty":      float(trade.orderStatus.filled),
+            "avg_fill_price":  float(price) if price else None,
+            "filled_avg_price": float(price) if price else None,  # alias
+            "remaining":       float(trade.orderStatus.remaining),
+            "client_order_id": trade.order.orderRef or None,
+        }
+
+    # ── Bars (Part 4) ─────────────────────────────────────────────────────────
+
+    def get_daily_bars(
+        self,
+        symbol: str,
+        lookback_days: int = 20,
+        feed: str = "iex",
+    ) -> pd.DataFrame:
+        raise NotImplementedError("IBClient.get_daily_bars — Part 4")
+
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        start_dt,
+        end_dt,
+        timeframe: str = "1Min",
+        feed: str = "iex",
+    ) -> pd.DataFrame:
+        raise NotImplementedError("IBClient.get_intraday_bars — Part 4")
+
+    # ── Quote (Part 4) ────────────────────────────────────────────────────────
+
+    def get_latest_quote(self, symbol: str) -> dict:
+        raise NotImplementedError("IBClient.get_latest_quote — Part 4")
+
+    # ── Streaming (Part 4) ────────────────────────────────────────────────────
 
     def subscribe_bars(self, symbols: list[str], callback: Callable) -> None:
-        raise NotImplementedError("IBClient.subscribe_bars — Part 3")
+        raise NotImplementedError("IBClient.subscribe_bars — Part 4")
 
     def stop_bars_stream(self) -> None:
-        raise NotImplementedError("IBClient.stop_bars_stream — Part 3")
+        raise NotImplementedError("IBClient.stop_bars_stream — Part 4")
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────

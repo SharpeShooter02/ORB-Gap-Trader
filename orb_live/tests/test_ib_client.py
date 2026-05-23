@@ -500,7 +500,7 @@ class TestSubmitLimitOrder:
         assert result["side"]          == "buy"
         assert result["qty"]           == pytest.approx(100.0)
         assert result["limit_price"]   == pytest.approx(50.0)
-        assert result["status"]        == "Submitted"
+        assert result["status"]        == "new"
         assert result["filled_qty"]    == pytest.approx(0.0)
         assert result["client_order_id"] == "uuid-abc"
 
@@ -604,7 +604,7 @@ class TestOrderEventHandlers:
         client._on_order_status(trade)
 
         assert 20 in client._order_cache
-        assert client._order_cache[20]["status"] == "Submitted"
+        assert client._order_cache[20]["status"] == "new"
 
     def test_filled_status_triggers_log(self):
         mock_log = MagicMock()
@@ -670,6 +670,46 @@ class TestTradeToDict:
         trade  = _make_trade(order_id=77)
         d = client._trade_to_dict(trade)
         assert d["alpaca_id"] == d["id"] == "77"
+
+    def test_trade_to_dict_status_is_normalized(self):
+        client = self._client()
+        trade  = _make_trade(status="Submitted")
+        d = client._trade_to_dict(trade)
+        assert d["status"] == "new"
+
+    def test_trade_to_dict_status_raw_preserved(self):
+        client = self._client()
+        trade  = _make_trade(status="Filled")
+        d = client._trade_to_dict(trade)
+        assert d["status"]     == "filled"
+        assert d["status_raw"] == "Filled"
+
+    def test_trade_to_dict_unknown_status_lowercased(self):
+        client = self._client()
+        trade  = _make_trade(status="SomeWeirdStatus")
+        d = client._trade_to_dict(trade)
+        assert d["status"] == "someweirdstatus"
+
+
+class TestNormalizeStatus:
+    def _client(self):
+        with patch("orb_live.data.ib_client.IB"):
+            return IBClient(paper=True)
+
+    @pytest.mark.parametrize("ib_status,expected", [
+        ("PendingSubmit",   "new"),
+        ("PreSubmitted",    "new"),
+        ("Submitted",       "new"),
+        ("Filled",          "filled"),
+        ("PartiallyFilled", "partially_filled"),
+        ("Cancelled",       "canceled"),
+        ("ApiCancelled",    "canceled"),
+        ("Inactive",        "rejected"),
+        ("Unknown",         "unknown"),
+    ])
+    def test_known_and_fallback_statuses(self, ib_status, expected):
+        client = self._client()
+        assert client._normalize_status(ib_status) == expected
 
 
 # ── BarAggregator ─────────────────────────────────────────────────────────────

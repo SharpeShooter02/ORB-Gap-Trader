@@ -66,12 +66,15 @@ def build_broker_from_env(paper: bool = True):
     Factory that selects a broker implementation based on the BROKER env var.
 
     BROKER=alpaca (default) → AlpacaClient backed by Alpaca paper/live API.
-    BROKER=ib               → NotImplementedError (IBClient not yet implemented).
+    BROKER=ib               → IBClient connecting to local IB Gateway / TWS.
     """
     import os
     broker_name = os.environ.get("BROKER", "alpaca").lower()
     if broker_name == "ib":
-        raise NotImplementedError("IBClient is not yet implemented")
+        from orb_live.data.ib_client import build_client_from_env as build_ib
+        client = build_ib(paper=paper)
+        client.connect()
+        return client
     from orb_live.data.alpaca_client import build_client_from_env
     return build_client_from_env(paper=paper)
 
@@ -117,6 +120,22 @@ def _build_components(args: argparse.Namespace, _log=None):
     logger.info("constructing_broker", paper=paper)
     real_client = build_broker_from_env(paper=paper)
     logger.info("broker_constructed")
+
+    try:
+        account = real_client.get_account()
+        logger.info(
+            "broker_account_verified",
+            broker_type=type(real_client).__name__,
+            equity=account.get("equity"),
+            buying_power=account.get("buying_power"),
+        )
+    except Exception as exc:
+        logger.error(
+            "broker_account_check_failed",
+            broker_type=type(real_client).__name__,
+            error=str(exc),
+        )
+        raise
 
     if args.dry_run:
         from orb_live.runner.dry_run import DryRunAlpaca

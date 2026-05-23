@@ -277,3 +277,40 @@ class TestIBClientMarketDataLive:
         client.stop_bars_stream()
 
         assert client._streams == {}
+
+
+@skip_unless_ib
+class TestIBClientEndToEnd:
+    """
+    End-to-end: exercises the full lifecycle via build_broker_from_env()
+    exactly as the runner does, including connect-at-factory-time and
+    status normalisation.
+    """
+
+    def test_full_lifecycle_via_factory(self):
+        import os
+        os.environ["BROKER"] = "ib"
+        try:
+            from orb_live.runner.main import build_broker_from_env
+            broker = build_broker_from_env(paper=True)
+
+            # Account check
+            acc = broker.get_account()
+            assert acc["equity"] > 0
+
+            # Asset metadata
+            asset = broker.get_asset("SOXL")
+            assert asset["tradable"] is True
+
+            # Order lifecycle — status must be normalised to lowercase Alpaca form
+            order = broker.submit_limit_order("SOXL", "buy", 1, 0.01,
+                                              client_order_id="e2e-test-001")
+            assert order["status"] in ("new", "filled", "canceled", "rejected")
+            assert order["status_raw"] is not None  # raw IB string preserved
+
+            broker.cancel_order(order["id"])
+            time.sleep(1)
+
+            broker.disconnect()
+        finally:
+            os.environ.pop("BROKER", None)

@@ -141,6 +141,17 @@ class IBClient(BrokerClient):
         date(2027, 12, 24),
     })
 
+    _IB_TO_ALPACA_STATUS: dict[str, str] = {
+        "PendingSubmit":   "new",
+        "PreSubmitted":    "new",
+        "Submitted":       "new",
+        "Filled":          "filled",
+        "PartiallyFilled": "partially_filled",
+        "Cancelled":       "canceled",
+        "ApiCancelled":    "canceled",
+        "Inactive":        "rejected",
+    }
+
     def __init__(self, paper: bool = True, **kwargs):
         self._paper          = paper
         self._host           = kwargs.get("host",      "127.0.0.1")
@@ -518,25 +529,30 @@ class IBClient(BrokerClient):
             self._order_cache[order_id]["last_fill_price"] = fill.execution.price
             self._order_cache[order_id]["last_fill_qty"]   = fill.execution.shares
 
+    def _normalize_status(self, ib_status: str) -> str:
+        return self._IB_TO_ALPACA_STATUS.get(ib_status, ib_status.lower())
+
     def _trade_to_dict(self, trade) -> dict:
         """Normalise an ib_async Trade object to our standard order dict."""
-        oid   = trade.order.orderId
-        lmt   = (float(trade.order.lmtPrice)
-                 if trade.order.orderType == "LMT" else None)
-        price = trade.orderStatus.avgFillPrice
+        oid        = trade.order.orderId
+        lmt        = (float(trade.order.lmtPrice)
+                      if trade.order.orderType == "LMT" else None)
+        price      = trade.orderStatus.avgFillPrice
+        status_raw = trade.orderStatus.status
         return {
-            "id":              str(oid),
-            "alpaca_id":       str(oid),   # compatibility alias for order_policy.py
-            "symbol":          trade.contract.symbol,
-            "side":            "buy" if trade.order.action == "BUY" else "sell",
-            "qty":             float(trade.order.totalQuantity),
-            "limit_price":     lmt,
-            "status":          trade.orderStatus.status,
-            "filled_qty":      float(trade.orderStatus.filled),
-            "avg_fill_price":  float(price) if price else None,
+            "id":               str(oid),
+            "alpaca_id":        str(oid),   # compatibility alias for order_policy.py
+            "symbol":           trade.contract.symbol,
+            "side":             "buy" if trade.order.action == "BUY" else "sell",
+            "qty":              float(trade.order.totalQuantity),
+            "limit_price":      lmt,
+            "status":           self._normalize_status(status_raw),
+            "status_raw":       status_raw,
+            "filled_qty":       float(trade.orderStatus.filled),
+            "avg_fill_price":   float(price) if price else None,
             "filled_avg_price": float(price) if price else None,  # alias
-            "remaining":       float(trade.orderStatus.remaining),
-            "client_order_id": trade.order.orderRef or None,
+            "remaining":        float(trade.orderStatus.remaining),
+            "client_order_id":  trade.order.orderRef or None,
         }
 
     # ── Bars (Part 4) ─────────────────────────────────────────────────────────

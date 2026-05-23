@@ -6,7 +6,7 @@ All IB Gateway network calls are mocked so these run without a live connection.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 from zoneinfo import ZoneInfo
@@ -825,6 +825,32 @@ class TestGetIntradayBars:
         end   = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
         with pytest.raises(ConnectionError):
             client.get_intraday_bars("TQQQ", start, end)
+
+    def test_get_intraday_bars_uses_empty_endtime_for_now(self):
+        from datetime import timezone
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = []
+
+        now   = datetime.now(timezone.utc)
+        start = now - timedelta(minutes=30)
+        client.get_intraday_bars("TQQQ", start, now)
+
+        call_kwargs = client._ib.reqHistoricalData.call_args.kwargs
+        assert call_kwargs.get("endDateTime") == ""
+
+    def test_get_intraday_bars_uses_explicit_endtime_for_past(self):
+        from datetime import timezone
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = []
+
+        past_end = datetime(2026, 5, 22, 14, 30, tzinfo=timezone.utc)
+        client.get_intraday_bars("TQQQ", past_end - timedelta(minutes=30), past_end)
+
+        call_kwargs = client._ib.reqHistoricalData.call_args.kwargs
+        end_str = call_kwargs.get("endDateTime")
+        assert end_str.endswith("US/Eastern")
+        assert " " in end_str        # space between date and time, not dash
+        assert not end_str.startswith("-")
 
 
 # ── subscribe_bars / stop_bars_stream ─────────────────────────────────────────

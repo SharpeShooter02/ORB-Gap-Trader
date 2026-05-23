@@ -598,9 +598,16 @@ class IBClient(BrokerClient):
 
         bar_size = _BAR_SIZE_MAP.get(timeframe.lower(), "1 min")
 
+        from datetime import timezone as _tz
+        _now_utc = datetime.now(_tz.utc)
+        if abs((end.astimezone(_tz.utc) - _now_utc).total_seconds()) < 60:
+            end_dt_str = ""
+        else:
+            end_dt_str = end.strftime("%Y%m%d %H:%M:%S US/Eastern")
+
         raw = self._ib.reqHistoricalData(
             contract,
-            endDateTime=end.strftime("%Y%m%d-%H:%M:%S") + " US/Eastern",
+            endDateTime=end_dt_str,
             durationStr=duration_str,
             barSizeSetting=bar_size,
             whatToShow="TRADES",

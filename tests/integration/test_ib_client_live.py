@@ -194,7 +194,7 @@ class TestIBClientOrdersLive:
             if order:
                 client.cancel_order(order["id"])
 
-    def test_live_cancel_order_changes_status(self, client):
+    def test_live_cancel_order_changes_status(self, client):  # noqa: keep at end
         order = None
         try:
             order = client.submit_limit_order("SOXL", "buy", 1, 0.01)
@@ -206,3 +206,74 @@ class TestIBClientOrdersLive:
             ), f"Unexpected status after cancel: {fetched['status']}"
         finally:
             pass  # already cancelled above
+
+
+@skip_unless_ib
+class TestIBClientMarketDataLive:
+    @pytest.fixture(scope="class")
+    def client(self):
+        from orb_live.data.ib_client import build_client_from_env
+        c = build_client_from_env(paper=True)
+        c.connect()
+        yield c
+        c.disconnect()
+
+    def test_live_get_intraday_bars_recent(self, client):
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
+        end   = datetime.now(tz=_ET)
+        start = end - timedelta(minutes=30)
+
+        clock = client.get_clock()
+        if not clock["is_open"]:
+            pytest.skip("Market closed; historical bars may be empty")
+
+        df = client.get_intraday_bars("SOXL", start, end)
+        assert not df.empty, "Expected at least 1 bar in the last 30 minutes"
+
+    def test_live_get_intraday_bars_columns(self, client):
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+        _ET = ZoneInfo("America/New_York")
+        end   = datetime.now(tz=_ET)
+        start = end - timedelta(minutes=30)
+        df    = client.get_intraday_bars("SOXL", start, end)
+
+        if df.empty:
+            pytest.skip("No bars returned (market closed?)")
+
+        for col in ("open", "high", "low", "close", "volume"):
+            assert col in df.columns, f"Missing column: {col}"
+        assert df.index.tzinfo is not None, "Index must be timezone-aware"
+
+    def test_live_subscribe_brief(self, client):
+        """Subscribe for 15 seconds during market hours and expect at least 1 bar."""
+        clock = client.get_clock()
+        if not clock["is_open"]:
+            pytest.skip("Market closed; cannot test live streaming")
+
+        received = []
+        client.subscribe_bars(["SPY"], callback=received.append)
+        time.sleep(15)
+        client.stop_bars_stream()
+
+        assert len(received) >= 1, (
+            "Expected at least 1 bar within 15 seconds during market hours"
+        )
+        bar = received[0]
+        assert "symbol"    in bar
+        assert "timestamp" in bar
+        assert "close"     in bar
+
+    def test_live_stop_bars_stream_clean(self, client):
+        """Subscribe and stop without errors; streams dict must be empty after."""
+        clock = client.get_clock()
+        if not clock["is_open"]:
+            pytest.skip("Market closed; IB may reject real-time bar request")
+
+        client.subscribe_bars(["SOXL"], callback=lambda bar: None)
+        time.sleep(2)
+        client.stop_bars_stream()
+
+        assert client._streams == {}

@@ -1,19 +1,20 @@
 """
-tests/test_ib_client.py — Unit tests for IBClient (Parts 1-2).
+tests/test_ib_client.py — Unit tests for IBClient (Parts 1-4).
 
 All IB Gateway network calls are mocked so these run without a live connection.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import pytest
 
-from orb_live.data.ib_client import IBClient, build_client_from_env
+from orb_live.data.ib_client import BarAggregator, IBClient, build_client_from_env
 
 _ET = ZoneInfo("America/New_York")
 
@@ -669,3 +670,252 @@ class TestTradeToDict:
         trade  = _make_trade(order_id=77)
         d = client._trade_to_dict(trade)
         assert d["alpaca_id"] == d["id"] == "77"
+
+
+# ── BarAggregator ─────────────────────────────────────────────────────────────
+
+def _make_5sec_bar(
+    dt: datetime,
+    open: float = 100.0,
+    high: float = 101.0,
+    low:  float = 99.0,
+    close: float = 100.5,
+    volume: float = 1000.0,
+) -> SimpleNamespace:
+    return SimpleNamespace(time=dt, open=open, high=high, low=low,
+                           close=close, volume=volume)
+
+
+def _min(year: int, month: int, day: int, hour: int, minute: int) -> datetime:
+    return datetime(year, month, day, hour, minute, tzinfo=_ET)
+
+
+class TestBarAggregator:
+    def test_aggregator_first_bar_returns_none(self):
+        agg = BarAggregator("TQQQ")
+        bar = _make_5sec_bar(_min(2026, 5, 19, 10, 0))
+        assert agg.add_5sec_bar(bar) is None
+
+    def test_aggregator_same_minute_updates_high(self):
+        agg = BarAggregator("TQQQ")
+        b1 = _make_5sec_bar(_min(2026, 5, 19, 10, 0), high=101.0)
+        b2 = _make_5sec_bar(_min(2026, 5, 19, 10, 0).replace(second=5), high=103.0)
+        agg.add_5sec_bar(b1)
+        assert agg.add_5sec_bar(b2) is None  # still same minute
+        assert agg.high == pytest.approx(103.0)
+
+    def test_aggregator_new_minute_emits_completed(self):
+        agg = BarAggregator("TQQQ")
+        b1 = _make_5sec_bar(_min(2026, 5, 19, 10, 0),
+                             open=100.0, high=102.0, low=99.0, close=101.0, volume=500)
+        b2 = _make_5sec_bar(_min(2026, 5, 19, 10, 1),  # new minute
+                             open=101.0, high=103.0, low=100.0, close=102.0, volume=200)
+        assert agg.add_5sec_bar(b1) is None
+        completed = agg.add_5sec_bar(b2)
+
+        assert completed is not None
+        assert completed["symbol"]    == "TQQQ"
+        assert completed["timestamp"] == _min(2026, 5, 19, 10, 0)
+        assert completed["open"]      == pytest.approx(100.0)
+        assert completed["high"]      == pytest.approx(102.0)
+        assert completed["low"]       == pytest.approx(99.0)
+        assert completed["close"]     == pytest.approx(101.0)
+        assert completed["volume"]    == pytest.approx(500.0)
+
+    def test_aggregator_volume_accumulates(self):
+        agg = BarAggregator("SOXL")
+        for i in range(12):
+            t = datetime(2026, 5, 19, 10, 0, i * 5, tzinfo=_ET)
+            agg.add_5sec_bar(_make_5sec_bar(t, volume=100.0))
+        assert agg.volume == pytest.approx(1200.0)
+
+    def test_aggregator_finalize_returns_current_state(self):
+        agg = BarAggregator("UVXY")
+        agg.add_5sec_bar(_make_5sec_bar(_min(2026, 5, 19, 10, 0),
+                                        open=50.0, high=52.0, low=49.0,
+                                        close=51.0, volume=300))
+        completed = agg.finalize()
+        assert completed is not None
+        assert completed["open"]  == pytest.approx(50.0)
+        assert completed["close"] == pytest.approx(51.0)
+
+    def test_aggregator_finalize_empty_returns_none(self):
+        agg = BarAggregator("TQQQ")
+        assert agg.finalize() is None
+
+    def test_aggregator_naive_datetime_handled(self):
+        agg = BarAggregator("TQQQ")
+        naive = datetime(2026, 5, 19, 10, 0, 0)   # no tzinfo
+        assert agg.add_5sec_bar(_make_5sec_bar(naive)) is None
+        assert agg.current_minute is not None
+
+
+# ── get_intraday_bars ─────────────────────────────────────────────────────────
+
+def _make_hist_bar(epoch: float, open=100.0, high=101.0, low=99.0,
+                   close=100.5, volume=500.0) -> SimpleNamespace:
+    return SimpleNamespace(date=str(int(epoch)), open=open, high=high,
+                           low=low, close=close, volume=volume)
+
+
+class TestGetIntradayBars:
+    def _client(self, tradable=True, symbol="TQQQ") -> IBClient:
+        client = _client_with_asset(symbol, tradable=tradable)
+        client._ib.isConnected.return_value = True
+        return client
+
+    def test_get_intraday_bars_empty_for_non_tradable(self):
+        client = self._client(tradable=False, symbol="BADTICKER")
+        start  = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
+        end    = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
+
+        df = client.get_intraday_bars("BADTICKER", start, end)
+
+        assert isinstance(df, pd.DataFrame)
+        assert df.empty
+
+    def test_get_intraday_bars_returns_empty_when_no_data(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = []
+
+        start = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
+        end   = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
+        df    = client.get_intraday_bars("TQQQ", start, end)
+
+        assert df.empty
+
+    def test_get_intraday_bars_filters_to_window(self):
+        start = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
+        end   = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
+
+        ts_before = datetime(2026, 5, 19, 9, 15, tzinfo=_ET).timestamp()
+        ts_in     = datetime(2026, 5, 19, 9, 35, tzinfo=_ET).timestamp()
+        ts_after  = datetime(2026, 5, 19, 10, 15, tzinfo=_ET).timestamp()
+
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = [
+            _make_hist_bar(ts_before),
+            _make_hist_bar(ts_in),
+            _make_hist_bar(ts_after),
+        ]
+
+        df = client.get_intraday_bars("TQQQ", start, end)
+        assert len(df) == 1
+
+    def test_get_intraday_bars_dataframe_shape(self):
+        start   = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
+        end     = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
+        ts_in   = datetime(2026, 5, 19, 9, 35, tzinfo=_ET).timestamp()
+
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = [_make_hist_bar(ts_in)]
+
+        df = client.get_intraday_bars("TQQQ", start, end)
+
+        assert not df.empty
+        for col in ("open", "high", "low", "close", "volume"):
+            assert col in df.columns
+        assert df.index.tzinfo is not None
+
+    def test_get_intraday_bars_raises_if_disconnected(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = False
+
+        start = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
+        end   = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
+        with pytest.raises(ConnectionError):
+            client.get_intraday_bars("TQQQ", start, end)
+
+
+# ── subscribe_bars / stop_bars_stream ─────────────────────────────────────────
+
+class TestSubscribeBars:
+    def _client(self) -> IBClient:
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        return client
+
+    def test_subscribe_bars_calls_reqRealTimeBars(self):
+        client = self._client()
+        mock_stream = MagicMock()
+        client._ib.reqRealTimeBars.return_value = mock_stream
+
+        client.subscribe_bars(["TQQQ"], callback=lambda bar: None)
+
+        client._ib.reqRealTimeBars.assert_called_once()
+        assert "TQQQ" in client._streams
+
+    def test_subscribe_bars_skips_untradable(self):
+        client = _client_with_asset("BADTICKER", tradable=False)
+        client._ib.isConnected.return_value = True
+
+        client.subscribe_bars(["BADTICKER"], callback=lambda bar: None)
+
+        client._ib.reqRealTimeBars.assert_not_called()
+        assert "BADTICKER" not in client._streams
+
+    def test_subscribe_bars_idempotent(self):
+        client = self._client()
+        mock_stream = MagicMock()
+        client._ib.reqRealTimeBars.return_value = mock_stream
+
+        client.subscribe_bars(["TQQQ"], callback=lambda bar: None)
+        client.subscribe_bars(["TQQQ"], callback=lambda bar: None)  # second call
+
+        assert client._ib.reqRealTimeBars.call_count == 1
+
+    def test_subscribe_bars_attaches_listener(self):
+        client = self._client()
+        mock_stream = MagicMock()
+        client._ib.reqRealTimeBars.return_value = mock_stream
+
+        client.subscribe_bars(["TQQQ"], callback=lambda bar: None)
+
+        # Aggregator must be created so the listener can service incoming bars
+        assert "TQQQ" in client._bar_aggregators
+        assert isinstance(client._bar_aggregators["TQQQ"], BarAggregator)
+
+
+class TestStopBarsStream:
+    def _subscribed_client(self, symbol: str = "TQQQ"):
+        client = _client_with_asset(symbol)
+        client._ib.isConnected.return_value = True
+
+        mock_stream = MagicMock()
+        client._ib.reqRealTimeBars.return_value = mock_stream
+        client.subscribe_bars([symbol], callback=lambda bar: None)
+        return client, mock_stream
+
+    def test_stop_bars_stream_clears_streams(self):
+        client, _ = self._subscribed_client()
+        client.stop_bars_stream()
+        assert client._streams == {}
+        assert client._bar_aggregators == {}
+        assert client._bar_callback is None
+
+    def test_stop_bars_stream_cancels_each(self):
+        client, mock_stream = self._subscribed_client()
+        client.stop_bars_stream()
+        client._ib.cancelRealTimeBars.assert_called_once_with(mock_stream)
+
+    def test_stop_bars_stream_finalizes_pending(self):
+        emitted = []
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        mock_stream = MagicMock()
+        client._ib.reqRealTimeBars.return_value = mock_stream
+        client.subscribe_bars(["TQQQ"], callback=emitted.append)
+
+        # Feed one 5-sec bar (partial minute)
+        bar = _make_5sec_bar(_min(2026, 5, 19, 10, 0))
+        client._bar_aggregators["TQQQ"].add_5sec_bar(bar)
+
+        client.stop_bars_stream()
+
+        assert len(emitted) == 1
+        assert emitted[0]["symbol"] == "TQQQ"
+
+    def test_stop_bars_stream_no_op_when_empty(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+        client.stop_bars_stream()  # must not raise

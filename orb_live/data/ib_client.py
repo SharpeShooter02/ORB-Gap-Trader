@@ -1,10 +1,9 @@
 """
-data/ib_client.py — Interactive Brokers client (Parts 1-3: connection, account,
-asset metadata, market clock, and order operations).
+data/ib_client.py — Interactive Brokers client (Parts 1-4: connection, account,
+asset metadata, market clock, order operations, and market data).
 
 Implements BrokerClient for IB Gateway / TWS.  Thin synchronous wrapper
-around ib_async.IB.  Part 4 (market data / streaming) is stubbed as
-NotImplementedError and will be implemented later.
+around ib_async.IB.
 
 Config (read by build_client_from_env):
     IB_HOST         127.0.0.1 (default)
@@ -15,6 +14,11 @@ Order design — event-driven cache with polling interface:
     IB sends order updates via callbacks (orderStatusEvent, execDetailsEvent).
     The strategy layer polls via get_order(id).  The cache bridges the two:
     event handlers update self._order_cache; get_order() reads from it.
+
+Streaming design — 5-second bar aggregation:
+    IB only streams 5-second real-time bars.  BarAggregator accumulates
+    them and emits 1-minute bars to the user callback when the minute
+    boundary is crossed.
 """
 
 from __future__ import annotations
@@ -31,6 +35,83 @@ from ib_async import IB, LimitOrder, MarketOrder, Stock
 from orb_live.data.broker_client import BrokerClient
 
 _ET = ZoneInfo("America/New_York")
+
+# timeframe string → IB barSizeSetting
+_BAR_SIZE_MAP: dict[str, str] = {
+    "1min":  "1 min",
+    "1m":    "1 min",
+    "5min":  "5 mins",
+    "5m":    "5 mins",
+    "15min": "15 mins",
+    "15m":   "15 mins",
+    "1h":    "1 hour",
+    "1hour": "1 hour",
+}
+
+
+class BarAggregator:
+    """Aggregates 5-second IB real-time bars into 1-minute bars.
+
+    Call add_5sec_bar() on each incoming bar.  When a minute boundary is
+    crossed the method returns the completed 1-min bar dict; otherwise None.
+    Call finalize() to flush any pending partial bar at shutdown.
+    """
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol          = symbol
+        self.current_minute: Optional[datetime] = None
+        self.open:           Optional[float]    = None
+        self.high:           float              = float("-inf")
+        self.low:            float              = float("inf")
+        self.close:          Optional[float]    = None
+        self.volume:         float              = 0.0
+
+    def add_5sec_bar(self, bar) -> Optional[dict]:
+        """Add a 5-sec bar.  Returns completed 1-min bar dict or None."""
+        t = bar.time
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=_ET)
+        bar_minute = t.replace(second=0, microsecond=0)
+
+        if self.current_minute is None:
+            self.current_minute = bar_minute
+            self.open  = float(bar.open)
+            self.high  = float(bar.high)
+            self.low   = float(bar.low)
+            self.close = float(bar.close)
+            self.volume = float(bar.volume)
+            return None
+
+        if bar_minute > self.current_minute:
+            completed = self.finalize()
+            self.current_minute = bar_minute
+            self.open  = float(bar.open)
+            self.high  = float(bar.high)
+            self.low   = float(bar.low)
+            self.close = float(bar.close)
+            self.volume = float(bar.volume)
+            return completed
+
+        # Same minute — update running aggregate
+        self.high   = max(self.high,  float(bar.high))
+        self.low    = min(self.low,   float(bar.low))
+        self.close  = float(bar.close)
+        self.volume += float(bar.volume)
+        return None
+
+    def finalize(self) -> Optional[dict]:
+        """Emit current running state as a 1-min bar dict, or None if empty."""
+        if self.current_minute is None:
+            return None
+        return {
+            "symbol":    self.symbol,
+            "timestamp": self.current_minute,
+            "open":      self.open,
+            "high":      self.high,
+            "low":       self.low,
+            "close":     self.close,
+            "volume":    self.volume,
+        }
 
 
 class IBClient(BrokerClient):
@@ -67,9 +148,12 @@ class IBClient(BrokerClient):
         self._client_id      = kwargs.get("client_id", 1)
         self._log            = kwargs.get("logger")
         self._ib             = IB()
-        self._asset_cache:    dict[str, dict]   = {}
-        self._contract_cache: dict[str, object] = {}
-        self._order_cache:    dict[int, dict]   = {}
+        self._asset_cache:    dict[str, dict]         = {}
+        self._contract_cache: dict[str, object]       = {}
+        self._order_cache:    dict[int, dict]         = {}
+        self._streams:        dict[str, object]       = {}
+        self._bar_aggregators: dict[str, BarAggregator] = {}
+        self._bar_callback:   Optional[Callable]      = None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -95,6 +179,8 @@ class IBClient(BrokerClient):
             )
 
     def disconnect(self) -> None:
+        if self._streams:
+            self.stop_bars_stream()
         try:
             self._ib.orderStatusEvent -= self._on_order_status
             self._ib.execDetailsEvent -= self._on_exec_details
@@ -461,30 +547,182 @@ class IBClient(BrokerClient):
         lookback_days: int = 20,
         feed: str = "iex",
     ) -> pd.DataFrame:
-        raise NotImplementedError("IBClient.get_daily_bars — Part 4")
+        raise NotImplementedError("IBClient.get_daily_bars — Part 5")
 
     def get_intraday_bars(
         self,
         symbol: str,
-        start_dt,
-        end_dt,
+        start: datetime,
+        end: datetime,
         timeframe: str = "1Min",
         feed: str = "iex",
     ) -> pd.DataFrame:
-        raise NotImplementedError("IBClient.get_intraday_bars — Part 4")
+        """
+        Fetch historical intraday bars from IB for [start, end].
 
-    # ── Quote (Part 4) ────────────────────────────────────────────────────────
+        Returns a DataFrame indexed by ET-aware datetime with columns
+        open, high, low, close, volume.  Returns an empty DataFrame if
+        the symbol is not tradable or IB returns no data.
+        """
+        _empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            return _empty
+
+        contract = self._contract_cache[symbol]
+
+        # Normalise naive datetimes to ET
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=_ET)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=_ET)
+
+        # Build IB durationStr from the window size
+        delta_s = int((end - start).total_seconds())
+        delta_m = max(1, delta_s // 60)
+        delta_h = max(1, delta_s // 3600)
+        delta_d = max(1, (end.date() - start.date()).days + 1)
+
+        if delta_s <= 60:
+            duration_str = f"{delta_s} S"
+        elif delta_m <= 30:
+            duration_str = f"{delta_m} M"
+        elif delta_h <= 6:
+            duration_str = f"{delta_h} H"
+        else:
+            duration_str = f"{delta_d} D"
+
+        bar_size = _BAR_SIZE_MAP.get(timeframe.lower(), "1 min")
+
+        raw = self._ib.reqHistoricalData(
+            contract,
+            endDateTime=end.strftime("%Y%m%d-%H:%M:%S") + " US/Eastern",
+            durationStr=duration_str,
+            barSizeSetting=bar_size,
+            whatToShow="TRADES",
+            useRTH=False,
+            formatDate=2,
+        )
+
+        if not raw:
+            return _empty
+
+        rows = []
+        for bar in raw:
+            try:
+                ts = datetime.fromtimestamp(float(str(bar.date)), tz=_ET)
+            except (ValueError, TypeError):
+                continue
+            rows.append({
+                "timestamp": ts,
+                "open":   float(bar.open),
+                "high":   float(bar.high),
+                "low":    float(bar.low),
+                "close":  float(bar.close),
+                "volume": float(bar.volume),
+            })
+
+        if not rows:
+            return _empty
+
+        df = pd.DataFrame(rows).set_index("timestamp").sort_index()
+        return df.loc[(df.index >= start) & (df.index <= end)]
+
+    # ── Quote (Part 5) ────────────────────────────────────────────────────────
 
     def get_latest_quote(self, symbol: str) -> dict:
-        raise NotImplementedError("IBClient.get_latest_quote — Part 4")
+        raise NotImplementedError("IBClient.get_latest_quote — Part 5")
 
     # ── Streaming (Part 4) ────────────────────────────────────────────────────
 
     def subscribe_bars(self, symbols: list[str], callback: Callable) -> None:
-        raise NotImplementedError("IBClient.subscribe_bars — Part 4")
+        """
+        Stream 1-minute bars for the given symbols.
+
+        Internally subscribes to IB's 5-second real-time bars (the only
+        streaming granularity IB supports) and uses BarAggregator to emit
+        a completed 1-min bar dict whenever a minute boundary is crossed.
+
+        callback signature: fn(bar: dict) where bar has keys:
+            symbol, timestamp, open, high, low, close, volume
+        """
+        if not self.is_connected():
+            self.connect()
+
+        self._bar_callback = callback
+
+        for sym in symbols:
+            if sym in self._streams:
+                continue  # already streaming
+
+            asset = self.get_asset(sym)
+            if not asset["tradable"]:
+                if self._log:
+                    self._log.warning("subscribe_bars_skip_untradable", symbol=sym)
+                continue
+
+            contract = self._contract_cache[sym]
+
+            stream = self._ib.reqRealTimeBars(
+                contract,
+                barSize=5,
+                whatToShow="TRADES",
+                useRTH=False,
+            )
+
+            self._streams[sym]          = stream
+            self._bar_aggregators[sym]  = BarAggregator(sym)
+
+            def _make_listener(symbol: str):
+                def _on_new_bar(bars, hasNewBar: bool) -> None:
+                    if not (hasNewBar and bars):
+                        return
+                    completed = self._bar_aggregators[symbol].add_5sec_bar(bars[-1])
+                    if completed and self._bar_callback:
+                        try:
+                            self._bar_callback(completed)
+                        except Exception as exc:
+                            if self._log:
+                                self._log.error(
+                                    "bar_callback_error",
+                                    symbol=symbol, error=str(exc),
+                                )
+                return _on_new_bar
+
+            stream.updateEvent += _make_listener(sym)
+
+            if self._log:
+                self._log.info("subscribed_bars", symbol=sym)
 
     def stop_bars_stream(self) -> None:
-        raise NotImplementedError("IBClient.stop_bars_stream — Part 4")
+        """Unsubscribe from all bar streams, flushing any pending partial bars."""
+        for sym in list(self._streams.keys()):
+            try:
+                pending = self._bar_aggregators[sym].finalize()
+                if pending and self._bar_callback:
+                    try:
+                        self._bar_callback(pending)
+                    except Exception as exc:
+                        if self._log:
+                            self._log.error(
+                                "final_bar_callback_error",
+                                symbol=sym, error=str(exc),
+                            )
+                self._ib.cancelRealTimeBars(self._streams[sym])
+                if self._log:
+                    self._log.info("unsubscribed_bars", symbol=sym)
+            except Exception as exc:
+                if self._log:
+                    self._log.warning("stop_bars_stream_error",
+                                      symbol=sym, error=str(exc))
+
+        self._streams.clear()
+        self._bar_aggregators.clear()
+        self._bar_callback = None
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────

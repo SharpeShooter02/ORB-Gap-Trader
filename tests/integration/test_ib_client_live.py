@@ -201,9 +201,12 @@ class TestIBClientOrdersLive:
             client.cancel_order(order["id"])
             time.sleep(2)  # allow cancel confirmation to arrive
             fetched = client.get_order(order["id"])
-            assert fetched["status"] in (
-                "Cancelled", "Inactive", "ApiCancelled",
-            ), f"Unexpected status after cancel: {fetched['status']}"
+            assert fetched["status"] in ("canceled", "rejected"), (
+                f"Unexpected normalized status: {fetched['status']}"
+            )
+            assert fetched["status_raw"] in ("Cancelled", "ApiCancelled", "Inactive"), (
+                f"Unexpected raw status: {fetched['status_raw']}"
+            )
         finally:
             pass  # already cancelled above
 

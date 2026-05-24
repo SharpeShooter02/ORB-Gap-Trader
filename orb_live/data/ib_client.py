@@ -121,25 +121,8 @@ class IBClient(BrokerClient):
     Call connect() before using any data or account methods.
     """
 
-    # Hard-coded NYSE holidays for 2025-2027.
-    # Used when pandas_market_calendars is not installed.
-    _US_HOLIDAYS: frozenset[date] = frozenset({
-        # 2025
-        date(2025, 1, 1),  date(2025, 1, 20), date(2025, 2, 17),
-        date(2025, 4, 18), date(2025, 5, 26), date(2025, 6, 19),
-        date(2025, 7, 4),  date(2025, 9, 1),  date(2025, 11, 27),
-        date(2025, 12, 25),
-        # 2026
-        date(2026, 1, 1),  date(2026, 1, 19), date(2026, 2, 16),
-        date(2026, 4, 3),  date(2026, 5, 25), date(2026, 6, 19),
-        date(2026, 7, 3),  date(2026, 9, 7),  date(2026, 11, 26),
-        date(2026, 12, 25),
-        # 2027
-        date(2027, 1, 1),  date(2027, 1, 18), date(2027, 2, 15),
-        date(2027, 3, 26), date(2027, 5, 31), date(2027, 6, 18),
-        date(2027, 7, 5),  date(2027, 9, 6),  date(2027, 11, 25),
-        date(2027, 12, 24),
-    })
+    # Holiday and market-day logic lives in orb_live.core.calendar so
+    # MarketClock and IBClient share a single authoritative source.
 
     _IB_TO_ALPACA_STATUS: dict[str, str] = {
         "PendingSubmit":   "new",
@@ -329,29 +312,17 @@ class IBClient(BrokerClient):
 
     def _is_holiday(self, d: date) -> bool:
         """True if d is a US market holiday (weekday check is caller's responsibility)."""
-        try:
-            import pandas_market_calendars as mcal  # optional dependency
-            nyse     = mcal.get_calendar("NYSE")
-            schedule = nyse.schedule(
-                start_date=d.strftime("%Y-%m-%d"),
-                end_date=d.strftime("%Y-%m-%d"),
-            )
-            return bool(schedule.empty)
-        except ImportError:
-            pass
-        return d in self._US_HOLIDAYS
+        from orb_live.core.calendar import is_trading_day
+        return d.weekday() < 5 and not is_trading_day(d)
 
     def _is_market_day(self, d: date) -> bool:
-        return d.weekday() < 5 and not self._is_holiday(d)
+        from orb_live.core.calendar import is_trading_day
+        return is_trading_day(d)
 
     def _next_market_day(self, from_date: date) -> date:
         """First market day on or after from_date."""
-        d = from_date
-        for _ in range(14):  # safety: longest US holiday stretch < 7 calendar days
-            if self._is_market_day(d):
-                return d
-            d += timedelta(days=1)
-        return d
+        from orb_live.core.calendar import next_trading_day
+        return next_trading_day(from_date)
 
     # ── Asset metadata ────────────────────────────────────────────────────────
 

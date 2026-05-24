@@ -56,16 +56,16 @@ def test_next_market_day_before_premarket_is_today():
 
 
 def test_next_market_day_after_close_friday_is_monday():
-    """After Friday close, next market day is Monday."""
+    """After Friday close, next market day is the following Monday (not a holiday)."""
     from orb_live.core.clock import MarketClock, PREMARKET_START
 
-    fixed = datetime(2026, 5, 22, 16, 30, 0, tzinfo=ET)  # Friday 16:30
+    fixed = datetime(2026, 5, 15, 16, 30, 0, tzinfo=ET)  # Friday 16:30 (non-holiday week)
     mc = MarketClock(broker_client=None)
     mc.now_et = lambda: fixed  # type: ignore[method-assign]
 
-    assert mc.next_market_day() == date(2026, 5, 25)
+    assert mc.next_market_day() == date(2026, 5, 18)   # Monday May 18 (regular trading day)
     pm = mc.next_premarket_start()
-    assert pm.date() == date(2026, 5, 25)
+    assert pm.date() == date(2026, 5, 18)
     assert pm.hour == PREMARKET_START.hour
     assert pm.minute == PREMARKET_START.minute
 
@@ -126,16 +126,17 @@ def test_daemon_sleeps_until_premarket_then_runs():
 def test_daemon_skips_weekend_to_monday():
     """
     Started at Friday 16:30 ET: daemon sleeps ~64 hours to Monday 08:30,
-    then runs the Monday session.
+    then runs the Monday session.  Uses a non-holiday week so the expected
+    date is the literal next Monday (Memorial Day week would skip to Tuesday).
     """
     from orb_live.runner.main import _run_daemon
 
-    fixed_now = datetime(2026, 5, 22, 16, 30, 0, tzinfo=ET)  # Friday 16:30
+    fixed_now = datetime(2026, 5, 15, 16, 30, 0, tzinfo=ET)  # Friday May 15 16:30
     clock = _FakeClock(fixed_now)
     expected_pm   = clock.next_premarket_start()
     expected_secs = (expected_pm - fixed_now).total_seconds()
 
-    assert expected_pm.date() == date(2026, 5, 25)  # Monday
+    assert expected_pm.date() == date(2026, 5, 18)  # Monday May 18
     assert abs(expected_secs - 64 * 3600) < 1.0    # 64 hours exactly
 
     sessions_run = []
@@ -158,7 +159,7 @@ def test_daemon_skips_weekend_to_monday():
     )
 
     assert abs(sum(slept) - expected_secs) < 1.0
-    assert sessions_run == [date(2026, 5, 25)]
+    assert sessions_run == [date(2026, 5, 18)]
 
 
 def test_daemon_runs_immediately_if_premarket_already_passed():

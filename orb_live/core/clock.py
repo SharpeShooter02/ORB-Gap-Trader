@@ -97,14 +97,15 @@ class MarketClock:
         Return the date of the next market session whose pre-market window
         (08:30 ET) has not yet started.  If the current time is before 08:30
         today on a weekday, returns today.  Uses the broker client for holiday
-        awareness when one is available; falls back to weekday arithmetic
-        otherwise.
+        awareness when one is available; falls back to the shared calendar
+        module otherwise.
 
         The broker API call is bounded to 10 seconds so a slow or unreachable
-        endpoint degrades gracefully to the naive weekday fallback rather than
+        endpoint degrades gracefully to the calendar fallback rather than
         blocking the daemon loop indefinitely.
         """
         import threading as _threading
+        from orb_live.core.calendar import is_trading_day, next_trading_day
 
         now   = self.now_et()
         today = now.date()
@@ -126,30 +127,29 @@ class MarketClock:
             clk = _clock_result[0]
             if clk is not None:
                 try:
-                    if clk.is_open:
-                        # Market is active — today's session is in progress
+                    # get_clock() returns a dict for IBClient; some clients return
+                    # an object with attribute access — handle both.
+                    is_open   = clk["is_open"]   if isinstance(clk, dict) else clk.is_open
+                    next_open = clk["next_open"]  if isinstance(clk, dict) else clk.next_open
+                    if is_open:
                         return today
-                    next_open_date = clk.next_open.astimezone(ET).date()
-                    # next_open is today and pre-market hasn't started yet → today
+                    next_open_date = next_open.astimezone(ET).date()
                     if next_open_date == today and now_t < PREMARKET_START:
                         return today
                     return next_open_date
                 except Exception:
                     pass
 
-        # Fallback: naive weekday arithmetic (ignores holidays).
-        # Return today if the market session hasn't closed yet (before 16:00),
+        # Fallback: use shared calendar (holiday-aware).
+        # Return today if today is a trading day and the session hasn't closed,
         # so mid-session startups trigger an immediate run rather than sleeping.
         today_eod = now.replace(
             hour=MARKET_CLOSE.hour, minute=MARKET_CLOSE.minute,
             second=0, microsecond=0,
         )
-        if today.weekday() < 5 and now < today_eod:
+        if is_trading_day(today) and now < today_eod:
             return today
-        target = today + timedelta(days=1)
-        while target.weekday() >= 5:
-            target += timedelta(days=1)
-        return target
+        return next_trading_day(today + timedelta(days=1))
 
     def next_premarket_start(self) -> datetime:
         """Return the next 08:30 ET on a market day as an aware datetime."""

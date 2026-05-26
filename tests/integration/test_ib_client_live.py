@@ -283,6 +283,66 @@ class TestIBClientMarketDataLive:
 
 
 @skip_unless_ib
+class TestIBClientQuoteLive:
+    @pytest.fixture(scope="class")
+    def client(self):
+        from orb_live.data.ib_client import build_client_from_env
+        c = build_client_from_env(paper=True)
+        c.connect()
+        yield c
+        c.disconnect()
+
+    def test_live_get_latest_quote_soxl(self, client):
+        clock = client.get_clock()
+        if not clock["is_open"]:
+            pytest.skip("Market closed; live bid/ask may be zero")
+        q = client.get_latest_quote("SOXL")
+        assert q["bid"] > 0, f"Expected positive bid, got {q['bid']}"
+        assert q["ask"] > 0, f"Expected positive ask, got {q['ask']}"
+        assert q["ask"] >= q["bid"]
+
+    def test_live_get_latest_quote_shape(self, client):
+        q = client.get_latest_quote("SOXL")
+        for key in ("bid", "ask", "bid_size", "ask_size", "ts"):
+            assert key in q, f"Missing key: {key}"
+        assert isinstance(q["bid"], float)
+        assert isinstance(q["ask"], float)
+
+
+@skip_unless_ib
+class TestIBClientDailyBarsLive:
+    @pytest.fixture(scope="class")
+    def client(self):
+        from orb_live.data.ib_client import build_client_from_env
+        c = build_client_from_env(paper=True)
+        c.connect()
+        yield c
+        c.disconnect()
+
+    def test_live_get_daily_bars_soxl(self, client):
+        df = client.get_daily_bars("SOXL", lookback_days=10)
+        assert not df.empty, "Expected at least 1 daily bar"
+        assert len(df) >= 5, f"Expected >=5 bars, got {len(df)}"
+        assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+
+    def test_live_get_daily_bars_dates_ascending(self, client):
+        df = client.get_daily_bars("SOXL", lookback_days=10)
+        if df.empty:
+            pytest.skip("No bars returned")
+        assert list(df["date"]) == sorted(df["date"].tolist())
+
+    def test_live_get_daily_bars_date_tz_naive(self, client):
+        df = client.get_daily_bars("SOXL", lookback_days=5)
+        if df.empty:
+            pytest.skip("No bars returned")
+        assert df["date"].dt.tz is None, "date column must be tz-naive"
+
+    def test_live_get_daily_bars_lookback_respected(self, client):
+        df = client.get_daily_bars("SOXL", lookback_days=5)
+        assert len(df) <= 5
+
+
+@skip_unless_ib
 class TestIBClientEndToEnd:
     """
     End-to-end: exercises the full lifecycle via build_broker_from_env()

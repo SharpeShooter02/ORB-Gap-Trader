@@ -534,7 +534,76 @@ class IBClient(BrokerClient):
         lookback_days: int = 20,
         feed: str = "iex",
     ) -> pd.DataFrame:
-        raise NotImplementedError("IBClient.get_daily_bars — Part 5")
+        """
+        Return daily OHLCV bars as a DataFrame with columns
+        [date, open, high, low, close, volume].
+
+        date is a tz-naive pd.Timestamp normalized to midnight, sorted
+        ascending.  Shape matches AlpacaClient._normalise_bar_df output
+        so pre_market.py works without modification.
+        """
+        _empty = pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            return _empty
+
+        contract = self._contract_cache[symbol]
+        duration = f"{lookback_days * 2} D"
+
+        try:
+            raw = self._ib.reqHistoricalData(
+                contract,
+                endDateTime="",
+                durationStr=duration,
+                barSizeSetting="1 day",
+                whatToShow="TRADES",
+                useRTH=True,
+                formatDate=1,
+                timeout=15,
+            )
+        except Exception as exc:
+            if self._log:
+                self._log.warning(
+                    "get_daily_bars_failed",
+                    symbol=symbol, duration=duration, error=str(exc),
+                )
+            return _empty
+
+        if not raw:
+            return _empty
+
+        rows = []
+        for bar in raw:
+            try:
+                # formatDate=1 → bar.date is already a datetime (tz-aware or naive)
+                ts = pd.Timestamp(bar.date).tz_localize(None).normalize()
+                rows.append({
+                    "date":   ts,
+                    "open":   float(bar.open),
+                    "high":   float(bar.high),
+                    "low":    float(bar.low),
+                    "close":  float(bar.close),
+                    "volume": float(bar.volume),
+                })
+            except (ValueError, TypeError):
+                continue
+
+        if not rows:
+            return _empty
+
+        df = (
+            pd.DataFrame(rows)
+            .sort_values("date")
+            .tail(lookback_days)
+            .reset_index(drop=True)
+        )
+        for col in ("open", "high", "low", "close"):
+            df[col] = df[col].astype(float)
+        return df
 
     def get_intraday_bars(
         self,
@@ -640,7 +709,66 @@ class IBClient(BrokerClient):
     # ── Quote (Part 5) ────────────────────────────────────────────────────────
 
     def get_latest_quote(self, symbol: str) -> dict:
-        raise NotImplementedError("IBClient.get_latest_quote — Part 5")
+        """
+        Return the latest NBBO quote: {bid, ask, bid_size, ask_size, ts}.
+
+        Shape matches AlpacaClient.get_latest_quote() so pre_market.py
+        works without modification.  Falls back to last/close if bid/ask
+        are both zero (pre-market or after-hours snapshot).
+        """
+        _zero = {"bid": 0.0, "ask": 0.0, "bid_size": 0, "ask_size": 0, "ts": None}
+
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            return _zero
+
+        contract = self._contract_cache[symbol]
+
+        try:
+            ticker = self._ib.reqMktData(
+                contract, "", snapshot=True, regulatorySnapshot=False,
+            )
+            self._ib.sleep(2)
+
+            bid      = float(ticker.bid)      if ticker.bid      and ticker.bid      > 0 else 0.0
+            ask      = float(ticker.ask)      if ticker.ask      and ticker.ask      > 0 else 0.0
+            bid_size = int(ticker.bidSize)    if ticker.bidSize  else 0
+            ask_size = int(ticker.askSize)    if ticker.askSize  else 0
+            ts       = ticker.time            if ticker.time     else None
+
+            # Pre-market / after-hours: bid/ask may both be 0 — fall back to
+            # last trade price, then to prior close.
+            if bid == 0.0 and ask == 0.0:
+                fallback = 0.0
+                if ticker.last and float(ticker.last) > 0:
+                    fallback = float(ticker.last)
+                elif ticker.close and float(ticker.close) > 0:
+                    fallback = float(ticker.close)
+                if fallback > 0:
+                    bid = ask = fallback
+
+            return {
+                "bid":      bid,
+                "ask":      ask,
+                "bid_size": bid_size,
+                "ask_size": ask_size,
+                "ts":       ts,
+            }
+        except Exception as exc:
+            if self._log:
+                self._log.warning(
+                    "get_latest_quote_failed",
+                    symbol=symbol, error=str(exc),
+                )
+            return _zero
+        finally:
+            try:
+                self._ib.cancelMktData(contract)
+            except Exception:
+                pass
 
     # ── Streaming (Part 4) ────────────────────────────────────────────────────
 

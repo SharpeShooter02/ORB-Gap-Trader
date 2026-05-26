@@ -914,6 +914,174 @@ class TestGetIntradayBars:
         assert call_kwargs.get("timeout") == 15
 
 
+# ── get_daily_bars ─────────────────────────────────────────────────────────────
+
+def _make_daily_bar(dt: datetime, open=100.0, high=102.0, low=99.0,
+                    close=101.0, volume=1_000_000.0) -> SimpleNamespace:
+    """Daily bar where bar.date is a tz-aware datetime (formatDate=1 behaviour)."""
+    return SimpleNamespace(date=dt, open=open, high=high,
+                           low=low, close=close, volume=volume)
+
+
+class TestGetDailyBars:
+    def _client(self, tradable=True, symbol="TQQQ") -> IBClient:
+        client = _client_with_asset(symbol, tradable=tradable)
+        client._ib.isConnected.return_value = True
+        return client
+
+    def _bars(self, n: int = 5):
+        """Return n daily bar stubs ending 2026-05-20."""
+        base = datetime(2026, 5, 14, 16, 0, tzinfo=_ET)
+        return [_make_daily_bar(base + timedelta(days=i)) for i in range(n)]
+
+    def test_get_daily_bars_shape(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(5)
+        df = client.get_daily_bars("TQQQ", lookback_days=10)
+        assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+        assert len(df) == 5
+
+    def test_get_daily_bars_date_is_naive(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(3)
+        df = client.get_daily_bars("TQQQ")
+        assert df["date"].dt.tz is None
+
+    def test_get_daily_bars_date_is_normalized(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(2)
+        df = client.get_daily_bars("TQQQ")
+        for ts in df["date"]:
+            assert ts == ts.normalize()
+
+    def test_get_daily_bars_sorted_ascending(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(5)
+        df = client.get_daily_bars("TQQQ")
+        assert list(df["date"]) == sorted(df["date"].tolist())
+
+    def test_get_daily_bars_lookback_limit(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(10)
+        df = client.get_daily_bars("TQQQ", lookback_days=5)
+        assert len(df) == 5
+
+    def test_get_daily_bars_empty_on_no_data(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = []
+        df = client.get_daily_bars("TQQQ")
+        assert df.empty
+        assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
+
+    def test_get_daily_bars_non_tradable_returns_empty(self):
+        client = self._client(tradable=False)
+        df = client.get_daily_bars("TQQQ")
+        assert df.empty
+
+    def test_get_daily_bars_disconnected_raises(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = False
+        with pytest.raises(ConnectionError):
+            client.get_daily_bars("TQQQ")
+
+    def test_get_daily_bars_exception_returns_empty(self):
+        client = self._client()
+        client._ib.reqHistoricalData.side_effect = Exception("timeout")
+        df = client.get_daily_bars("TQQQ")
+        assert df.empty
+
+
+# ── get_latest_quote ──────────────────────────────────────────────────────────
+
+def _make_ticker(bid=10.0, ask=10.5, bid_size=100, ask_size=200,
+                 last=0.0, close=0.0, time=None) -> SimpleNamespace:
+    return SimpleNamespace(
+        bid=bid, ask=ask, bidSize=bid_size, askSize=ask_size,
+        last=last, close=close, time=time,
+    )
+
+
+class TestGetLatestQuote:
+    def _client(self, tradable=True) -> IBClient:
+        client = _client_with_asset("TQQQ", tradable=tradable)
+        client._ib.isConnected.return_value = True
+        return client
+
+    def test_get_latest_quote_returns_dict_shape(self):
+        client = self._client()
+        client._ib.reqMktData.return_value = _make_ticker(bid=10.0, ask=10.5)
+        result = client.get_latest_quote("TQQQ")
+        for key in ("bid", "ask", "bid_size", "ask_size", "ts"):
+            assert key in result
+
+    def test_get_latest_quote_values(self):
+        client = self._client()
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=10.0, ask=10.5, bid_size=100, ask_size=200,
+        )
+        result = client.get_latest_quote("TQQQ")
+        assert result["bid"]      == pytest.approx(10.0)
+        assert result["ask"]      == pytest.approx(10.5)
+        assert result["bid_size"] == 100
+        assert result["ask_size"] == 200
+
+    def test_get_latest_quote_falls_back_to_last(self):
+        client = self._client()
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=0.0, ask=0.0, last=10.5,
+        )
+        result = client.get_latest_quote("TQQQ")
+        assert result["bid"] == pytest.approx(10.5)
+        assert result["ask"] == pytest.approx(10.5)
+
+    def test_get_latest_quote_falls_back_to_close_if_no_last(self):
+        client = self._client()
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=0.0, ask=0.0, last=0.0, close=9.0,
+        )
+        result = client.get_latest_quote("TQQQ")
+        assert result["bid"] == pytest.approx(9.0)
+        assert result["ask"] == pytest.approx(9.0)
+
+    def test_get_latest_quote_all_zero_returns_zero(self):
+        client = self._client()
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=0.0, ask=0.0, last=0.0, close=0.0,
+        )
+        result = client.get_latest_quote("TQQQ")
+        assert result["bid"] == 0.0
+        assert result["ask"] == 0.0
+
+    def test_get_latest_quote_cancels_market_data(self):
+        client = self._client()
+        client._ib.reqMktData.return_value = _make_ticker()
+        client.get_latest_quote("TQQQ")
+        client._ib.cancelMktData.assert_called_once()
+
+    def test_get_latest_quote_non_tradable_returns_zero(self):
+        client = self._client(tradable=False)
+        result = client.get_latest_quote("TQQQ")
+        assert result == {"bid": 0.0, "ask": 0.0, "bid_size": 0, "ask_size": 0, "ts": None}
+
+    def test_get_latest_quote_disconnected_raises(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = False
+        with pytest.raises(ConnectionError):
+            client.get_latest_quote("TQQQ")
+
+    def test_get_latest_quote_exception_returns_zero(self):
+        client = self._client()
+        client._ib.reqMktData.side_effect = Exception("network error")
+        result = client.get_latest_quote("TQQQ")
+        assert result == {"bid": 0.0, "ask": 0.0, "bid_size": 0, "ask_size": 0, "ts": None}
+
+    def test_get_latest_quote_cancels_even_on_exception(self):
+        client = self._client()
+        client._ib.reqMktData.side_effect = Exception("boom")
+        client.get_latest_quote("TQQQ")
+        client._ib.cancelMktData.assert_called_once()
+
+
 # ── subscribe_bars / stop_bars_stream ─────────────────────────────────────────
 
 class TestSubscribeBars:

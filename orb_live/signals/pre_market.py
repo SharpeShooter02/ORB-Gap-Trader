@@ -1,31 +1,27 @@
 """
 signals/pre_market.py — Pre-market qualification job (two phases).
 
-PHASE 1 (~9:20am ET, before market open):
-  For each symbol in live_cfg.symbols:
-    1. Get today's reference price (pre-market quote or Alpaca fallback).
-    2. Compute gap using daily bars up to yesterday.
-    3. Apply gap filter (per-instrument or default).
-    4. Apply day-of-week exclusion.
-    5. Apply direction filter.
-    6. Check prior session filter.
-    7. Record to state_store.gap_scan and ps_filter_result.
-  Returns list[Phase1Result] of symbols passing all phase-1 gates.
+PHASE 1 (~09:31 ET, after the 9:30 bar closes):
+  1. For each symbol in the v1 universe, fetch the 9:30 bar close as the
+     gap reference price.
+  2. Compute the ETF overnight gap → convert to UL-equivalent gap
+     (÷ leverage × direction_sign).
+  3. Apply |UL gap| ≥ 2% threshold and direction filter.
+  4. Apply PS filter (k=1.00 σ) using UL daily data.
+  5. Call plan_session() to get the final candidate list + multipliers
+     (includes skip-cheap-top-2 pruning, regime, and cap_factor).
+  Returns list[Phase1Result] (symbols in plan.candidates).
+  Stores the SessionPlan internally for Phase 2 to read.
 
-PHASE 2 (~10:01am ET, after ORB closes):
-  For each phase-1 candidate:
-    1. Compute opening range from first 30 minutes of intraday bars.
-    2. Compute RTG value and percentile rank.
-    3. Apply RTG gap exclusion.
-    4. Apply RTG pair routing.
-    5. Run pre-flight liquidity checks.
-    6. Record to state_store.candidates.
-  Returns list[Phase2Result] — only is_candidate=True symbols should be watched.
+PHASE 2 (~10:01 ET, after ORB window closes):
+  For each Phase 1 candidate:
+    1. Compute opening range from the 9:30-10:00 intraday bars.
+    2. Run pre-flight liquidity check.
+    3. Set size_mult = plan.multipliers[sym], tp1_mult=1.0, tp2_mult=0.0.
+  Returns list[Phase2Result] — only is_candidate=True symbols are watched.
 
-CRITICAL CONSTRAINT:
-  Which instrument fires is unknowable at 9:30am.  Phase 1 produces a
-  candidate list; phase 2 produces the final list.  Only at 10:01am does
-  the executor know which symbols are live.
+CRITICAL CONSTRAINT: every input to plan_session() is causal at 9:30 ET.
+  No fired-trade counts, no intraday data, no look-ahead.
 """
 
 from __future__ import annotations
@@ -41,9 +37,12 @@ from orb_live.signals.strategy_signals import (
     check_prior_session_filter,
     compute_opening_range,
 )
-from orb_live.signals.rtg import RtgHistoryStore, compute_rtg_val, decide_rtg_targets
-from orb_live.signals.routing import PairRouter, SIZE_MULT
 from orb_live.signals.liquidity import PreFlightCheck, CandidateDecision
+from orb_live.strategy.v1_strategy import (
+    plan_session,
+    SessionPlan,
+    GAP_THRESHOLD,
+)
 
 if TYPE_CHECKING:
     from orb_live.config.live_config import LiveConfig
@@ -68,27 +67,25 @@ class Phase1Result:
 class Phase2Result:
     symbol: str
     gap_abs: float
-    gap_direction: int          # +1 gap-up / -1 gap-down
+    gap_direction: int
     prior_close: float
-    first_open: Optional[float] # close of the 9:30 bar — gap reference price;
-                                # also the initial EMA seed input for the session runner
-    orb: Optional[dict]         # keys: high, low, midpoint, size_pct, n_bars, ema
-    rtg_val: Optional[float]
-    rtg_pct: Optional[float]
-    tp1_mult: float             # pass as tp1_mult_override to compute_entry
-    tp2_mult: float             # pass as tp2_mult_override to compute_entry
-    rtg_excluded: bool
-    routing_action: str         # "normal" | "double" | "skip"
-    size_mult: float            # 1.0 (normal), 2.0 (double), 0.0 (skip)
+    first_open: Optional[float]
+    orb: Optional[dict]
+    tp1_mult: float              # always 1.0 in v1
+    tp2_mult: float              # always 0.0 in v1
+    rtg_val: Optional[float]     # always None in v1 (kept for interface compat)
+    rtg_pct: Optional[float]     # always None in v1
+    rtg_excluded: bool           # always False in v1
+    routing_action: str          # always "normal" in v1
+    size_mult: float             # v1 multiplier from SessionPlan
     preflight: Optional[CandidateDecision]
-    is_candidate: bool          # True iff symbol should be watched by session executor
+    is_candidate: bool
     exclusion_reason: str = ""
 
 
 # ── Warning-capturing logger shim ─────────────────────────────────────────────
 
 class _WarnCapture:
-    """Captures whether check_prior_session_filter emitted a data warning."""
     def __init__(self):
         self.warned = False
 
@@ -118,10 +115,10 @@ class PreMarketJob:
         self._client = client
         self._ul     = underlying_store
         self._log    = logger
-
-        self._rtg_store = RtgHistoryStore(store)
-        self._router    = PairRouter(live_cfg.strategy_config)
         self._preflight = PreFlightCheck(live_cfg, store, client, logger)
+
+        # Set by run_phase1; consumed by run_phase2
+        self._session_plan: Optional[SessionPlan] = None
 
     # ── Phase 1 ───────────────────────────────────────────────────────────────
 
@@ -132,84 +129,86 @@ class PreMarketJob:
         daily_bars: Optional[dict[str, pd.DataFrame]] = None,
     ) -> list[Phase1Result]:
         """
-        Gap scan and prior-session filter for all symbols.
+        Gap scan, PS filter, and plan_session() at 09:31 ET.
 
-        ref_prices  — {symbol: float} pre-market reference prices.  If absent
-                      for a symbol, falls back to Alpaca latest quote mid.
-        daily_bars  — {symbol: DataFrame} daily bars for gap computation.
-                      If absent for a symbol, fetched from Alpaca (lookback=10d).
+        ref_prices  — {symbol: float} pre-fetched reference prices.  If absent,
+                      fetched via get_intraday_bars (9:30 bar close).
+        daily_bars  — {symbol: DataFrame} daily bars.  If absent, fetched from broker.
 
-        Writes to state_store.gap_scan and state_store.ps_filter_result.
-        Returns Phase1Result list for symbols that pass all gates.
+        Calls plan_session() internally and stores the result in self._session_plan.
+        Returns Phase1Result list for the symbols in plan.candidates.
         """
-        cfg   = self._cfg
-        s_cfg = cfg.strategy_config
+        cfg         = self._cfg
+        instruments = cfg.instruments   # dict[str, Instrument] from v1
+        sigmas      = cfg.sigmas        # dict[UL, float]
 
         underlying_data = self._load_underlying_data(trade_date)
-        results: list[Phase1Result] = []
+
+        # ── Gather per-ETF market data ─────────────────────────────────────────
+        # We accumulate inputs for plan_session() as we scan each ETF.
+        overnight_gaps:    dict[str, float]                  = {}  # UL → gap
+        prior_two_closes:  dict[str, tuple[float, float]]    = {}  # UL → (c_t-1, c_t-2)
+        prior_etf_close:   dict[str, float]                  = {}  # sym → last ETF close
+
+        preliminary_p1: list[Phase1Result] = []
 
         for symbol in cfg.symbols:
-            effective_gap_filter = s_cfg.instrument_gap_filters.get(
-                symbol, s_cfg.gap_filter_pct
-            )
+            inst = instruments.get(symbol)
+            if inst is None:
+                continue
 
-            # 1. Reference price.
-            ref_price = self._get_ref_price(symbol, ref_prices)
+            effective_gap_filter = inst.leverage * GAP_THRESHOLD  # e.g. 0.04 for 2x
+
+            # 1. Reference price (9:30 bar close).
+            ref_price = self._get_ref_price(symbol, ref_prices, trade_date)
             if ref_price is None or ref_price <= 0:
                 self._store.save_gap_scan(
-                    trade_date, symbol,
-                    qualifies=False, filter_reason="no_ref_price",
+                    trade_date, symbol, qualifies=False, filter_reason="no_ref_price"
                 )
                 continue
 
-            # 2. Daily bars.
+            # 2. Daily bars (for prior ETF close).
             d_bars = self._get_daily_bars(symbol, daily_bars)
             if d_bars is None or d_bars.empty:
                 self._store.save_gap_scan(
-                    trade_date, symbol,
-                    qualifies=False, filter_reason="no_daily_bars",
+                    trade_date, symbol, qualifies=False, filter_reason="no_daily_bars"
                 )
                 continue
 
-            # 3. Gap.
+            # 3. ETF gap and prior close.
             gap_result = compute_gap(trade_date, d_bars, ref_price)
             if gap_result is None:
                 self._store.save_gap_scan(
-                    trade_date, symbol,
-                    qualifies=False, filter_reason="no_prior_close",
+                    trade_date, symbol, qualifies=False, filter_reason="no_prior_close"
                 )
                 continue
 
-            gap_abs, gap_direction, prior_close = gap_result
+            etf_gap_abs, gap_direction, prior_close = gap_result
+            prior_etf_close[symbol] = prior_close
 
-            # 4. Gap size filter.
-            if gap_abs < effective_gap_filter:
+            # 4. Convert ETF gap to UL-equivalent gap.
+            #    ETF gap ≈ UL gap × leverage × direction_factor
+            #    UL gap  = ETF_signed_gap / leverage (direction cancels)
+            etf_gap_signed = etf_gap_abs * gap_direction
+            ul_gap         = etf_gap_signed / inst.leverage
+
+            # 5. ETF-level gap size check (same as |ul_gap| ≥ GAP_THRESHOLD).
+            if etf_gap_abs < effective_gap_filter:
                 self._store.save_gap_scan(
                     trade_date, symbol,
                     prev_close=prior_close, open_price=ref_price,
-                    gap_pct=gap_abs, gap_dir=gap_direction,
+                    gap_pct=etf_gap_abs, gap_dir=gap_direction,
                     qualifies=False, filter_reason="gap_too_small",
                 )
                 continue
 
-            # 5. Day-of-week exclusion.
-            excl_dow = s_cfg.day_of_week_exclusions.get(symbol)
-            if excl_dow and trade_date.weekday() in excl_dow:
-                self._store.save_gap_scan(
-                    trade_date, symbol,
-                    prev_close=prior_close, open_price=ref_price,
-                    gap_pct=gap_abs, gap_dir=gap_direction,
-                    qualifies=False, filter_reason="dow_excluded",
-                )
-                continue
-
-            # 6. Direction filter.
-            allowed_dir = s_cfg.direction_filters.get(symbol)
+            # Direction filter (LABU/LABD).
+            allowed_dir = cfg.direction_filters.get(symbol)
             if allowed_dir is not None and gap_direction != allowed_dir:
                 self._store.save_gap_scan(
                     trade_date, symbol,
                     prev_close=prior_close, open_price=ref_price,
-                    gap_pct=gap_abs, gap_dir=gap_direction,
+                    gap_pct=etf_gap_abs, gap_dir=gap_direction,
                     qualifies=False, filter_reason="direction_filtered",
                 )
                 continue
@@ -218,40 +217,84 @@ class PreMarketJob:
             self._store.save_gap_scan(
                 trade_date, symbol,
                 prev_close=prior_close, open_price=ref_price,
-                gap_pct=gap_abs, gap_dir=gap_direction,
+                gap_pct=etf_gap_abs, gap_dir=gap_direction,
                 qualifies=True,
             )
 
-            # 7. Prior session filter.
-            # Pass cfg (LiveConfig) not s_cfg so sigma_override.yaml thresholds apply.
-            warn_cap = _WarnCapture()
-            ps_passed = check_prior_session_filter(
+            # 6. Prior-session filter (uses UL data, matches check_prior_session_filter).
+            warn_cap   = _WarnCapture()
+            ps_passed  = check_prior_session_filter(
                 symbol, trade_date, gap_direction,
                 cfg, underlying_data,
                 logger=warn_cap,
             )
-
-            # Resolve the underlying symbol for the DB record.
-            ps_spec = cfg.prior_session_filters.get(symbol)
-            ul_sym = ps_spec[0] if ps_spec else None
-
+            ps_spec    = cfg.prior_session_filters.get(symbol)
+            ul_sym_for_db = ps_spec[0] if ps_spec else None
             self._store.save_ps_filter(
                 trade_date, symbol,
-                underlying=ul_sym,
+                underlying=ul_sym_for_db,
                 passed=ps_passed,
             )
 
             if not ps_passed:
                 continue
 
-            results.append(Phase1Result(
+            # Accumulate plan_session() inputs.
+            ul = inst.underlying
+            # UL gap for plan_session() — causal overnight gap on the underlying.
+            # We use our ETF-derived approximation.
+            if ul not in overnight_gaps:
+                overnight_gaps[ul] = ul_gap
+            else:
+                # Keep the most extreme gap if multiple ETFs share a UL.
+                if abs(ul_gap) > abs(overnight_gaps[ul]):
+                    overnight_gaps[ul] = ul_gap
+
+            # Prior two UL closes from underlying_data store.
+            if ul not in prior_two_closes:
+                ul_df = underlying_data.get(ul)
+                if ul_df is not None:
+                    prior_rows = ul_df[ul_df["date"] < pd.Timestamp(trade_date)].tail(2)
+                    if len(prior_rows) >= 2:
+                        c_t1 = float(prior_rows.iloc[-1]["close"])
+                        c_t2 = float(prior_rows.iloc[-2]["close"])
+                        prior_two_closes[ul] = (c_t1, c_t2)
+
+            preliminary_p1.append(Phase1Result(
                 symbol=symbol,
-                gap_abs=gap_abs,
+                gap_abs=etf_gap_abs,
                 gap_direction=gap_direction,
                 prior_close=prior_close,
                 ps_filter_passed=True,
                 ps_filter_warning=warn_cap.warned,
             ))
+
+        # ── Call plan_session() to get the definitive candidate list ───────────
+        # plan_session() re-runs gap + PS + direction + skip-cheap-top-2 using
+        # the UL-level inputs we just assembled.  Its candidate set == what we
+        # expect (modulo the ETF-gap approximation of UL gap).
+        self._session_plan = plan_session(
+            universe=cfg.symbols,
+            instruments=instruments,
+            sigmas=cfg.sigmas,
+            overnight_gaps=overnight_gaps,
+            prior_two_closes=prior_two_closes,
+            prior_etf_close=prior_etf_close,
+        )
+
+        # Filter preliminary list to plan candidates (plan already applied
+        # skip-cheap and zero-weight drops).
+        plan_set = set(self._session_plan.candidates)
+        results  = [r for r in preliminary_p1 if r.symbol in plan_set]
+
+        if self._log:
+            self._log.info(
+                "plan_session_complete",
+                n_candidates=len(self._session_plan.candidates),
+                regime=self._session_plan.regime,
+                n_uls=self._session_plan.n_uls,
+                cap_factor=round(self._session_plan.cap_factor, 4),
+            )
 
         return results
 
@@ -265,169 +308,113 @@ class PreMarketJob:
         current_equity: float = 100_000.0,
     ) -> list[Phase2Result]:
         """
-        Post-ORB RTG computation, pair routing, and pre-flight checks.
+        Post-ORB: compute opening range and pre-flight for each Phase 1 candidate.
 
-        intraday_bars — {symbol: DataFrame with DatetimeIndex} covering 9:30-10:00.
-                        If absent for a symbol, fetched from Alpaca.
-
-        Returns Phase2Result list; only results with is_candidate=True should
-        be watched by the session executor.
-        Writes RTG history and candidates to state_store.
+        size_mult for each symbol is taken from self._session_plan.multipliers,
+        so ORB sizing is v1-based (weight × cap_factor).
         """
         cfg   = self._cfg
-        s_cfg = cfg.strategy_config
+        scfg  = cfg.strategy_config
+        plan  = self._session_plan
 
-        # First pass: ORB + RTG for all phase-1 candidates.
-        pre_decisions: dict[str, dict] = {}
-
-        for p1 in phase1_results:
-            symbol = p1.symbol
-            bars   = self._get_intraday_bars(symbol, trade_date, intraday_bars)
-
-            if bars is None or bars.empty:
-                pre_decisions[symbol] = {
-                    "qualifies": False, "reason": "no_intraday_bars",
-                }
-                continue
-
-            orb = compute_opening_range(bars, s_cfg, symbol=symbol)
-            if orb is None:
-                pre_decisions[symbol] = {
-                    "qualifies": False, "reason": "orb_invalid",
-                }
-                continue
-
-            first_open = float(bars.iloc[0]["close"])
-            rtg_val = compute_rtg_val(orb, p1.gap_abs, first_open)
-
-            rtg_pct = None
-            if rtg_val is not None:
-                rtg_pct = self._rtg_store.compute_rtg_pct(
-                    symbol, trade_date, rtg_val, s_cfg, gap_abs=p1.gap_abs,
-                )
-
-            tp1_mult, tp2_mult, excluded = decide_rtg_targets(
-                symbol, p1.gap_abs, rtg_pct, s_cfg,
-            )
-
-            pre_decisions[symbol] = {
-                "qualifies":     not excluded,
-                "rtg_val":       rtg_val,
-                "rtg_pct":       rtg_pct,
-                "tp1_mult":      tp1_mult,
-                "tp2_mult":      tp2_mult,
-                "excluded":      excluded,
-                "orb":           orb,
-                "first_open":    first_open,
-                "gap_abs":       p1.gap_abs,
-                "gap_direction": p1.gap_direction,
-            }
-
-            # Persist RTG for future sessions.  Must happen after ORB is known
-            # and only for days with a valid RTG value (no lookahead).
-            if rtg_val is not None:
-                self._rtg_store.update_history(
-                    symbol, trade_date, rtg_val,
-                    gap_abs=p1.gap_abs, gap_direction=p1.gap_direction,
-                )
-
-        # Routing decisions — must see all pre_decisions to compare pairs.
-        routing = self._router.decide(trade_date, pre_decisions)
-
-        # Second pass: pre-flight + final candidate list.
         results: list[Phase2Result] = []
 
         for p1 in phase1_results:
             symbol = p1.symbol
-            pd_    = pre_decisions.get(symbol, {})
 
-            orb          = pd_.get("orb")
-            first_open   = pd_.get("first_open")   # 9:30 bar close; None if ORB failed
-            rtg_val      = pd_.get("rtg_val")
-            rtg_pct      = pd_.get("rtg_pct")
-            tp1_mult     = pd_.get("tp1_mult", s_cfg.tp1_target_multiple)
-            tp2_mult     = pd_.get("tp2_mult", s_cfg.tp2_target_multiple)
-            rtg_excluded = pd_.get("excluded", False)
-            qualifies    = pd_.get("qualifies", False)
-            no_orb_rsn   = pd_.get("reason", "")
-
-            routing_action = routing.get(symbol, "normal")
-            size_mult      = SIZE_MULT[routing_action]
-
-            # Resolve intended_direction from direction_filters explicitly.
-            # Phase 1 already excludes wrong-direction gaps, but we must record
-            # and pass the authoritative direction (not just the gap direction)
-            # so the short/HTB check in PreFlightCheck.check() is always correct.
-            intended_dir = s_cfg.direction_filters.get(symbol) or p1.gap_direction
-
-            # Routing losers and RTG-excluded symbols skip pre-flight.
-            if routing_action == "skip":
-                res = Phase2Result(
-                    symbol=symbol, gap_abs=p1.gap_abs,
-                    gap_direction=p1.gap_direction, prior_close=p1.prior_close,
-                    first_open=first_open,
-                    orb=orb, rtg_val=rtg_val, rtg_pct=rtg_pct,
-                    tp1_mult=tp1_mult, tp2_mult=tp2_mult,
-                    rtg_excluded=rtg_excluded, routing_action=routing_action,
-                    size_mult=size_mult, preflight=None,
-                    is_candidate=False, exclusion_reason="routing_skip",
-                )
-                self._record_candidate(trade_date, p1, orb, rtg_val, rtg_pct,
-                                       routing_action, preflight=None,
-                                       decision="routing_skip",
-                                       intended_direction=intended_dir)
-                results.append(res)
+            bars = self._get_intraday_bars(symbol, trade_date, intraday_bars)
+            if bars is None or bars.empty:
+                results.append(self._make_p2(
+                    p1, orb=None, first_open=None, size_mult=0.0,
+                    preflight=None, is_candidate=False,
+                    exclusion_reason="no_intraday_bars",
+                ))
                 continue
 
-            if not qualifies:
-                reason = "rtg_excluded" if rtg_excluded else (no_orb_rsn or "orb_invalid")
-                res = Phase2Result(
-                    symbol=symbol, gap_abs=p1.gap_abs,
-                    gap_direction=p1.gap_direction, prior_close=p1.prior_close,
-                    first_open=first_open,
-                    orb=orb, rtg_val=rtg_val, rtg_pct=rtg_pct,
-                    tp1_mult=tp1_mult, tp2_mult=tp2_mult,
-                    rtg_excluded=rtg_excluded, routing_action=routing_action,
-                    size_mult=size_mult, preflight=None,
-                    is_candidate=False, exclusion_reason=reason,
-                )
-                self._record_candidate(trade_date, p1, orb, rtg_val, rtg_pct,
-                                       routing_action, preflight=None,
-                                       decision=reason,
-                                       intended_direction=intended_dir)
-                results.append(res)
+            orb = compute_opening_range(bars, scfg, symbol=symbol)
+            if orb is None:
+                results.append(self._make_p2(
+                    p1, orb=None, first_open=None, size_mult=0.0,
+                    preflight=None, is_candidate=False,
+                    exclusion_reason="orb_invalid",
+                ))
                 continue
 
-            # Pre-flight check uses intended_dir (from direction_filters) so
-            # the short/HTB gate is evaluated against the correct trade side.
-            preflight = self._preflight.check(
+            first_open = float(bars.iloc[0]["close"])
+
+            # v1 multiplier — already includes cap_factor, regime, and class weight.
+            size_mult = plan.multipliers.get(symbol, 0.0) if plan else 0.0
+            if size_mult == 0.0:
+                results.append(self._make_p2(
+                    p1, orb=orb, first_open=first_open, size_mult=0.0,
+                    preflight=None, is_candidate=False,
+                    exclusion_reason="zero_multiplier",
+                ))
+                continue
+
+            intended_dir = cfg.direction_filters.get(symbol) or p1.gap_direction
+            preflight    = self._preflight.check(
                 symbol, trade_date, intended_dir, current_equity,
             )
 
-            decision_str = "candidate" if preflight.passed else preflight.reason
-            res = Phase2Result(
-                symbol=symbol, gap_abs=p1.gap_abs,
-                gap_direction=p1.gap_direction, prior_close=p1.prior_close,
-                first_open=first_open,
-                orb=orb, rtg_val=rtg_val, rtg_pct=rtg_pct,
-                tp1_mult=tp1_mult, tp2_mult=tp2_mult,
-                rtg_excluded=rtg_excluded, routing_action=routing_action,
-                size_mult=size_mult, preflight=preflight,
-                is_candidate=preflight.passed,
-                exclusion_reason="" if preflight.passed else preflight.reason,
+            is_candidate   = preflight.passed
+            exclusion_rsn  = "" if preflight.passed else preflight.reason
+
+            self._store.save_candidate(
+                session_date=trade_date,
+                symbol=symbol, phase=2,
+                gap_abs=p1.gap_abs,
+                gap_direction=p1.gap_direction,
+                prior_close=p1.prior_close,
+                ps_filter_passed=p1.ps_filter_passed,
+                ps_filter_warning=p1.ps_filter_warning,
+                preflight_passed=preflight.passed,
+                preflight_reason=preflight.reason,
+                decision="candidate" if preflight.passed else preflight.reason,
+                intended_direction=intended_dir,
             )
-            self._record_candidate(trade_date, p1, orb, rtg_val, rtg_pct,
-                                   routing_action, preflight=preflight,
-                                   decision=decision_str,
-                                   intended_direction=intended_dir)
-            results.append(res)
+
+            results.append(self._make_p2(
+                p1, orb=orb, first_open=first_open, size_mult=size_mult,
+                preflight=preflight, is_candidate=is_candidate,
+                exclusion_reason=exclusion_rsn,
+            ))
 
         return results
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    def _make_p2(
+        self,
+        p1: Phase1Result,
+        orb: Optional[dict],
+        first_open: Optional[float],
+        size_mult: float,
+        preflight: Optional[CandidateDecision],
+        is_candidate: bool,
+        exclusion_reason: str = "",
+    ) -> Phase2Result:
+        return Phase2Result(
+            symbol=p1.symbol,
+            gap_abs=p1.gap_abs,
+            gap_direction=p1.gap_direction,
+            prior_close=p1.prior_close,
+            first_open=first_open,
+            orb=orb,
+            tp1_mult=1.0,
+            tp2_mult=0.0,
+            rtg_val=None,
+            rtg_pct=None,
+            rtg_excluded=False,
+            routing_action="normal",
+            size_mult=size_mult,
+            preflight=preflight,
+            is_candidate=is_candidate,
+            exclusion_reason=exclusion_reason,
+        )
+
     def _load_underlying_data(self, trade_date: date) -> dict[str, pd.DataFrame]:
-        """Load all PS-filter underlying DataFrames from the parquet store."""
+        """Load UL DataFrames from parquet store for all underlyings in universe."""
         cfg  = self._cfg
         data: dict[str, pd.DataFrame] = {}
         seen: set[str] = set()
@@ -446,12 +433,10 @@ class PreMarketJob:
                 else:
                     warn = self._ul.warn_if_stale(ul_sym, trade_date)
                     if self._log and warn:
-                        self._log.warning("underlying_stale",
-                                          ul_sym=ul_sym, msg=warn)
+                        self._log.warning("underlying_stale", ul_sym=ul_sym, msg=warn)
             except Exception as exc:
                 if self._log:
-                    self._log.warning("underlying_load_error",
-                                      ul_sym=ul_sym, exc=str(exc))
+                    self._log.warning("underlying_load_error", ul_sym=ul_sym, exc=str(exc))
 
         return data
 
@@ -459,19 +444,23 @@ class PreMarketJob:
         self,
         symbol: str,
         ref_prices: Optional[dict[str, float]],
+        trade_date: date,
     ) -> Optional[float]:
         if ref_prices:
             p = ref_prices.get(symbol)
             if p and float(p) > 0:
                 return float(p)
         try:
-            q = self._client.get_latest_quote(symbol)
-            bid, ask = float(q.get("bid", 0)), float(q.get("ask", 0))
-            if ask > 0:
-                return (bid + ask) / 2.0
+            from zoneinfo import ZoneInfo
+            _et = ZoneInfo("America/New_York")
+            start = datetime.combine(trade_date, dtime(9, 30)).replace(tzinfo=_et)
+            end   = datetime.combine(trade_date, dtime(9, 32)).replace(tzinfo=_et)
+            df = self._client.get_intraday_bars(symbol, start, end, timeframe="1Min")
+            if df.empty:
+                return None
+            return float(df.iloc[0]["close"])
         except Exception:
-            pass
-        return None
+            return None
 
     def _get_daily_bars(
         self,
@@ -491,11 +480,6 @@ class PreMarketJob:
         trade_date: date,
         intraday_bars: Optional[dict[str, pd.DataFrame]],
     ) -> Optional[pd.DataFrame]:
-        """
-        Return intraday bars with a DatetimeIndex (required by compute_opening_range).
-
-        If fetching from Alpaca, sets index from the 'timestamp' column.
-        """
         if intraday_bars and symbol in intraday_bars:
             return intraday_bars[symbol]
         try:
@@ -511,31 +495,3 @@ class PreMarketJob:
             return df
         except Exception:
             return None
-
-    def _record_candidate(
-        self,
-        trade_date: date,
-        p1: Phase1Result,
-        orb: Optional[dict],
-        rtg_val: Optional[float],
-        rtg_pct: Optional[float],
-        routing_action: str,
-        preflight: Optional[CandidateDecision],
-        decision: str,
-        intended_direction: Optional[int] = None,
-    ) -> None:
-        self._store.save_candidate(
-            session_date=trade_date,
-            symbol=p1.symbol,
-            phase=2,
-            gap_abs=p1.gap_abs,
-            gap_direction=p1.gap_direction,
-            prior_close=p1.prior_close,
-            ps_filter_passed=p1.ps_filter_passed,
-            ps_filter_warning=p1.ps_filter_warning,
-            preflight_passed=preflight.passed if preflight else None,
-            preflight_reason=preflight.reason if preflight else None,
-            decision=decision,
-            intended_direction=intended_direction if intended_direction is not None
-                               else p1.gap_direction,
-        )

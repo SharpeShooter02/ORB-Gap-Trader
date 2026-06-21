@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Remove-Item \"c:\\\\Users\\\\buttn\\\\Documents\\\\Projects\\\\orb-live-trading\\\\orb_live\\\\data\\\\alpaca_client.py\")",
+      "Bash(python -m pytest orb_live/tests/ -q)"
+    ]
+  }
+}

@@ -5,7 +5,7 @@ scripts/smoke_test.py — Basic connectivity and sanity checks.
 Run before the first live session to verify:
   1. reference layer imports cleanly
   2. live_config.load_live_config() returns the right symbol/filter counts
-  3. Alpaca paper account is reachable (if credentials set)
+  3. IB Gateway is reachable (if running)
   4. yfinance can fetch an underlying close
   5. StateStore creates tables in a tmp DB without error
 
@@ -55,18 +55,16 @@ def main():
     if not _check("load_live_config()", check_live_config):
         failures += 1
 
-    # 3. Alpaca connectivity (optional)
-    def check_alpaca():
-        import os
-        key = os.getenv("ALPACA_API_KEY", "")
-        if not key:
-            raise ValueError("ALPACA_API_KEY not set — skipping")
-        from orb_live.data.alpaca_client import AlpacaClient
-        client = AlpacaClient(key, os.getenv("ALPACA_SECRET_KEY", ""), paper=True)
+    # 3. IB Gateway connectivity (optional)
+    def check_ib():
+        from orb_live.data.ib_client import build_client_from_env
+        client = build_client_from_env(paper=True)
+        client.connect()
         acct = client.get_account()
-        return f"equity=${acct['equity']:,.0f}"
-    if not _check("Alpaca paper account", check_alpaca):
-        print(f"  [{WARN}]  Alpaca check failed — set ALPACA_API_KEY to test")
+        client.disconnect()
+        return f"equity=${float(acct.get('equity', 0)):,.0f}"
+    if not _check("IB Gateway paper account", check_ib):
+        print(f"  [{WARN}]  IB check failed — ensure IB Gateway is running on port 4002")
 
     # 4. yfinance
     def check_yfinance():

@@ -58,11 +58,12 @@ class StrategyEngine:
         broker,
         logger=None,
     ):
-        self._mgr    = position_manager
-        self._cfg    = config
-        self._store  = state_store
-        self._broker = broker
-        self._log    = logger
+        self._mgr              = position_manager
+        self._cfg              = config
+        self._store            = state_store
+        self._broker           = broker
+        self._log              = logger
+        self._v1_base_notional = getattr(config, "v1_base_notional", 0.0)
 
         self._states:     dict[str, SymbolState] = {}
         self._p2:         dict[str, "Phase2Result"] = {}
@@ -95,12 +96,6 @@ class StrategyEngine:
                     "symbol_skipped", symbol=symbol,
                     reason=p2_result.exclusion_reason or "not_candidate",
                 )
-            return
-
-        if p2_result.rtg_excluded:
-            self._states[symbol] = SymbolState.EXITED_OR_SKIPPED
-            if self._log:
-                self._log.info("rtg_excluded", symbol=symbol)
             return
 
         if p2_result.size_mult == 0.0:
@@ -186,6 +181,7 @@ class StrategyEngine:
             tp1_mult_override=p2.tp1_mult,
             tp2_mult_override=p2.tp2_mult,
             size_mult=p2.size_mult,
+            v1_base_notional=self._v1_base_notional or None,
         )
 
         if entry.get("shares", 0) == 0:

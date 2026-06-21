@@ -1,11 +1,10 @@
 """
 data/broker_client.py — Abstract broker interface.
 
-AlpacaClient implements this now; IBClient will implement it later.
-
-Concrete classes must implement every abstractmethod.  list_positions()
-has a default implementation that delegates to get_positions() so brokers
-that expose only one name don't need to duplicate code.
+IBClient is the concrete implementation.  Concrete classes must implement
+every abstractmethod.  list_positions() has a default implementation that
+delegates to get_positions() so brokers that expose only one name don't
+need to duplicate code.
 """
 
 from __future__ import annotations

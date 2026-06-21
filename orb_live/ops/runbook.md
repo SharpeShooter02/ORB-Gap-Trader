@@ -13,7 +13,7 @@
    ls data/archive/$(date +%Y)/
    ```
 
-3. **Verify Alpaca paper/live account equity** matches expectations:
+3. **Verify broker account equity** matches expectations:
    ```
    curl http://localhost:8080/status | python -m json.tool
    ```
@@ -124,13 +124,14 @@ No operator action needed unless `CRITICAL: ws_token_refresh_failed` appears.
 # Interactive: attach to running process or run separately
 from orb_live.core.state_store import StateStore
 from orb_live.config.live_config import load_live_config
-from orb_live.data.alpaca_client import build_client_from_env
+from orb_live.data.ib_client import build_client_from_env
 from orb_live.execution.position_manager import LivePositionManager
 
 cfg    = load_live_config()
 store  = StateStore(cfg.db_path)
-alpaca = build_client_from_env(paper=False)
-# Then: alpaca.close_all_positions() or close each via alpaca.submit_market_order(...)
+broker = build_client_from_env(paper=False)
+broker.connect()
+# Then: broker.close_all_positions() or close each via broker.submit_market_order(...)
 ```
 
 The session runner also has a kill-switch triggered by:

@@ -12,7 +12,7 @@ Endpoints
 
 Usage
 -----
-    server = HealthServer(store, alpaca, bar_router, clock)
+    server = HealthServer(store, broker, bar_router, clock)
     server.start()   # non-blocking
     ...
     server.stop()    # graceful shutdown
@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 
 _RTH_MAX_BAR_GAP_S = 90.0   # stale if no bar received within this many seconds
-_ALPACA_STALE_S    = 300.0   # stale if no successful API call within this window
+_BROKER_STALE_S    = 300.0   # stale if no successful API call within this window
 
 
 class HealthServer:
@@ -112,7 +112,7 @@ class HealthServer:
             self._server.shutdown()
 
     def record_api_call(self) -> None:
-        """Notify the health server that an Alpaca API call succeeded."""
+        """Notify the health server that a broker API call succeeded."""
         self._last_api_call_ts = datetime.now(ET)
 
     # ── Endpoint logic (public so tests call them without HTTP) ───────────────
@@ -121,7 +121,7 @@ class HealthServer:
         """
         Return (status_code, body).
 
-        During RTH: 200 only if last bar < 90s old AND alpaca connection < 5min old
+        During RTH: 200 only if last bar < 90s old AND broker connection < 5min old
                     AND state_store reachable.
         Outside RTH: 200 if process alive and state_store reachable.
         """
@@ -145,11 +145,11 @@ class HealthServer:
             # Only flag missing bars after the first minute of RTH
             # (bars don't exist at exactly 09:30)
 
-            # Alpaca connection freshness
+            # Broker connection freshness
             if self._last_api_call_ts is not None:
                 api_age_s = (now - self._last_api_call_ts).total_seconds()
-                if api_age_s > _ALPACA_STALE_S:
-                    issues.append(f"alpaca_stale: {api_age_s:.0f}s since last API call")
+                if api_age_s > _BROKER_STALE_S:
+                    issues.append(f"broker_stale: {api_age_s:.0f}s since last API call")
 
         if issues:
             return 503, "UNHEALTHY: " + "; ".join(issues)

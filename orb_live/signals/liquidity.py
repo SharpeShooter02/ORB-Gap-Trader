@@ -3,14 +3,14 @@ signals/liquidity.py — Pre-flight liquidity and eligibility checks.
 
 Three sequential gates (A → B → C):
   A. Operator overrides — excluded_symbols, date_exclusions, force_long_only
-  B. Asset eligibility  — Alpaca asset status, tradability, HTB short check
+  B. Asset eligibility  — broker asset status, tradability, HTB short check
   C. ADV / dollar volume — 20-day ADV floor, max % of ADV, yesterday DV ratio
 
 Gates are applied in order; the first failure short-circuits the rest.
 Results are persisted to liquidity_metrics (B+C) and candidates via pre_market.
 
 FAIL-OPEN POLICY:
-  If Alpaca returns no data for a symbol, PreFlightCheck treats it as passed
+  If the broker returns no data for a symbol, PreFlightCheck treats it as passed
   with a warning.  A transient API error must not block a valid trade setup.
   This mirrors the check_prior_session_filter data-hiccup policy.
 """
@@ -49,7 +49,7 @@ class PreFlightCheck:
     Per-symbol pre-flight eligibility gate.
 
     Usage:
-        pfc = PreFlightCheck(live_cfg, state_store, alpaca_client)
+        pfc = PreFlightCheck(live_cfg, state_store, broker)
         decision = pfc.check(symbol, session_date, gap_direction, current_equity)
         if not decision.passed:
             continue  # skip this symbol today
@@ -104,7 +104,7 @@ class PreFlightCheck:
             return "not_tradable", warnings
 
         status = asset.get("status", "active")
-        # Normalize alpaca-py enum values (e.g. AssetStatus.ACTIVE → "active")
+        # Normalize enum values (e.g. AssetStatus.ACTIVE → "active")
         status_str = (status.value if hasattr(status, "value") else str(status)).lower()
         if status_str != "active":
             return "asset_not_active", warnings

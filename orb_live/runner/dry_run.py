@@ -1,7 +1,7 @@
 """
 runner/dry_run.py — Deterministic fill simulator for paper / dry-run sessions.
 
-DryRunAlpaca wraps a real AlpacaClient for market data but intercepts all
+DryRunBroker wraps a real IBClient for market data but intercepts all
 order calls with a deterministic slippage model:
 
     Limit buy  → fills at min(limit_price,  ask + 1¢)   (best-case for buyer)
@@ -15,8 +15,8 @@ portfolio value so position_manager sees a realistic equity number.
 
 Usage:
     real_client = build_client_from_env(paper=True)
-    dry = DryRunAlpaca(real_client, starting_equity=100_000.0)
-    # pass `dry` wherever a real AlpacaClient would be used
+    dry = DryRunBroker(real_client, starting_equity=100_000.0)
+    # pass `dry` wherever a real IBClient would be used
 """
 
 from __future__ import annotations
@@ -29,9 +29,9 @@ _MARKET_ADVERSE_BPS = 5   # 5 bp adverse fill for market orders
 _LIMIT_CENT_EDGE    = 0.01
 
 
-class DryRunAlpaca:
+class DryRunBroker:
     """
-    Drop-in replacement for AlpacaClient that simulates fills locally.
+    Drop-in replacement for IBClient that simulates fills locally.
 
     Market-data methods (get_intraday_bars, get_latest_quote, get_daily_bars,
     get_clock, subscribe_bars) are delegated to the wrapped real client so
@@ -68,7 +68,7 @@ class DryRunAlpaca:
             fill_price = max(limit_price, bid - _LIMIT_CENT_EDGE)
 
         self._record_fill(client_order_id, symbol, side, qty, fill_price)
-        return {"alpaca_id": client_order_id}
+        return {"id": client_order_id}
 
     def submit_market_order(
         self,
@@ -89,7 +89,7 @@ class DryRunAlpaca:
             fill_price = bid * (1.0 - adverse)
 
         self._record_fill(client_order_id, symbol, side, qty, fill_price)
-        return {"alpaca_id": client_order_id}
+        return {"id": client_order_id}
 
     def get_order(self, order_id: str) -> dict:
         return self._orders.get(
@@ -145,7 +145,7 @@ class DryRunAlpaca:
         fill_price: float,
     ) -> None:
         self._orders[order_id] = {
-            "alpaca_id":        order_id,
+            "id":               order_id,
             "status":           "filled",
             "filled_qty":       str(qty),
             "filled_avg_price": str(round(fill_price, 4)),

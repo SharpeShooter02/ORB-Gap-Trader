@@ -1,8 +1,8 @@
 # ORB Live Trading System
 
 Automated live execution of the Opening Range Breakout strategy across a
-universe of leveraged and inverse ETFs.  Built on Alpaca Markets for order
-routing and WebSocket bar streaming.
+universe of leveraged and inverse ETFs.  Uses Interactive Brokers (IBClient)
+for order routing and WebSocket bar streaming.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ orb_live/
 │   ├── clock.py      MarketClock — RTH detection, half-day schedule, effective_close()
 │   └── state_store.py  SQLite persistence (20 tables via SQLAlchemy Core)
 ├── data/
-│   ├── alpaca_client.py   REST + WebSocket wrapper
+│   ├── ib_client.py       IB Gateway REST + WebSocket wrapper (IBClient)
 │   └── underlying_data.py  Prior-session OHLCV via yfinance
 ├── signals/
 │   ├── pre_market.py  Phase 1 (gap scan + PS filter) + Phase 2 (RTG + preflight)
@@ -42,16 +42,13 @@ orb_live/
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 2. Set credentials
-export ALPACA_API_KEY=...
-export ALPACA_SECRET_KEY=...
-export ALPACA_PAPER=true
+# 2. Start IB Gateway / TWS in paper-trading mode
 
 # 3. Run tests
 python -m pytest orb_live/tests/ -q   # 150 tests, ~3s
 
 # 4. Start session
-python -m orb_live.runner.main
+python -m orb_live.runner.main --paper
 
 # 5. Monitor
 curl http://localhost:8080/status | python -m json.tool
@@ -88,6 +85,31 @@ config is locked at:
 | EMA period | 30 |
 | RTG exclusion | Class A only (KOLD excepted) |
 
+## Market Data Subscription Required
+
+`IBClient.get_latest_quote()` raises `RuntimeError` if IB returns a degraded or
+all-zero quote, rather than silently returning zeros and letting a session trade
+on bad prices.
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `IB_MARKET_DATA_TYPE` | `1` | IB data type: 1=live, 3=delayed |
+| `IB_ALLOW_DELAYED_DATA` | (unset) | Set to `1` to permit delayed/zero quotes |
+
+On `connect()`, IBClient registers an error handler for IB error code **10089**
+(subscription required).  If 10089 fires, `_market_data_degraded` is set and
+subsequent `get_latest_quote()` calls raise immediately.
+
+`connect()` also calls `_validate_subscription()` which does a test quote on SPY.
+If that raises `RuntimeError`, `connect()` translates it to `ConnectionError` so
+the startup path fails loudly before any session begins.
+
+To use delayed data intentionally (backtesting, monitoring without a live feed):
+
+```bash
+IB_ALLOW_DELAYED_DATA=1 IB_MARKET_DATA_TYPE=3 python -m orb_live.runner.main
+```
+
 ## Operational Health
 
 | Endpoint | Normal | Unhealthy |
@@ -97,7 +119,7 @@ config is locked at:
 
 During RTH, `/health` returns 503 if:
 - Last bar received > 90 seconds ago
-- Alpaca API not called in > 5 minutes
+- Broker API not called in > 5 minutes
 - `state_store.all_open_positions()` raises
 
 ## Operations
@@ -141,7 +163,7 @@ python -m orb_live.scripts.backfill_underlyings
 python -m pytest orb_live/tests/ -v
 ```
 
-150 tests in ~3 seconds.  All synchronous — no Alpaca credentials required.
+150 tests in ~3 seconds.  All synchronous — no broker credentials required.
 
 Key test files:
 - `test_session_runner.py` — bar dispatch order invariant, state machine

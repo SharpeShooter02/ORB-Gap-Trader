@@ -63,7 +63,7 @@ class MarketableLimitPolicy:
         exit_slippage_bps       — bps for TP/EOD exit limit
         stop_order_type         — "market" or "stop_limit"
 
-    Alpaca interface expected (duck-typed, MockAlpaca in tests):
+    Broker interface expected (duck-typed, MockBroker in tests):
         get_latest_quote(symbol)         → dict with 'bid', 'ask'
         submit_limit_order(symbol, side, qty, limit_price, client_order_id)
         submit_market_order(symbol, side, qty, client_order_id)
@@ -145,7 +145,7 @@ class MarketableLimitPolicy:
             limit = self._compute_limit(side, symbol, bps, reference_price)
             client_id = str(uuid.uuid4())
             order = self._broker.submit_limit_order(symbol, side, qty - filled_qty, limit, client_id)
-            order_id = order.get("alpaca_id", client_id)
+            order_id = order.get("id", client_id)
 
             # Poll until filled or timeout
             deadline = _time.monotonic() + cfg.entry_repeg_seconds
@@ -196,7 +196,7 @@ class MarketableLimitPolicy:
             limit = self._compute_limit(side, symbol, bps, reference_price)
             client_id = str(uuid.uuid4())
             order = self._broker.submit_limit_order(symbol, side, qty, limit, client_id)
-            order_id = order.get("alpaca_id", client_id)
+            order_id = order.get("id", client_id)
 
             deadline = _time.monotonic() + cfg.entry_repeg_seconds
             while _time.monotonic() < deadline:
@@ -241,13 +241,15 @@ class MarketableLimitPolicy:
         if cfg.stop_order_type == "market":
             client_id = str(uuid.uuid4())
             order = self._broker.submit_market_order(symbol, side, qty, client_id)
-            order_id = order.get("alpaca_id", client_id)
-            # Wait for fill (market orders are typically immediate)
+            order_id = order.get("id", client_id)
+            # Wait for fill (market orders are typically immediate).
+            # Break on partially_filled too: a partial stop exit is better
+            # than an indefinite wait when liquidity is thin.
             deadline = _time.monotonic() + cfg.entry_repeg_seconds * 2
             while _time.monotonic() < deadline:
                 self._sleep(_POLL_INTERVAL)
                 status = self._broker.get_order(order_id)
-                if status.get("status") in ("filled", "cancelled", "expired"):
+                if status.get("status") in ("filled", "partially_filled", "cancelled", "expired"):
                     break
             fq = int(float(status.get("filled_qty", 0) or 0))
             fp = float(status.get("filled_avg_price", 0) or 0)
@@ -264,12 +266,12 @@ class MarketableLimitPolicy:
                                    symbol=symbol, qty=qty)
             client_id = str(uuid.uuid4())
             order = self._broker.submit_market_order(symbol, side, qty, client_id)
-            order_id = order.get("alpaca_id", client_id)
+            order_id = order.get("id", client_id)
             deadline = _time.monotonic() + cfg.entry_repeg_seconds * 2
             while _time.monotonic() < deadline:
                 self._sleep(_POLL_INTERVAL)
                 status = self._broker.get_order(order_id)
-                if status.get("status") in ("filled", "cancelled", "expired"):
+                if status.get("status") in ("filled", "partially_filled", "cancelled", "expired"):
                     break
             fq = int(float(status.get("filled_qty", 0) or 0))
             fp = float(status.get("filled_avg_price", 0) or 0)

@@ -9,8 +9,8 @@ Usage:
     python -m orb_live.runner.main --paper --recover
 
 Flags:
-    --paper          Use Alpaca paper-trading endpoint (default)
-    --live           Use Alpaca live-trading endpoint (requires confirmation)
+    --paper          Use IB paper-trading account (default)
+    --live           Use IB live-trading account (requires confirmation)
     --dry-run        Simulate fills locally; use real market data
     --session-date   Override today's date (YYYY-MM-DD; for replay / testing)
     --recover        Reconcile positions from broker before running
@@ -36,7 +36,7 @@ def _parse_args() -> argparse.Namespace:
     mode.add_argument("--paper",   action="store_true", default=True,
                       help="Paper trading (default)")
     mode.add_argument("--live",    action="store_true",
-                      help="Live trading (requires ALPACA_LIVE=1 env var)")
+                      help="Live trading (requires IB_LIVE=1 env var)")
     mode.add_argument("--dry-run", dest="dry_run", action="store_true",
                       help="Simulate fills locally; use real market data")
 
@@ -49,9 +49,9 @@ def _parse_args() -> argparse.Namespace:
 
 def _confirm_live() -> None:
     import os
-    if os.environ.get("ALPACA_LIVE") != "1":
+    if os.environ.get("IB_LIVE") != "1":
         print(
-            "ERROR: --live requires ALPACA_LIVE=1 in environment.\n"
+            "ERROR: --live requires IB_LIVE=1 in environment.\n"
             "Set this only after completing all paper-trading validation."
         )
         sys.exit(1)
@@ -62,21 +62,11 @@ def _confirm_live() -> None:
 
 
 def build_broker_from_env(paper: bool = True):
-    """
-    Factory that selects a broker implementation based on the BROKER env var.
-
-    BROKER=alpaca (default) → AlpacaClient backed by Alpaca paper/live API.
-    BROKER=ib               → IBClient connecting to local IB Gateway / TWS.
-    """
-    import os
-    broker_name = os.environ.get("BROKER", "alpaca").lower()
-    if broker_name == "ib":
-        from orb_live.data.ib_client import build_client_from_env as build_ib
-        client = build_ib(paper=paper)
-        client.connect()
-        return client
-    from orb_live.data.alpaca_client import build_client_from_env
-    return build_client_from_env(paper=paper)
+    """Build and connect an IBClient from environment variables."""
+    from orb_live.data.ib_client import build_client_from_env as build_ib
+    client = build_ib(paper=paper)
+    client.connect()
+    return client
 
 
 def _build_components(args: argparse.Namespace, _log=None):
@@ -138,10 +128,10 @@ def _build_components(args: argparse.Namespace, _log=None):
         raise
 
     if args.dry_run:
-        from orb_live.runner.dry_run import DryRunAlpaca
+        from orb_live.runner.dry_run import DryRunBroker
         logger.info("fetching_equity_for_dry_run")
         starting_equity = float(real_client.get_account().get("equity", 100_000.0))
-        broker = DryRunAlpaca(real_client, starting_equity=starting_equity)
+        broker = DryRunBroker(real_client, starting_equity=starting_equity)
         logger.info("dry_run_broker_ready", starting_equity=starting_equity)
     else:
         broker = real_client

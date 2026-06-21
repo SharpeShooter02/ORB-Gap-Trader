@@ -2,7 +2,7 @@
 tests/test_end_to_end_replay.py — Load-bearing end-to-end replay test.
 
 Replays three synthetic fixture scenarios through the full live execution
-stack (StrategyEngine + LivePositionManager + DryRunAlpaca) and verifies that
+stack (StrategyEngine + LivePositionManager + DryRunBroker) and verifies that
 the exit reason and P&L direction match the expected outcome.
 
 Scenarios:
@@ -71,7 +71,7 @@ def _make_p2(symbol, orb_val=None, tp1_mult=0.35, tp2_mult=0.05):
     )
 
 
-def _build_live_stack(tmp_store, mock_alpaca, tp3_ema_value=100.0):
+def _build_live_stack(tmp_store, mock_broker, tp3_ema_value=100.0):
     """
     Build LivePositionManager + StrategyEngine + RollingIndicators for TQQQ.
 
@@ -113,17 +113,17 @@ def _build_live_stack(tmp_store, mock_alpaca, tp3_ema_value=100.0):
     ind.seed_from_orb_bars(orb_bars)
     indicators_store["TQQQ"] = ind
 
-    policy = MarketableLimitPolicy(mock_alpaca, exc_cfg, tmp_store,
+    policy = MarketableLimitPolicy(mock_broker, exc_cfg, tmp_store,
                                    _sleep=_NO_SLEEP)
-    gate   = RiskGate(exc_cfg, tmp_store, mock_alpaca)
+    gate   = RiskGate(exc_cfg, tmp_store, mock_broker)
     gate.session_start(100_000.0, TDATE)
 
     mgr = LivePositionManager(
-        broker=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_broker, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store=indicators_store, config=scfg,
     )
 
-    engine = StrategyEngine(mgr, cfg, tmp_store, mock_alpaca)
+    engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
     engine.new_session(TDATE)
 
     return mgr, engine, indicators_store, ind, scfg
@@ -144,7 +144,7 @@ def _replay_bars(bars: list[dict], mgr, indicators_store, symbol="TQQQ"):
 
 # ── Scenario A: TP3 EMA-crossback exit ────────────────────────────────────────
 
-def test_a_tp3_crossback_exit_reason(mock_alpaca, tmp_store):
+def test_a_tp3_crossback_exit_reason(mock_broker, tmp_store):
     """
     Full replay: entry at 102, TP1+TP2 hit on bar1, TP3 crossback on bar2.
 
@@ -168,7 +168,7 @@ def test_a_tp3_crossback_exit_reason(mock_alpaca, tmp_store):
     """
     orb = _orb(high=101.0, low=99.0, ema=100.0)
     mgr, engine, indicators_store, ind, scfg = _build_live_stack(
-        tmp_store, mock_alpaca, tp3_ema_value=103.0
+        tmp_store, mock_broker, tp3_ema_value=103.0
     )
     p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=0.35, tp2_mult=0.05)
     engine.on_orb_complete("TQQQ", p2, None)
@@ -217,7 +217,7 @@ def test_a_tp3_crossback_exit_reason(mock_alpaca, tmp_store):
 
 # ── Scenario B: Stop hit ───────────────────────────────────────────────────────
 
-def test_b_stop_hit_exit_reason_and_negative_pnl(mock_alpaca, tmp_store):
+def test_b_stop_hit_exit_reason_and_negative_pnl(mock_broker, tmp_store):
     """
     Entry fires, then price drops immediately below stop → STOP exit.
 
@@ -229,7 +229,7 @@ def test_b_stop_hit_exit_reason_and_negative_pnl(mock_alpaca, tmp_store):
     orb = _orb(high=101.0, low=99.0, ema=100.0)
     # EMA #2 above entry → no TP3 crossback on this scenario
     mgr, engine, indicators_store, ind, scfg = _build_live_stack(
-        tmp_store, mock_alpaca, tp3_ema_value=110.0
+        tmp_store, mock_broker, tp3_ema_value=110.0
     )
     p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=0.35, tp2_mult=0.05)
     engine.on_orb_complete("TQQQ", p2, None)
@@ -244,8 +244,11 @@ def test_b_stop_hit_exit_reason_and_negative_pnl(mock_alpaca, tmp_store):
     actual_entry = pos.actual_entry_price
     stop_price   = pos.current_stop  # initial stop from compute_entry
 
-    # Bar that hits stop: lo < stop_price
-    # stop_price ≈ (100+99)/2 = 99.5
+    # Simulate IB firing the stop: price dropped, exchange executed stop at stop_price.
+    mock_broker._orders[pos.stop_order_id] = {
+        "status": "filled", "filled_qty": str(pos.remaining),
+        "filled_avg_price": str(stop_price),
+    }
     bar_stop = _bar(_et(10, 2), close=99.0, hi=101.0, lo=98.5)
     ind.on_bar(bar_stop)
     mgr.on_bar("TQQQ", bar_stop, _et(10, 2))
@@ -268,7 +271,7 @@ def test_b_stop_hit_exit_reason_and_negative_pnl(mock_alpaca, tmp_store):
 
 # ── Scenario C: EOD flatten ────────────────────────────────────────────────────
 
-def test_c_eod_flatten_closes_open_position(mock_alpaca, tmp_store):
+def test_c_eod_flatten_closes_open_position(mock_broker, tmp_store):
     """
     Entry fires and the position remains open until flatten_all('eod_sweep').
     flatten_all must close the position and record a closed trade.
@@ -276,7 +279,7 @@ def test_c_eod_flatten_closes_open_position(mock_alpaca, tmp_store):
     orb = _orb(high=101.0, low=99.0, ema=100.0)
     # EMA #2 well above close → no TP3 crossback
     mgr, engine, indicators_store, ind, scfg = _build_live_stack(
-        tmp_store, mock_alpaca, tp3_ema_value=200.0
+        tmp_store, mock_broker, tp3_ema_value=200.0
     )
     p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=0.35, tp2_mult=0.05)
     engine.on_orb_complete("TQQQ", p2, None)
@@ -314,11 +317,11 @@ def test_c_eod_flatten_closes_open_position(mock_alpaca, tmp_store):
         f"Expected EOD exit reason, got {last['exit_reason']}"
 
 
-# ── Scenario D: DryRunAlpaca fill model verification ─────────────────────────
+# ── Scenario D: DryRunBroker fill model verification ─────────────────────────
 
-def test_d_dry_run_limit_buy_fills_at_or_below_limit(mock_alpaca, tmp_store):
-    """DryRunAlpaca: limit buy fills at min(limit_price, ask+1¢)."""
-    from orb_live.runner.dry_run import DryRunAlpaca
+def test_d_dry_run_limit_buy_fills_at_or_below_limit(mock_broker, tmp_store):
+    """DryRunBroker: limit buy fills at min(limit_price, ask+1¢)."""
+    from orb_live.runner.dry_run import DryRunBroker
 
     class _FakeReal:
         def get_latest_quote(self, sym):
@@ -327,7 +330,7 @@ def test_d_dry_run_limit_buy_fills_at_or_below_limit(mock_alpaca, tmp_store):
         def get_account(self):
             return {"equity": 100_000.0}
 
-    dry = DryRunAlpaca(_FakeReal(), starting_equity=100_000.0)
+    dry = DryRunBroker(_FakeReal(), starting_equity=100_000.0)
     dry.submit_limit_order("TQQQ", "buy", 100, 100.50, "order-1")
     order = dry.get_order("order-1")
 
@@ -338,9 +341,9 @@ def test_d_dry_run_limit_buy_fills_at_or_below_limit(mock_alpaca, tmp_store):
     assert int(order["filled_qty"]) == 100
 
 
-def test_e_dry_run_market_sell_applies_adverse_slippage(mock_alpaca, tmp_store):
-    """DryRunAlpaca: market sell fills at bid × (1 - 5bps)."""
-    from orb_live.runner.dry_run import DryRunAlpaca
+def test_e_dry_run_market_sell_applies_adverse_slippage(mock_broker, tmp_store):
+    """DryRunBroker: market sell fills at bid × (1 - 5bps)."""
+    from orb_live.runner.dry_run import DryRunBroker
 
     class _FakeReal:
         def get_latest_quote(self, sym):
@@ -349,7 +352,7 @@ def test_e_dry_run_market_sell_applies_adverse_slippage(mock_alpaca, tmp_store):
         def get_account(self):
             return {"equity": 100_000.0}
 
-    dry = DryRunAlpaca(_FakeReal(), starting_equity=100_000.0)
+    dry = DryRunBroker(_FakeReal(), starting_equity=100_000.0)
     dry.submit_market_order("TQQQ", "sell", 50, "order-2")
     order = dry.get_order("order-2")
 

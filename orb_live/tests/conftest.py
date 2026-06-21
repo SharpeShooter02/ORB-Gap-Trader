@@ -37,11 +37,11 @@ def today():
     return date.today()
 
 
-# ── MockAlpaca ─────────────────────────────────────────────────────────────────
+# ── MockBroker ─────────────────────────────────────────────────────────────────
 
-class MockAlpaca:
+class MockBroker:
     """
-    Deterministic Alpaca mock for execution-layer tests.
+    Deterministic broker mock for execution-layer tests.
 
     Default behavior: all orders fill immediately at the submitted limit price
     (fill_fraction=1.0).  Use set_fill_fraction() for all-orders override, or
@@ -91,7 +91,7 @@ class MockAlpaca:
         else:
             self._positions.pop(symbol, None)
 
-    # ── Alpaca API ────────────────────────────────────────────────────────────
+    # ── Broker API ────────────────────────────────────────────────────────────
 
     def get_account(self) -> dict:
         return {"equity": self._equity}
@@ -120,12 +120,12 @@ class MockAlpaca:
         else:
             status = "cancelled"
         self._orders[client_order_id] = {
-            "alpaca_id":        client_order_id,
+            "id":               client_order_id,
             "status":           status,
             "filled_qty":       str(fill_qty),
             "filled_avg_price": str(limit_price),
         }
-        return {"alpaca_id": client_order_id}
+        return {"id": client_order_id}
 
     def submit_market_order(
         self,
@@ -138,12 +138,43 @@ class MockAlpaca:
             client_order_id = str(uuid.uuid4())
         fill_price = self._quote["ask"] if side == "buy" else self._quote["bid"]
         self._orders[client_order_id] = {
-            "alpaca_id":        client_order_id,
+            "id":               client_order_id,
             "status":           "filled",
             "filled_qty":       str(qty),
             "filled_avg_price": str(fill_price),
         }
-        return {"alpaca_id": client_order_id}
+        return {"id": client_order_id}
+
+    def modify_stop_order(
+        self,
+        order_id: str,
+        new_qty: Optional[float] = None,
+        new_stop_price: Optional[float] = None,
+        **kwargs,
+    ) -> dict:
+        if order_id in self._orders:
+            if new_qty is not None:
+                self._orders[order_id]["qty"] = new_qty
+            if new_stop_price is not None:
+                self._orders[order_id]["stop_price"] = new_stop_price
+        return {"id": order_id, "status": "new"}
+
+    def submit_stop_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: int,
+        stop_price: float,
+        client_order_id: Optional[str] = None,
+        **kwargs,
+    ) -> dict:
+        if client_order_id is None:
+            client_order_id = str(uuid.uuid4())
+        self._orders[client_order_id] = {
+            "id":     client_order_id,
+            "status": "new",
+        }
+        return {"id": client_order_id, "status": "new"}
 
     def get_order(self, order_id: str) -> dict:
         return dict(
@@ -164,5 +195,5 @@ class MockAlpaca:
 
 
 @pytest.fixture
-def mock_alpaca():
-    return MockAlpaca()
+def mock_broker():
+    return MockBroker()

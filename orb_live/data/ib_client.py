@@ -23,6 +23,7 @@ Streaming design — 5-second bar aggregation:
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from datetime import date, datetime, time as dtime, timedelta
@@ -31,7 +32,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ib_async import IB, LimitOrder, MarketOrder, Stock
+from ib_async import IB, LimitOrder, MarketOrder, StopOrder, Stock
 from orb_live.data.broker_client import BrokerClient
 
 _ET = ZoneInfo("America/New_York")
@@ -124,12 +125,13 @@ class IBClient(BrokerClient):
     # Holiday and market-day logic lives in orb_live.core.calendar so
     # MarketClock and IBClient share a single authoritative source.
 
-    _IB_TO_ALPACA_STATUS: dict[str, str] = {
+    _IB_STATUS_MAP: dict[str, str] = {
         "PendingSubmit":   "new",
         "PreSubmitted":    "new",
         "Submitted":       "new",
         "Filled":          "filled",
         "PartiallyFilled": "partially_filled",
+        "PendingCancel":   "pending_cancel",
         "Cancelled":       "canceled",
         "ApiCancelled":    "canceled",
         "Inactive":        "rejected",
@@ -148,6 +150,11 @@ class IBClient(BrokerClient):
         self._streams:        dict[str, object]       = {}
         self._bar_aggregators: dict[str, BarAggregator] = {}
         self._bar_callback:   Optional[Callable]      = None
+        self._market_data_type     = int(os.getenv("IB_MARKET_DATA_TYPE", "1"))
+        self._allow_delayed_data   = os.getenv("IB_ALLOW_DELAYED_DATA", "").lower() in ("1", "true")
+        self._market_data_degraded = False
+        self._last_event_time: Optional[float] = None
+        self._heartbeat_timeout    = float(os.getenv("IB_HEARTBEAT_TIMEOUT", "60"))
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -162,9 +169,12 @@ class IBClient(BrokerClient):
             raise ConnectionError(
                 f"IB Gateway not reachable at {self._host}:{self._port}"
             ) from exc
-        # Register order-event handlers so the cache stays current.
         self._ib.orderStatusEvent += self._on_order_status
         self._ib.execDetailsEvent += self._on_exec_details
+        self._ib.errorEvent       += self._on_ib_error
+        self._ib.reqMarketDataType(self._market_data_type)
+        if not self._allow_delayed_data:
+            self._validate_subscription()
         if self._log:
             self._log.info(
                 "ib_connected",
@@ -178,9 +188,11 @@ class IBClient(BrokerClient):
         try:
             self._ib.orderStatusEvent -= self._on_order_status
             self._ib.execDetailsEvent -= self._on_exec_details
+            self._ib.errorEvent       -= self._on_ib_error
         except Exception:
             pass
         self._ib.disconnect()
+        self._last_event_time = None
         if self._log:
             self._log.info("ib_disconnected")
 
@@ -388,6 +400,7 @@ class IBClient(BrokerClient):
         client_order_id: Optional[str] = None,
         extended_hours: bool = False,
         tif: str = "day",
+        timeout: float = 5.0,
     ) -> dict:
         if not self.is_connected():
             raise ConnectionError("IBClient is not connected")
@@ -405,11 +418,9 @@ class IBClient(BrokerClient):
             order.orderRef = client_order_id
 
         trade = self._ib.placeOrder(contract, order)
-        self._ib.sleep(0.5)
-
-        order_dict = self._trade_to_dict(trade)
-        self._order_cache[trade.order.orderId] = order_dict
-        return order_dict
+        order_int = trade.order.orderId
+        self._order_cache[order_int] = self._trade_to_dict(trade)
+        return self._wait_for_submit_terminal(order_int, symbol, timeout)
 
     def submit_market_order(
         self,
@@ -417,6 +428,7 @@ class IBClient(BrokerClient):
         side: str,
         qty: float,
         client_order_id: Optional[str] = None,
+        timeout: float = 5.0,
     ) -> dict:
         if not self.is_connected():
             raise ConnectionError("IBClient is not connected")
@@ -432,11 +444,9 @@ class IBClient(BrokerClient):
             order.orderRef = client_order_id
 
         trade = self._ib.placeOrder(contract, order)
-        self._ib.sleep(0.5)
-
-        order_dict = self._trade_to_dict(trade)
-        self._order_cache[trade.order.orderId] = order_dict
-        return order_dict
+        order_int = trade.order.orderId
+        self._order_cache[order_int] = self._trade_to_dict(trade)
+        return self._wait_for_submit_terminal(order_int, symbol, timeout)
 
     def get_order(self, order_id: str) -> dict:
         key = int(order_id)
@@ -444,14 +454,71 @@ class IBClient(BrokerClient):
             raise KeyError(f"Order {order_id} not found in cache")
         return self._order_cache[key]
 
-    def cancel_order(self, order_id: str) -> bool:
+    def _wait_for_submit_terminal(self, order_int: int, symbol: str, timeout: float) -> dict:
+        _TERMINAL = {"Submitted", "Filled", "PartiallyFilled", "Cancelled", "ApiCancelled", "Inactive"}
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            trade = self._find_trade(order_int)
+            if trade is None:
+                break
+            current = self._trade_to_dict(trade)
+            self._order_cache[order_int] = current
+            if trade.orderStatus.status in _TERMINAL:
+                return current
+            self._ib.sleep(0.25)
+
+        cached = self._order_cache.get(order_int, {})
+        if self._log:
+            self._log.warning(
+                "submit_order_timeout",
+                order_id=str(order_int),
+                symbol=symbol,
+                timeout=timeout,
+            )
+        return cached
+
+    def _find_trade(self, order_int: int):
+        matching = [t for t in self._ib.trades() if t.order.orderId == order_int]
+        return matching[0] if matching else None
+
+    def cancel_order(self, order_id: str, timeout: float = 5.0) -> bool:
+        _TERMINAL = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
         order_int = int(order_id)
-        matching  = [t for t in self._ib.trades() if t.order.orderId == order_int]
-        if not matching:
+
+        trade = self._find_trade(order_int)
+        if trade is None:
             return True  # already done — idempotent success
-        self._ib.cancelOrder(matching[0].order)
-        self._ib.sleep(0.5)
-        return True
+
+        if trade.orderStatus.status in _TERMINAL:
+            return trade.orderStatus.status in ("Cancelled", "ApiCancelled", "Inactive")
+
+        self._ib.cancelOrder(trade.order)
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self._ib.sleep(0.25)
+            trade = self._find_trade(order_int)
+            if trade is None:
+                return True
+            status = trade.orderStatus.status
+            if status in _TERMINAL:
+                if status == "Filled":
+                    if self._log:
+                        self._log.warning(
+                            "cancel_order_fill_race",
+                            order_id=order_id,
+                            symbol=trade.contract.symbol,
+                        )
+                    return False
+                return True
+
+        if self._log:
+            self._log.warning(
+                "cancel_order_timeout",
+                order_id=order_id,
+                timeout=timeout,
+            )
+        return False
 
     def submit_stop_order(
         self,
@@ -460,8 +527,84 @@ class IBClient(BrokerClient):
         qty: float,
         stop_price: float,
         client_order_id: Optional[str] = None,
-    ):
-        raise NotImplementedError("IBClient.submit_stop_order — Part 4")
+        tif: str = "day",
+        timeout: float = 5.0,
+    ) -> dict:
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            raise ValueError(f"{symbol} is not tradable on IB")
+
+        contract = self._contract_cache[symbol]
+        action   = "BUY" if side.lower() == "buy" else "SELL"
+
+        # Stop-market: orderType="STP", auxPrice is the trigger level.
+        # When market crosses auxPrice, IB fires a market order — no limit.
+        order     = StopOrder(action, qty, stop_price)
+        order.tif = tif.upper()
+        if client_order_id:
+            order.orderRef = client_order_id
+
+        trade = self._ib.placeOrder(contract, order)
+        order_int = trade.order.orderId
+        self._order_cache[order_int] = self._trade_to_dict(trade)
+        return self._wait_for_submit_terminal(order_int, symbol, timeout)
+
+    def modify_stop_order(
+        self,
+        order_id: str,
+        new_qty: Optional[float] = None,
+        new_stop_price: Optional[float] = None,
+        timeout: float = 5.0,
+    ) -> dict:
+        """Modify a resting stop order's quantity and/or stop price.
+
+        Uses ib_async's placeOrder dual-purpose convention: mutating the
+        existing Order object and re-calling placeOrder modifies the order
+        at the exchange atomically (no cancel-and-replace).
+
+        Raises:
+            ConnectionError — if not connected
+            KeyError        — if order_id not found in live trades
+            ValueError      — if order is in a terminal state, is not a stop
+                              order, or if neither field was specified
+        """
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        if new_qty is None and new_stop_price is None:
+            raise ValueError(
+                "modify_stop_order requires new_qty or new_stop_price (or both)"
+            )
+
+        order_int = int(order_id)
+        trade = self._find_trade(order_int)
+        if trade is None:
+            raise KeyError(f"Order {order_id} not found in live trades")
+
+        raw_status = trade.orderStatus.status
+        if raw_status in ("Filled", "Cancelled", "ApiCancelled", "Inactive"):
+            raise ValueError(
+                f"Cannot modify order {order_id} in terminal state: {raw_status}"
+            )
+
+        if trade.order.orderType != "STP":
+            raise ValueError(
+                f"modify_stop_order called on non-stop order {order_id} "
+                f"(orderType={trade.order.orderType})"
+            )
+
+        if new_qty is not None:
+            trade.order.totalQuantity = float(new_qty)
+        if new_stop_price is not None:
+            trade.order.auxPrice = float(new_stop_price)
+
+        self._ib.placeOrder(trade.contract, trade.order)
+
+        self._order_cache[order_int] = self._trade_to_dict(trade)
+        return self._wait_for_submit_terminal(order_int, trade.contract.symbol, timeout)
 
     def cancel_all_orders(self) -> int:
         raise NotImplementedError("IBClient.cancel_all_orders — Part 4")
@@ -479,6 +622,7 @@ class IBClient(BrokerClient):
 
     def _on_order_status(self, trade) -> None:
         """Update the order cache whenever IB pushes a status change."""
+        self._last_event_time = time.time()
         order_id = trade.order.orderId
         self._order_cache[order_id] = self._trade_to_dict(trade)
 
@@ -495,13 +639,50 @@ class IBClient(BrokerClient):
 
     def _on_exec_details(self, trade, fill) -> None:
         """Capture fill price/qty from each execution report."""
+        self._last_event_time = time.time()
         order_id = trade.order.orderId
         if order_id in self._order_cache:
             self._order_cache[order_id]["last_fill_price"] = fill.execution.price
             self._order_cache[order_id]["last_fill_qty"]   = fill.execution.shares
 
+    def _on_ib_error(self, reqId, errorCode, errorString, contract) -> None:
+        self._last_event_time = time.time()
+        if errorCode == 10089:
+            self._market_data_degraded = True
+            if self._log:
+                self._log.error(
+                    "ib_market_data_subscription_required",
+                    error_code=errorCode,
+                    error_string=errorString,
+                )
+
+    def check_heartbeat(self) -> dict:
+        """Return {'ok': bool, 'seconds_since_event': float | None}.
+
+        'ok' is True if no event has been seen yet (connection just made)
+        or if the last event arrived within _heartbeat_timeout seconds.
+        Callers should only treat ok=False as a problem during market hours
+        when events are expected to flow regularly.
+        """
+        if self._last_event_time is None:
+            return {"ok": True, "seconds_since_event": None}
+        elapsed = time.time() - self._last_event_time
+        return {
+            "ok": elapsed < self._heartbeat_timeout,
+            "seconds_since_event": elapsed,
+        }
+
+    def _validate_subscription(self) -> None:
+        """Validate real-time data is available; raises ConnectionError if not."""
+        try:
+            self.get_latest_quote("SPY")
+        except RuntimeError as exc:
+            raise ConnectionError(
+                f"Market data subscription validation failed: {exc}"
+            ) from exc
+
     def _normalize_status(self, ib_status: str) -> str:
-        return self._IB_TO_ALPACA_STATUS.get(ib_status, ib_status.lower())
+        return self._IB_STATUS_MAP.get(ib_status, ib_status.lower())
 
     def _trade_to_dict(self, trade) -> dict:
         """Normalise an ib_async Trade object to our standard order dict."""
@@ -512,7 +693,6 @@ class IBClient(BrokerClient):
         status_raw = trade.orderStatus.status
         return {
             "id":               str(oid),
-            "alpaca_id":        str(oid),   # compatibility alias for order_policy.py
             "symbol":           trade.contract.symbol,
             "side":             "buy" if trade.order.action == "BUY" else "sell",
             "qty":              float(trade.order.totalQuantity),
@@ -539,8 +719,7 @@ class IBClient(BrokerClient):
         [date, open, high, low, close, volume].
 
         date is a tz-naive pd.Timestamp normalized to midnight, sorted
-        ascending.  Shape matches AlpacaClient._normalise_bar_df output
-        so pre_market.py works without modification.
+        ascending.  Sorted ascending with tz-naive midnight timestamps.
         """
         _empty = pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
 
@@ -637,39 +816,31 @@ class IBClient(BrokerClient):
         if end.tzinfo is None:
             end = end.replace(tzinfo=_ET)
 
-        # Build IB durationStr from the window size
-        delta_s = int((end - start).total_seconds())
-        delta_m = max(1, delta_s // 60)
-        delta_h = max(1, delta_s // 3600)
-        delta_d = max(1, (end.date() - start.date()).days + 1)
+        # Duration in seconds covers the full window.  Always use S units for
+        # intraday requests — IB handles up to 86400 S reliably.
+        delta_s      = max(60, int((end - start).total_seconds()))
+        duration_str = f"{delta_s} S"
+        bar_size     = _BAR_SIZE_MAP.get(timeframe.lower(), "1 min")
 
-        if delta_s <= 60:
-            duration_str = f"{delta_s} S"
-        elif delta_m <= 30:
-            duration_str = f"{delta_m} M"
-        elif delta_h <= 6:
-            duration_str = f"{delta_h} H"
-        else:
-            duration_str = f"{delta_d} D"
-
-        bar_size = _BAR_SIZE_MAP.get(timeframe.lower(), "1 min")
-
+        # Pass the end boundary as a datetime object (ib_async formats it
+        # correctly), or "" for "now".  Hand-built strings in older code were
+        # silently malformed, causing IB to hang the request.
         from datetime import timezone as _tz
         _now_utc = datetime.now(_tz.utc)
         if abs((end.astimezone(_tz.utc) - _now_utc).total_seconds()) < 60:
-            end_dt_str = ""
+            end_dt: object = ""
         else:
-            end_dt_str = end.strftime("%Y%m%d %H:%M:%S US/Eastern")
+            end_dt = end  # ib_async accepts a tz-aware datetime directly
 
         try:
             raw = self._ib.reqHistoricalData(
                 contract,
-                endDateTime=end_dt_str,
+                endDateTime=end_dt,
                 durationStr=duration_str,
                 barSizeSetting=bar_size,
                 whatToShow="TRADES",
-                useRTH=False,
-                formatDate=2,
+                useRTH=True,
+                formatDate=1,
                 timeout=15,
             )
         except Exception as exc:
@@ -688,7 +859,13 @@ class IBClient(BrokerClient):
         rows = []
         for bar in raw:
             try:
-                ts = datetime.fromtimestamp(float(str(bar.date)), tz=_ET)
+                # formatDate=1: bar.date is a naive datetime in exchange local
+                # time (ET for US equities).  tz_localize converts it to ET-aware.
+                ts = pd.Timestamp(bar.date)
+                if ts.tzinfo is None:
+                    ts = ts.tz_localize(_ET)
+                else:
+                    ts = ts.tz_convert(_ET)
             except (ValueError, TypeError):
                 continue
             rows.append({
@@ -709,17 +886,22 @@ class IBClient(BrokerClient):
     # ── Quote (Part 5) ────────────────────────────────────────────────────────
 
     def get_latest_quote(self, symbol: str) -> dict:
-        """
-        Return the latest NBBO quote: {bid, ask, bid_size, ask_size, ts}.
+        """Return the latest NBBO quote: {bid, ask, bid_size, ask_size, ts}.
 
-        Shape matches AlpacaClient.get_latest_quote() so pre_market.py
-        works without modification.  Falls back to last/close if bid/ask
-        are both zero (pre-market or after-hours snapshot).
+        Raises RuntimeError if market data is degraded or returns all-zeros,
+        unless IB_ALLOW_DELAYED_DATA=1.  Falls back to last/close for
+        pre-market / after-hours quotes before the zero-check.
         """
         _zero = {"bid": 0.0, "ask": 0.0, "bid_size": 0, "ask_size": 0, "ts": None}
 
         if not self.is_connected():
             raise ConnectionError("IBClient is not connected")
+
+        if self._market_data_degraded and not self._allow_delayed_data:
+            raise RuntimeError(
+                "Market data subscription required (IB error 10089). "
+                "Set IB_ALLOW_DELAYED_DATA=1 to use delayed data."
+            )
 
         asset = self.get_asset(symbol)
         if not asset["tradable"]:
@@ -733,11 +915,20 @@ class IBClient(BrokerClient):
             )
             self._ib.sleep(2)
 
-            bid      = float(ticker.bid)      if ticker.bid      and ticker.bid      > 0 else 0.0
-            ask      = float(ticker.ask)      if ticker.ask      and ticker.ask      > 0 else 0.0
-            bid_size = int(ticker.bidSize)    if ticker.bidSize  else 0
-            ask_size = int(ticker.askSize)    if ticker.askSize  else 0
-            ts       = ticker.time            if ticker.time     else None
+            # Re-check: 10089 may have fired during the sleep above.
+            if self._market_data_degraded and not self._allow_delayed_data:
+                raise RuntimeError(
+                    "Market data subscription required (IB error 10089). "
+                    "Set IB_ALLOW_DELAYED_DATA=1 to use delayed data."
+                )
+
+            bid      = float(ticker.bid)   if ticker.bid  and ticker.bid  > 0 else 0.0
+            ask      = float(ticker.ask)   if ticker.ask  and ticker.ask  > 0 else 0.0
+            _bsz     = ticker.bidSize
+            _asz     = ticker.askSize
+            bid_size = 0 if (_bsz is None or (isinstance(_bsz, float) and math.isnan(_bsz))) else int(_bsz)
+            ask_size = 0 if (_asz is None or (isinstance(_asz, float) and math.isnan(_asz))) else int(_asz)
+            ts       = ticker.time         if ticker.time else None
 
             # Pre-market / after-hours: bid/ask may both be 0 — fall back to
             # last trade price, then to prior close.
@@ -750,6 +941,13 @@ class IBClient(BrokerClient):
                 if fallback > 0:
                     bid = ask = fallback
 
+            if bid == 0.0 and ask == 0.0 and not self._allow_delayed_data:
+                raise RuntimeError(
+                    f"get_latest_quote({symbol}): received all-zero quote — "
+                    "likely no market data subscription. "
+                    "Set IB_ALLOW_DELAYED_DATA=1 to suppress this check."
+                )
+
             return {
                 "bid":      bid,
                 "ask":      ask,
@@ -757,13 +955,6 @@ class IBClient(BrokerClient):
                 "ask_size": ask_size,
                 "ts":       ts,
             }
-        except Exception as exc:
-            if self._log:
-                self._log.warning(
-                    "get_latest_quote_failed",
-                    symbol=symbol, error=str(exc),
-                )
-            return _zero
         finally:
             try:
                 self._ib.cancelMktData(contract)
@@ -814,6 +1005,7 @@ class IBClient(BrokerClient):
                 def _on_new_bar(bars, hasNewBar: bool) -> None:
                     if not (hasNewBar and bars):
                         return
+                    self._last_event_time = time.time()
                     completed = self._bar_aggregators[symbol].add_5sec_bar(bars[-1])
                     if completed and self._bar_callback:
                         try:

@@ -27,11 +27,15 @@ skip_unless_ib = pytest.mark.skipif(not RUN_IB, reason="RUN_IB_INTEGRATION=1 not
 class TestIBClientLive:
     @pytest.fixture(scope="class")
     def client(self):
-        from orb_live.data.ib_client import build_client_from_env
-        c = build_client_from_env(paper=True)
-        c.connect()
-        yield c
-        c.disconnect()
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
+        try:
+            from orb_live.data.ib_client import build_client_from_env
+            c = build_client_from_env(paper=True)
+            c.connect()
+            yield c
+            c.disconnect()
+        finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
 
     def test_is_connected(self, client):
         assert client.is_connected() is True
@@ -73,11 +77,15 @@ class TestIBClientLive:
 class TestIBClientAssetLive:
     @pytest.fixture(scope="class")
     def client(self):
-        from orb_live.data.ib_client import build_client_from_env
-        c = build_client_from_env(paper=True)
-        c.connect()
-        yield c
-        c.disconnect()
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
+        try:
+            from orb_live.data.ib_client import build_client_from_env
+            c = build_client_from_env(paper=True)
+            c.connect()
+            yield c
+            c.disconnect()
+        finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
 
     def test_live_get_asset_soxl(self, client):
         asset = client.get_asset("SOXL")
@@ -110,13 +118,15 @@ class TestIBClientAssetLive:
 class TestIBClientClockLive:
     @pytest.fixture(scope="class")
     def client(self):
-        from orb_live.data.ib_client import build_client_from_env
-        # clock methods don't need a live connection, but use the connected
-        # client for consistency with other live tests
-        c = build_client_from_env(paper=True)
-        c.connect()
-        yield c
-        c.disconnect()
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
+        try:
+            from orb_live.data.ib_client import build_client_from_env
+            c = build_client_from_env(paper=True)
+            c.connect()
+            yield c
+            c.disconnect()
+        finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
 
     def test_live_get_clock_consistent(self, client):
         before = datetime.now(tz=timezone.utc)
@@ -143,11 +153,15 @@ class TestIBClientOrdersLive:
 
     @pytest.fixture(scope="class")
     def client(self):
-        from orb_live.data.ib_client import build_client_from_env
-        c = build_client_from_env(paper=True)
-        c.connect()
-        yield c
-        c.disconnect()
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
+        try:
+            from orb_live.data.ib_client import build_client_from_env
+            c = build_client_from_env(paper=True)
+            c.connect()
+            yield c
+            c.disconnect()
+        finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
 
     def test_live_submit_and_cancel_limit(self, client):
         order = None
@@ -194,32 +208,95 @@ class TestIBClientOrdersLive:
             if order:
                 client.cancel_order(order["id"])
 
+    def test_live_modify_stop_order(self, client):
+        """Submit a stop, modify qty and stop price, verify landed at IB, cancel cleanly."""
+        stop = None
+        try:
+            stop = client.submit_stop_order(
+                "SOXL", "sell", 10, 999.0,
+                client_order_id="dress-modify-test",
+                timeout=10.0,
+            )
+            assert stop["id"], "no order_id returned from submit_stop_order"
+            original_id = stop["id"]
+
+            modified = client.modify_stop_order(
+                original_id,
+                new_qty=5,
+                new_stop_price=1100.0,
+                timeout=10.0,
+            )
+
+            assert modified["id"] == original_id, \
+                f"order_id changed during modify (was {original_id}, now {modified['id']})"
+
+            fetched = client.get_order(original_id)
+            assert fetched["status"] in ("new", "submitted"), \
+                f"unexpected status after modify: {fetched['status']}"
+
+            print(f"[INT] Stop {original_id} modified: qty={modified.get('qty')} "
+                  f"status={modified.get('status')}")
+        finally:
+            if stop and stop.get("id"):
+                client.cancel_order(stop["id"], timeout=5.0)
+
+    def test_live_submit_and_cancel_stop(self, client):
+        """Stop-market well above market: verify it lands as Submitted, cancel cleanly."""
+        stop = None
+        try:
+            stop = client.submit_stop_order(
+                "SOXL", "sell", 1, 999.0,
+                client_order_id="dress-stop-test",
+                timeout=10.0,
+            )
+            assert stop["id"], "no order_id returned"
+            assert stop["status"] in ("new", "submitted"), \
+                f"unexpected status: {stop['status']}"
+
+            fetched = client.get_order(stop["id"])
+            assert fetched["status"] in ("new", "submitted")
+        finally:
+            if stop and stop.get("id"):
+                client.cancel_order(stop["id"], timeout=5.0)
+
+        final = client.get_order(stop["id"])
+        assert final["status"] == "canceled", \
+            f"expected canceled, got {final['status']}"
+
     def test_live_cancel_order_changes_status(self, client):  # noqa: keep at end
         order = None
         try:
             order = client.submit_limit_order("SOXL", "buy", 1, 0.01)
-            client.cancel_order(order["id"])
-            time.sleep(2)  # allow cancel confirmation to arrive
+            result = client.cancel_order(order["id"])
+            assert result is True, "cancel_order returned False — possible fill race or timeout"
             fetched = client.get_order(order["id"])
-            assert fetched["status"] in ("canceled", "rejected"), (
+            assert fetched["status"] == "canceled", (
                 f"Unexpected normalized status: {fetched['status']}"
             )
             assert fetched["status_raw"] in ("Cancelled", "ApiCancelled", "Inactive"), (
                 f"Unexpected raw status: {fetched['status_raw']}"
             )
         finally:
-            pass  # already cancelled above
+            if order:
+                try:
+                    client.cancel_order(order["id"])
+                except Exception:
+                    pass
 
 
 @skip_unless_ib
 class TestIBClientMarketDataLive:
     @pytest.fixture(scope="class")
     def client(self):
-        from orb_live.data.ib_client import build_client_from_env
-        c = build_client_from_env(paper=True)
-        c.connect()
-        yield c
-        c.disconnect()
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
+        try:
+            from orb_live.data.ib_client import build_client_from_env
+            c = build_client_from_env(paper=True)
+            c.connect()
+            yield c
+            c.disconnect()
+        finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
 
     def test_live_get_intraday_bars_recent(self, client):
         from datetime import timedelta
@@ -286,11 +363,15 @@ class TestIBClientMarketDataLive:
 class TestIBClientQuoteLive:
     @pytest.fixture(scope="class")
     def client(self):
-        from orb_live.data.ib_client import build_client_from_env
-        c = build_client_from_env(paper=True)
-        c.connect()
-        yield c
-        c.disconnect()
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
+        try:
+            from orb_live.data.ib_client import build_client_from_env
+            c = build_client_from_env(paper=True)
+            c.connect()
+            yield c
+            c.disconnect()
+        finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
 
     def test_live_get_latest_quote_soxl(self, client):
         clock = client.get_clock()
@@ -313,11 +394,15 @@ class TestIBClientQuoteLive:
 class TestIBClientDailyBarsLive:
     @pytest.fixture(scope="class")
     def client(self):
-        from orb_live.data.ib_client import build_client_from_env
-        c = build_client_from_env(paper=True)
-        c.connect()
-        yield c
-        c.disconnect()
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
+        try:
+            from orb_live.data.ib_client import build_client_from_env
+            c = build_client_from_env(paper=True)
+            c.connect()
+            yield c
+            c.disconnect()
+        finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
 
     def test_live_get_daily_bars_soxl(self, client):
         df = client.get_daily_bars("SOXL", lookback_days=10)
@@ -351,7 +436,7 @@ class TestIBClientEndToEnd:
     """
 
     def test_full_lifecycle_via_factory(self):
-        import os
+        os.environ["IB_ALLOW_DELAYED_DATA"] = "1"
         os.environ["BROKER"] = "ib"
         try:
             from orb_live.runner.main import build_broker_from_env
@@ -376,4 +461,5 @@ class TestIBClientEndToEnd:
 
             broker.disconnect()
         finally:
+            os.environ.pop("IB_ALLOW_DELAYED_DATA", None)
             os.environ.pop("BROKER", None)

@@ -26,7 +26,7 @@ class RiskGate:
     Pre-entry authorization and session-kill management.
 
     The gate is intentionally stateless with respect to the DB — it derives
-    all live state from alpaca.get_account() and the positions dict passed
+    all live state from broker.get_account() and the positions dict passed
     by the caller, making it safe to construct fresh on restart.
 
     live_cfg fields used:

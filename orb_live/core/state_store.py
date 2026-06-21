@@ -120,7 +120,7 @@ pending_orders = Table("pending_orders", _metadata,
     Column("limit_price",  Float),
     Column("stop_price",   Float),
     Column("submitted_at", DateTime,   nullable=False),
-    Column("alpaca_id",    String(64)),
+    Column("broker_order_id", String(64)),
     Column("status",       String(32), default="pending"),
 )
 
@@ -168,7 +168,8 @@ open_positions = Table("open_positions", _metadata,
     Column("exit_time",         DateTime),
     # Timestamps / order ref
     Column("opened_at",         DateTime,   nullable=False),
-    Column("alpaca_order_id",   String(64)),
+    Column("broker_order_id",   String(64)),
+    Column("stop_order_id",     String(64)),
 )
 
 closed_trades = Table("closed_trades", _metadata,
@@ -351,6 +352,11 @@ class StateStore:
     def __init__(self, db_path: Path):
         self.engine = create_db_engine(db_path)
         init_db(self.engine)
+
+    def close(self) -> None:
+        """Release all pooled connections.  Safe to call more than once."""
+        if self.engine is not None:
+            self.engine.dispose()
 
     def conn(self):
         return self.engine.connect()

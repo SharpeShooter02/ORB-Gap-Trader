@@ -62,7 +62,7 @@ def _make_router_stub(last_bar_ts=None):
     return r
 
 
-def _make_alpaca_stub(equity=100_000.0):
+def _make_broker_stub(equity=100_000.0):
     class _A:
         def get_account(self): return {"equity": equity}
     return _A()
@@ -74,7 +74,7 @@ def _make_health_server(
     from orb_live.ops.health_check import HealthServer
     return HealthServer(
         state_store=store or _make_store_stub(),
-        broker=broker or _make_alpaca_stub(),
+        broker=broker or _make_broker_stub(),
         bar_router=router or _make_router_stub(),
         clock=clock or _make_clock_stub(rth=False),
         port=port,
@@ -105,7 +105,7 @@ def test_op03_health_200_fresh_bar_during_rth():
     fresh_ts = datetime.now(ET) - timedelta(seconds=30)
     router   = _make_router_stub(last_bar_ts=fresh_ts)
     hs       = _make_health_server(clock=_make_clock_stub(rth=True), router=router)
-    hs.record_api_call()  # mark Alpaca alive
+    hs.record_api_call()  # mark broker alive
 
     code, body = hs.get_health_response()
     assert code == 200, f"Expected 200 with fresh bar, got {code}: {body}"
@@ -116,7 +116,7 @@ def test_op04_metrics_prometheus_format(tmp_store):
     router = _make_router_stub()
     router._bars_received = {"TQQQ": 42, "SQQQ": 17}
 
-    class _FakeAlpaca:
+    class _FakeBroker:
         def get_account(self): return {"equity": 123456.78}
 
     class _FakeStore:
@@ -135,7 +135,7 @@ def test_op04_metrics_prometheus_format(tmp_store):
             return _cm()
 
     hs = _make_health_server(
-        store=_FakeStore(), broker=_FakeAlpaca(), router=router
+        store=_FakeStore(), broker=_FakeBroker(), router=router
     )
     hs.record_api_call()
     text = hs.get_metrics_response()
@@ -440,19 +440,19 @@ def test_op13_detect_metric_drift_flags_outlier(tmp_path):
 
 def test_op14_token_refresh_calls_stop_bars_stream():
     """
-    _do_token_refresh should call alpaca.stop_bars_stream() to trigger reconnect.
+    _do_token_refresh should call broker.stop_bars_stream() to trigger reconnect.
     """
     from orb_live.runner.bar_router import BarRouter
 
     stop_called: list[bool] = []
 
-    class _FakeAlpaca:
+    class _FakeBroker:
         def stop_bars_stream(self): stop_called.append(True)
 
     class _FakeStore: pass
     class _FakeCache: pass
 
-    router = BarRouter(_FakeAlpaca(), _FakeStore(), _FakeCache())
+    router = BarRouter(_FakeBroker(), _FakeStore(), _FakeCache())
     router._do_token_refresh(age_s=43200.0)
 
     assert len(stop_called) == 1, "stop_bars_stream should be called once on token refresh"
@@ -473,13 +473,13 @@ def test_op15_token_refresh_failure_enters_degraded_mode():
         def warning(self, event, **kw): log_events.append(event)
         def error(self, event, **kw): log_events.append(event)
 
-    class _BrokenAlpaca:
+    class _BrokenBroker:
         def stop_bars_stream(self): raise RuntimeError("auth error")
 
     class _FakeStore: pass
     class _FakeCache: pass
 
-    router = BarRouter(_BrokenAlpaca(), _FakeStore(), _FakeCache(), logger=_Log())
+    router = BarRouter(_BrokenBroker(), _FakeStore(), _FakeCache(), logger=_Log())
     router._do_token_refresh(age_s=43200.0)
 
     assert router._degraded is True, (

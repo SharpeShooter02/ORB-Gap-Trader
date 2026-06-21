@@ -33,14 +33,14 @@ class SessionRunner:
     Wires all sub-components together for one trading session.
 
     All components are injected at construction so the class is fully
-    testable without Alpaca credentials.  In production, build the components
+    testable without broker credentials.  In production, build the components
     via `runner.main` and pass them in.
     """
 
     def __init__(
         self,
         config,                # LiveConfig
-        broker,                # BrokerClient | DryRunAlpaca | MockAlpaca
+        broker,                # BrokerClient | DryRunBroker | MockBroker
         state_store,           # StateStore
         bar_cache,             # BarCache
         bar_router,            # BarRouter
@@ -87,6 +87,7 @@ class SessionRunner:
 
         try:
             self._run_pre_market(session_date)
+            self._run_open_eval(session_date)
             self._run_orb_window(session_date)
             self._run_post_orb(session_date)
             self._run_eod(session_date)
@@ -102,7 +103,7 @@ class SessionRunner:
 
     def recover(self, session_date: date) -> None:
         """
-        Resume a crashed session.  Reconciles open positions from Alpaca before
+        Resume a crashed session.  Reconciles open positions from broker before
         re-entering the session loop at the current phase.
         """
         if self._log:
@@ -132,17 +133,34 @@ class SessionRunner:
                 date=str(session_date),
             )
 
+        # Subscribe to bars for ALL universe symbols before market open so the
+        # 09:30 bar lands in the cache for ORB seeding.  Phase 1 runs later at
+        # 09:31 (after the 9:30 bar closes) so we cannot wait until after Phase 1
+        # to start streaming.
+        self._router.subscribe(list(self._cfg.symbols))
+
+        # Wait until 09:31 — the 9:30 bar must be closed before Phase 1 can
+        # read its close price as the gap reference.
+        open_eval_dt = self._clock.next_open_eval_start()
+        secs = (open_eval_dt - self._clock.now_et()).total_seconds()
+        if secs > 0:
+            if self._log:
+                self._log.info("waiting_for_open_eval", seconds=round(secs, 1))
+            self._sleep(secs)
+
+    def _run_open_eval(self, session_date: date) -> None:
+        """Run Phase 1 at 09:31 ET using the 9:30 bar close as the gap reference."""
+        if self._log:
+            self._log.info("open_eval_start", date=str(session_date))
+
         self._phase1_results = self._pre_market.run_phase1(session_date)
         p1_symbols = [r.symbol for r in self._phase1_results]
 
         self._store.upsert_day_state(
-            session_date, phase="pre_market", n_prequalified=len(p1_symbols)
+            session_date, phase="open_eval", n_prequalified=len(p1_symbols)
         )
         if self._log:
             self._log.info("phase1_complete", n=len(p1_symbols), symbols=p1_symbols)
-
-        if p1_symbols:
-            self._router.subscribe(p1_symbols)
 
     def _run_orb_window(self, session_date: date) -> None:
         """Sleep until the ORB window closes at 10:00 ET."""

@@ -1,7 +1,7 @@
 """
 tests/test_bar_router.py — BarRouter unit tests.
 
-Uses a synchronous stub for alpaca.subscribe_bars so tests run instantly
+Uses a synchronous stub for broker.subscribe_bars so tests run instantly
 without network access.  All cases verify observable side effects (listener
 calls, dispatch order, reconnect backoff, missed-bar replay).
 """
@@ -23,9 +23,9 @@ _DT = lambda h, m: datetime(2026, 1, 7, h, m, 0, tzinfo=ET)
 
 # ── Stubs ─────────────────────────────────────────────────────────────────────
 
-class _StubAlpaca:
+class _StubBroker:
     """
-    Minimal alpaca stub.  subscribe_bars calls the callback synchronously
+    Minimal broker stub.  subscribe_bars calls the callback synchronously
     with bars from the injected sequence, then returns.
     """
     def __init__(self, bar_sequences: dict[str, list[dict]] = None):
@@ -37,7 +37,7 @@ class _StubAlpaca:
         for sym, bars in self._sequences.items():
             if sym in symbols:
                 for b in bars:
-                    callback(_make_alpaca_bar(sym, b))
+                    callback(_make_broker_bar(sym, b))
 
     def get_intraday_bars(self, symbol, start_dt, end_dt, timeframe="1Min", feed="iex"):
         rows = self._sequences.get(symbol, [])
@@ -53,8 +53,8 @@ class _StubAlpaca:
         return {"bid": 99.9, "ask": 100.1}
 
 
-def _make_alpaca_bar(symbol, d: dict):
-    """Construct a minimal alpaca Bar-like object from a dict."""
+def _make_broker_bar(symbol, d: dict):
+    """Construct a minimal bar-like object from a dict."""
     return SimpleNamespace(
         symbol=symbol,
         timestamp=d["timestamp"],
@@ -95,15 +95,15 @@ def test_a_listener_called_for_each_bar():
         {"timestamp": _DT(10, 2), "close": 51.0},
         {"timestamp": _DT(10, 3), "close": 52.0},
     ]
-    alpaca = _StubAlpaca({"TQQQ": bars})
+    broker = _StubBroker({"TQQQ": bars})
     received = []
 
     from orb_live.runner.bar_router import BarRouter
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
     router.register_listener(lambda sym, bar: received.append((sym, bar["close"])))
 
     # Call subscribe_bars directly (synchronous stub)
-    alpaca.subscribe_bars(["TQQQ"], router._on_stream_bar)
+    broker.subscribe_bars(["TQQQ"], router._on_stream_bar)
 
     assert [(s, c) for s, c in received] == [("TQQQ", 50.0), ("TQQQ", 51.0), ("TQQQ", 52.0)]
 
@@ -111,16 +111,16 @@ def test_a_listener_called_for_each_bar():
 def test_b_multiple_listeners_called_in_registration_order():
     """Multiple listeners are invoked in the order they were registered."""
     bars = [{"timestamp": _DT(10, 1), "close": 50.0}]
-    alpaca = _StubAlpaca({"TQQQ": bars})
+    broker = _StubBroker({"TQQQ": bars})
     order = []
 
     from orb_live.runner.bar_router import BarRouter
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
     router.register_listener(lambda sym, bar: order.append("first"))
     router.register_listener(lambda sym, bar: order.append("second"))
     router.register_listener(lambda sym, bar: order.append("third"))
 
-    alpaca.subscribe_bars(["TQQQ"], router._on_stream_bar)
+    broker.subscribe_bars(["TQQQ"], router._on_stream_bar)
 
     assert order == ["first", "second", "third"]
 
@@ -128,15 +128,15 @@ def test_b_multiple_listeners_called_in_registration_order():
 def test_c_listener_exception_does_not_stop_subsequent_listeners():
     """A listener that raises must not prevent other listeners from being called."""
     bars = [{"timestamp": _DT(10, 1), "close": 50.0}]
-    alpaca = _StubAlpaca({"TQQQ": bars})
+    broker = _StubBroker({"TQQQ": bars})
     reached = []
 
     from orb_live.runner.bar_router import BarRouter
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
     router.register_listener(lambda sym, bar: (_ for _ in ()).throw(RuntimeError("boom")))
     router.register_listener(lambda sym, bar: reached.append(True))
 
-    alpaca.subscribe_bars(["TQQQ"], router._on_stream_bar)
+    broker.subscribe_bars(["TQQQ"], router._on_stream_bar)
 
     assert reached == [True]
 
@@ -144,8 +144,8 @@ def test_c_listener_exception_does_not_stop_subsequent_listeners():
 def test_d_detect_missed_bars_gap_under_2min_returns_empty():
     """detect_missed_bars returns [] when gap < 120 seconds (no full bar missed)."""
     from orb_live.runner.bar_router import BarRouter
-    alpaca = _StubAlpaca()
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    broker = _StubBroker()
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
 
     last = _DT(10, 1)
     current = _DT(10, 1) + timedelta(seconds=90)
@@ -157,10 +157,10 @@ def test_e_detect_missed_bars_fetches_via_rest():
     """detect_missed_bars fetches REST bars when gap >= 2 minutes."""
     missed_bar = {"timestamp": _DT(10, 2), "close": 50.5,
                   "open": 50.0, "high": 51.0, "low": 49.8, "volume": 500}
-    alpaca = _StubAlpaca({"TQQQ": [missed_bar]})
+    broker = _StubBroker({"TQQQ": [missed_bar]})
 
     from orb_live.runner.bar_router import BarRouter
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
 
     last    = _DT(10, 1)
     current = _DT(10, 4)  # 3-minute gap
@@ -177,11 +177,11 @@ def test_f_replay_missed_bars_dispatches_oldest_first():
         {"timestamp": _DT(10, 2), "close": 51.0, "open": 51.0, "high": 51.0, "low": 51.0},
         {"timestamp": _DT(10, 3), "close": 52.0, "open": 52.0, "high": 52.0, "low": 52.0},
     ]
-    alpaca = _StubAlpaca()
+    broker = _StubBroker()
     received_closes = []
 
     from orb_live.runner.bar_router import BarRouter
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
     router.register_listener(lambda sym, bar: received_closes.append(bar["close"]))
 
     # replay_missed_bars sorts by timestamp
@@ -207,18 +207,18 @@ def test_g_replay_before_live_on_reconnect():
                 "high": 54.0, "low": 54.0}
 
     # Stub returns rest_bars for detect_missed_bars calls
-    alpaca = _StubAlpaca({"TQQQ": rest_bars})
+    broker = _StubBroker({"TQQQ": rest_bars})
     dispatch_order = []
 
     from orb_live.runner.bar_router import BarRouter
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
     router.register_listener(lambda sym, bar: dispatch_order.append(bar["close"]))
 
     # Seed last_bar_ts at 10:01
     router._last_bar_ts["TQQQ"] = _DT(10, 1)
 
     # Simulate receiving a live bar at 10:05 (4-min gap)
-    router._on_stream_bar(_make_alpaca_bar("TQQQ", live_bar))
+    router._on_stream_bar(_make_broker_bar("TQQQ", live_bar))
 
     # Expected: 51, 52, 53 (replayed), then 54 (live)
     assert dispatch_order == [51.0, 52.0, 53.0, 54.0]
@@ -233,7 +233,7 @@ def test_h_reconnect_backoff_doubles_each_attempt():
     sleep_calls = []
     stop_fn = [lambda: None]  # filled in after router is constructed
 
-    class _FailingAlpaca:
+    class _FailingBroker:
         def subscribe_bars(self, symbols, callback):
             connect_count[0] += 1
             if connect_count[0] >= 4:
@@ -244,7 +244,7 @@ def test_h_reconnect_backoff_doubles_each_attempt():
             raise ConnectionError("disconnected")
 
     from orb_live.runner.bar_router import BarRouter, RECONNECT_BACKOFF_INIT, RECONNECT_BACKOFF_MAX
-    router = BarRouter(_FailingAlpaca(), _StubStore(), _StubBarCache())
+    router = BarRouter(_FailingBroker(), _StubStore(), _StubBarCache())
     stop_fn[0] = lambda: setattr(router, "_running", False)
     router._symbols = ["TQQQ"]
 
@@ -264,7 +264,7 @@ def test_h_reconnect_backoff_doubles_each_attempt():
 
 # ── Session-lifecycle tests (subscribe/unsubscribe) ───────────────────────────
 
-class _BlockingAlpaca:
+class _BlockingBroker:
     """
     Stub whose subscribe_bars BLOCKS until stop_bars_stream() is called.
     Resets automatically for each new subscribe_bars invocation so that
@@ -305,8 +305,8 @@ def test_i_unsubscribe_terminates_streaming_thread():
     """
     from orb_live.runner.bar_router import BarRouter
 
-    alpaca = _BlockingAlpaca()
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    broker = _BlockingBroker()
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
 
     router.subscribe(["TQQQ"])
     assert _wait_for(lambda: router._thread is not None and router._thread.is_alive()), \
@@ -327,17 +327,17 @@ def test_j_subscribe_idempotent_same_symbols():
     """
     from orb_live.runner.bar_router import BarRouter
 
-    alpaca = _BlockingAlpaca()
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    broker = _BlockingBroker()
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
 
     router.subscribe(["TQQQ", "SQQQ"])
-    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 1)
+    assert _wait_for(lambda: len(broker.subscribe_calls) == 1)
     thread1 = router._thread
 
     router.subscribe(["TQQQ", "SQQQ"])  # same symbols — should be no-op
 
     assert router._thread is thread1            # same thread object
-    assert len(alpaca.subscribe_calls) == 1     # only one subscribe_bars call
+    assert len(broker.subscribe_calls) == 1     # only one subscribe_bars call
 
     router.unsubscribe()
 
@@ -349,18 +349,18 @@ def test_k_subscribe_different_symbols_replaces_stream():
     """
     from orb_live.runner.bar_router import BarRouter
 
-    alpaca = _BlockingAlpaca()
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    broker = _BlockingBroker()
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
 
     router.subscribe(["TQQQ", "SQQQ"])
-    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 1)
+    assert _wait_for(lambda: len(broker.subscribe_calls) == 1)
     thread1 = router._thread
 
     router.subscribe(["SOXL", "SOXS"])          # different symbols
 
     # Old thread must be dead — unsubscribe() was called internally
     assert not thread1.is_alive(), "old streaming thread still alive after re-subscribe"
-    assert alpaca.stop_calls >= 1, "stop_bars_stream was not called on re-subscribe"
+    assert broker.stop_calls >= 1, "stop_bars_stream was not called on re-subscribe"
     # New thread is live with the new symbols
     assert set(router._symbols) == {"SOXL", "SOXS"}
     assert _wait_for(lambda: router._thread is not None and router._thread.is_alive()), \
@@ -376,18 +376,18 @@ def test_l_unsubscribe_then_resubscribe_lifecycle():
     """
     from orb_live.runner.bar_router import BarRouter
 
-    alpaca = _BlockingAlpaca()
-    router = BarRouter(alpaca, _StubStore(), _StubBarCache())
+    broker = _BlockingBroker()
+    router = BarRouter(broker, _StubStore(), _StubBarCache())
 
     router.subscribe(["TQQQ"])
-    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 1)
+    assert _wait_for(lambda: len(broker.subscribe_calls) == 1)
 
     router.unsubscribe()
     assert router._symbols == []
     assert not router._running
 
     router.subscribe(["SOXL"])
-    assert _wait_for(lambda: len(alpaca.subscribe_calls) == 2), \
+    assert _wait_for(lambda: len(broker.subscribe_calls) == 2), \
         "second subscribe_bars call never happened"
     assert set(router._symbols) == {"SOXL"}
     assert router._running

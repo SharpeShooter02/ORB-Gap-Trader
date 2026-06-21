@@ -15,11 +15,11 @@ ET = ZoneInfo("America/New_York")
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 class _FakeClock:
-    """Minimal MarketClock stub that returns a fixed 'now' with no Alpaca client."""
+    """Minimal MarketClock stub that returns a fixed 'now' with no broker client."""
 
     def __init__(self, fixed_now: datetime):
         self._fixed_now = fixed_now
-        self._client = None  # no Alpaca — uses weekday fallback
+        self._client = None  # no broker — uses weekday fallback
 
     def now_et(self) -> datetime:
         return self._fixed_now

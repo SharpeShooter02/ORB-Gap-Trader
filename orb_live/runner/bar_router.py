@@ -1,7 +1,7 @@
 """
 runner/bar_router.py — WebSocket bar subscription with missed-bar replay.
 
-Wraps alpaca.subscribe_bars in a background thread with exponential-backoff
+Wraps broker.subscribe_bars in a background thread with exponential-backoff
 reconnect.  On each reconnect, REST-fetches any missed bars and replays them
 (oldest-first) before the live stream resumes.
 
@@ -32,7 +32,7 @@ class BarRouter:
     WebSocket bar subscription with reconnect and missed-bar replay.
 
     Usage:
-        router = BarRouter(alpaca, state_store, bar_cache)
+        router = BarRouter(broker, state_store, bar_cache)
         router.register_listener(on_bar)
         router.subscribe(["TQQQ", "SQQQ"])
         # ... session runs ...
@@ -123,8 +123,8 @@ class BarRouter:
         thread to fully exit, then reset subscription state.
 
         Blocks until the thread is dead (or times out after 10 s).  This
-        ensures the Alpaca WebSocket connection is fully released before the
-        next subscribe() call, preventing HTTP 429 'connection limit exceeded'.
+        ensures the broker WebSocket connection is fully released before the
+        next subscribe() call, preventing connection limit errors.
         """
         self._running = False
         # Close the WebSocket so subscribe_bars() returns promptly
@@ -219,8 +219,8 @@ class BarRouter:
 
     def _on_stream_bar(self, bar) -> None:
         """
-        Callback invoked by alpaca-py on each incoming WebSocket bar.
-        Normalises the alpaca Bar object to a plain dict, detects missed bars,
+        Callback invoked by the broker on each incoming WebSocket bar.
+        Normalises the bar object to a plain dict, detects missed bars,
         replays them, then dispatches the live bar.
         """
         symbol = str(bar.symbol)
@@ -320,7 +320,7 @@ class BarRouter:
                 if self._log:
                     self._log.critical("ws_token_refresh_failed", exc=str(exc))
                 self._enter_degraded_mode()
-        # If stop_fn is None (e.g. DryRunAlpaca), nothing to refresh — silently skip
+        # If stop_fn is None (e.g. DryRunBroker), nothing to refresh — silently skip
 
     def _enter_degraded_mode(self) -> None:
         """Switch to REST polling fallback when WebSocket is unavailable."""

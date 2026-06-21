@@ -9,10 +9,11 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
-MARKET_OPEN    = dtime(9, 30)
-MARKET_CLOSE   = dtime(16, 0)
-HALF_DAY_CLOSE = dtime(13, 0)
+MARKET_OPEN     = dtime(9, 30)
+MARKET_CLOSE    = dtime(16, 0)
+HALF_DAY_CLOSE  = dtime(13, 0)
 PREMARKET_START = dtime(8, 30)
+OPEN_EVAL_START = dtime(9, 31)  # earliest safe time to read the 9:30 bar close
 
 
 class MarketClock:
@@ -155,6 +156,16 @@ class MarketClock:
         """Return the next 08:30 ET on a market day as an aware datetime."""
         next_day = self.next_market_day()
         return datetime.combine(next_day, PREMARKET_START).replace(tzinfo=ET)
+
+    def next_open_eval_start(self) -> datetime:
+        """Return the next 09:31 ET on a market day as an aware datetime.
+
+        09:31 is the earliest safe trigger for Phase 1 gap evaluation: the
+        9:30 bar has closed and its close price is available from the broker's
+        historical data API.
+        """
+        next_day = self.next_market_day()
+        return datetime.combine(next_day, OPEN_EVAL_START).replace(tzinfo=ET)
 
     # ── Phase detection ───────────────────────────────────────────────────────
 

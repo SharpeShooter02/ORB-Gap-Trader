@@ -1,9 +1,9 @@
 """
 tests/test_session_runner.py — SessionRunner and StrategyEngine unit tests.
 
-All tests are synchronous — no real market data, no Alpaca credentials.
+All tests are synchronous — no real market data, no broker credentials.
 Components are assembled from the existing conftest.py fixtures
-(MockAlpaca, tmp_store) with stub pre-market / clock / bar_cache / bar_router.
+(MockBroker, tmp_store) with stub pre-market / clock / bar_cache / bar_router.
 """
 
 from datetime import date, datetime, time as dtime, timedelta
@@ -51,6 +51,7 @@ class _StubClock:
     def eod_exit_et(self, h=16, m=0): return _et(16, 0)
     def is_half_day(self): return False
     def effective_close(self): return dtime(16, 0)
+    def next_open_eval_start(self): return _et(9, 31)  # in the past → no sleep
 
 
 class _StubBarCache:
@@ -124,7 +125,7 @@ def _make_p2(symbol, is_candidate=True, rtg_excluded=False, size_mult=1.0,
     )
 
 
-def _build_engine(mock_alpaca, tmp_store):
+def _build_engine(mock_broker, tmp_store):
     from orb_live.config.live_config import load_live_config
     from orb_live.execution.indicators import RollingIndicators
     from orb_live.execution.order_policy import MarketableLimitPolicy
@@ -144,76 +145,76 @@ def _build_engine(mock_alpaca, tmp_store):
         max_gross_exposure_pct=2.0,
         max_position_pct=0.50,
     )
-    policy = MarketableLimitPolicy(mock_alpaca, exc, tmp_store, _sleep=lambda _: None)
-    gate   = RiskGate(exc, tmp_store, mock_alpaca)
+    policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
+    gate   = RiskGate(exc, tmp_store, mock_broker)
     gate.session_start(100_000.0, TDATE)
     indicators_store = {}
 
     mgr = LivePositionManager(
-        broker=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_broker, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store=indicators_store, config=scfg,
     )
-    engine = StrategyEngine(mgr, cfg, tmp_store, mock_alpaca)
+    engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
     return engine, mgr, indicators_store, cfg
 
 
 # ── Tests: StrategyEngine state machine ───────────────────────────────────────
 
-def test_a_waiting_for_orb_is_default_state(mock_alpaca, tmp_store):
+def test_a_waiting_for_orb_is_default_state(mock_broker, tmp_store):
     """A freshly constructed engine has WAITING_FOR_ORB for any symbol."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, cfg = _build_engine(mock_alpaca, tmp_store)
+    engine, _, _, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     assert engine.get_state("TQQQ") == SymbolState.WAITING_FOR_ORB
 
 
-def test_b_not_candidate_skips_immediately(mock_alpaca, tmp_store):
+def test_b_not_candidate_skips_immediately(mock_broker, tmp_store):
     """on_orb_complete with is_candidate=False → EXITED_OR_SKIPPED."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_alpaca, tmp_store)
+    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     p2 = _make_p2("TQQQ", is_candidate=False)
     engine.on_orb_complete("TQQQ", p2, None)
     assert engine.get_state("TQQQ") == SymbolState.EXITED_OR_SKIPPED
 
 
-def test_c_rtg_excluded_skips(mock_alpaca, tmp_store):
+def test_c_rtg_excluded_skips(mock_broker, tmp_store):
     """on_orb_complete with rtg_excluded=True → EXITED_OR_SKIPPED."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_alpaca, tmp_store)
+    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     p2 = _make_p2("TQQQ", rtg_excluded=True)
     engine.on_orb_complete("TQQQ", p2, None)
     assert engine.get_state("TQQQ") == SymbolState.EXITED_OR_SKIPPED
 
 
-def test_d_routing_skip_skips(mock_alpaca, tmp_store):
+def test_d_routing_skip_skips(mock_broker, tmp_store):
     """on_orb_complete with size_mult=0.0 → EXITED_OR_SKIPPED."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_alpaca, tmp_store)
+    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     p2 = _make_p2("TQQQ", size_mult=0.0)
     engine.on_orb_complete("TQQQ", p2, None)
     assert engine.get_state("TQQQ") == SymbolState.EXITED_OR_SKIPPED
 
 
-def test_e_valid_p2_transitions_to_orb_complete(mock_alpaca, tmp_store):
+def test_e_valid_p2_transitions_to_orb_complete(mock_broker, tmp_store):
     """A valid Phase2Result with is_candidate=True → ORB_COMPLETE."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_alpaca, tmp_store)
+    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     p2 = _make_p2("TQQQ")
     engine.on_orb_complete("TQQQ", p2, None)
     assert engine.get_state("TQQQ") == SymbolState.ORB_COMPLETE
 
 
-def test_f_breakout_bar_transitions_to_in_position(mock_alpaca, tmp_store):
+def test_f_breakout_bar_transitions_to_in_position(mock_broker, tmp_store):
     """
     A bar that passes check_breakout on an ORB_COMPLETE symbol → IN_POSITION.
     ORB: high=101, low=99.  Breakout long: close > 101 AND close > ema(100).
     """
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, indicators_store, cfg = _build_engine(mock_alpaca, tmp_store)
+    engine, _, indicators_store, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
 
     orb = _minimal_orb(high=101.0, low=99.0)  # ema=100
@@ -237,10 +238,10 @@ def test_f_breakout_bar_transitions_to_in_position(mock_alpaca, tmp_store):
     assert engine.get_state("TQQQ") == SymbolState.IN_POSITION
 
 
-def test_g_latest_entry_minute_cutoff(mock_alpaca, tmp_store):
+def test_g_latest_entry_minute_cutoff(mock_broker, tmp_store):
     """Bars arriving after latest_entry_minute transition to EXITED_OR_SKIPPED."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, cfg = _build_engine(mock_alpaca, tmp_store)
+    engine, _, _, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
 
     # Temporarily patch latest_entry_minute to 30 (only bars up to 10:00 ET)
@@ -260,10 +261,10 @@ def test_g_latest_entry_minute_cutoff(mock_alpaca, tmp_store):
         scfg.latest_entry_minute = original
 
 
-def test_h_in_position_state_does_not_try_second_entry(mock_alpaca, tmp_store):
+def test_h_in_position_state_does_not_try_second_entry(mock_broker, tmp_store):
     """Once IN_POSITION, on_bar is a no-op for entry detection."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, mgr, indicators_store, cfg = _build_engine(mock_alpaca, tmp_store)
+    engine, mgr, indicators_store, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
 
     orb = _minimal_orb(high=101.0, low=99.0)
@@ -297,7 +298,7 @@ def test_h_in_position_state_does_not_try_second_entry(mock_alpaca, tmp_store):
 
 # ── Tests: SessionRunner bar dispatch order ───────────────────────────────────
 
-def test_i_indicator_updated_before_position_manager(mock_alpaca, tmp_store):
+def test_i_indicator_updated_before_position_manager(mock_broker, tmp_store):
     """
     LOAD-BEARING ORDER TEST: indicators[symbol].on_bar must be called before
     position_manager.on_bar so that position_manager reads the current EMA.
@@ -323,19 +324,19 @@ def test_i_indicator_updated_before_position_manager(mock_alpaca, tmp_store):
         session_kill_loss_pct=0.03, max_concurrent_positions=0,
         max_gross_exposure_pct=2.0, max_position_pct=0.50,
     )
-    policy = MarketableLimitPolicy(mock_alpaca, exc, tmp_store, _sleep=lambda _: None)
-    gate   = RiskGate(exc, tmp_store, mock_alpaca)
+    policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
+    gate   = RiskGate(exc, tmp_store, mock_broker)
     gate.session_start(100_000.0, TDATE)
     indicators_store = {}
 
     mgr = LivePositionManager(
-        broker=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_broker, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store=indicators_store, config=scfg,
     )
 
     router = _StubBarRouter()
     pre    = _StubPreMarket()
-    engine = StrategyEngine(mgr, cfg, tmp_store, mock_alpaca)
+    engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
 
     # Seed indicator for TQQQ
     ind = RollingIndicators("TQQQ", scfg)
@@ -362,7 +363,7 @@ def test_i_indicator_updated_before_position_manager(mock_alpaca, tmp_store):
     mgr.on_bar = _track_mgr
 
     runner = SessionRunner(
-        config=cfg, broker=mock_alpaca, state_store=tmp_store,
+        config=cfg, broker=mock_broker, state_store=tmp_store,
         bar_cache=_StubBarCache(), bar_router=router,
         pre_market_job=pre, strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,
@@ -381,7 +382,7 @@ def test_i_indicator_updated_before_position_manager(mock_alpaca, tmp_store):
     assert call_order.index("indicator") < call_order.index("position_manager")
 
 
-def test_j_orb_window_bars_not_dispatched_to_engine(mock_alpaca, tmp_store):
+def test_j_orb_window_bars_not_dispatched_to_engine(mock_broker, tmp_store):
     """Bars with timestamp < 10:00 ET are cached but NOT sent to the engine."""
     from orb_live.config.live_config import load_live_config
     from orb_live.execution.order_policy import MarketableLimitPolicy
@@ -398,15 +399,15 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_alpaca, tmp_store):
         session_kill_loss_pct=0.03, max_concurrent_positions=0,
         max_gross_exposure_pct=2.0, max_position_pct=0.50,
     )
-    policy = MarketableLimitPolicy(mock_alpaca, exc, tmp_store, _sleep=lambda _: None)
-    gate   = RiskGate(exc, tmp_store, mock_alpaca)
+    policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
+    gate   = RiskGate(exc, tmp_store, mock_broker)
     gate.session_start(100_000.0, TDATE)
 
     mgr = LivePositionManager(
-        broker=mock_alpaca, policy=policy, state_store=tmp_store,
+        broker=mock_broker, policy=policy, state_store=tmp_store,
         risk_gate=gate, indicators_store={}, config=cfg.strategy_config,
     )
-    engine = StrategyEngine(mgr, cfg, tmp_store, mock_alpaca)
+    engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
     engine.new_session(TDATE)
 
     p2 = _make_p2("TQQQ")
@@ -415,7 +416,7 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_alpaca, tmp_store):
 
     cache = _StubBarCache()
     runner = SessionRunner(
-        config=cfg, broker=mock_alpaca, state_store=tmp_store,
+        config=cfg, broker=mock_broker, state_store=tmp_store,
         bar_cache=cache, bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,

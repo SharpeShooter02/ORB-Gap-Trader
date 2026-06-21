@@ -235,6 +235,7 @@ def compute_entry(
     tp1_mult_override: Optional[float] = None,
     tp2_mult_override: Optional[float] = None,
     size_mult: float = 1.0,
+    v1_base_notional: Optional[float] = None,
 ) -> dict:
     """
     Compute entry price, stop, TP levels, and share counts.
@@ -257,7 +258,10 @@ def compute_entry(
         tp2_price  = entry_price - orb_range * tp2_mult
         stop_price = (orb["midpoint"] + orb["high"]) / 2.0
 
-    if config.use_risk_based_sizing:
+    if v1_base_notional is not None and v1_base_notional > 0:
+        # v1 sizing: $1k-per-unit baseline × per-symbol multiplier (size_mult)
+        shares = math.floor(v1_base_notional * size_mult / entry_price)
+    elif config.use_risk_based_sizing:
         stop_dist = abs(entry_price - stop_price)
         if stop_dist > 0:
             shares = math.floor(

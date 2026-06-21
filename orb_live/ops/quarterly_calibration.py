@@ -28,7 +28,7 @@ from orb_live.ops.long_term_logging import _load_parquet, _parquet_path, _archiv
 
 def recompute_adv_baselines(
     universe: list[str],
-    alpaca,
+    broker,
     archive_base: Path,
     today: Optional[date] = None,
     logger=None,
@@ -48,7 +48,7 @@ def recompute_adv_baselines(
 
     for sym in universe:
         try:
-            df = alpaca.get_daily_bars(sym, lookback_days=365)
+            df = broker.get_daily_bars(sym, lookback_days=365)
             if df is None or df.empty:
                 continue
             df = df.copy()
@@ -283,7 +283,7 @@ def audit_universe_changes(
 
 def run_full_calibration(
     universe: list[str],
-    alpaca,
+    broker,
     archive_base: Path,
     today: Optional[date] = None,
     logger=None,
@@ -292,7 +292,7 @@ def run_full_calibration(
     if logger:
         logger.info("quarterly_calibration_start", date=str(today))
 
-    recompute_adv_baselines(universe, alpaca, archive_base, today, logger)
+    recompute_adv_baselines(universe, broker, archive_base, today, logger)
     detect_metric_drift(archive_base, today, logger)
     audit_universe_changes(universe, archive_base, today, logger)
 
@@ -311,16 +311,17 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "full"
 
     from orb_live.config.live_config import load_live_config
-    from orb_live.data.alpaca_client import build_client_from_env
+    from orb_live.data.ib_client import build_client_from_env
 
     cfg     = load_live_config()
-    alpaca  = build_client_from_env(paper=True)
+    broker  = build_client_from_env(paper=True)
+    broker.connect()
     archive = cfg.data_dir.parent / "archive"
 
     if cmd == "full":
-        run_full_calibration(cfg.symbols, alpaca, archive, logger=_log)
+        run_full_calibration(cfg.symbols, broker, archive, logger=_log)
     elif cmd == "adv":
-        recompute_adv_baselines(cfg.symbols, alpaca, archive, logger=_log)
+        recompute_adv_baselines(cfg.symbols, broker, archive, logger=_log)
     elif cmd == "drift":
         detect_metric_drift(archive, logger=_log)
     elif cmd == "universe":

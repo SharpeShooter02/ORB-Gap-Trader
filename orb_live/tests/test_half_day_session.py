@@ -54,7 +54,7 @@ class _FullDayClock:
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-def test_1_half_day_sleeps_to_1300_not_1600(mock_alpaca, tmp_store):
+def test_1_half_day_sleeps_to_1300_not_1600(mock_broker, tmp_store):
     """
     _wait_until_eod on a half-day should sleep until 13:00 ET, not 16:00.
 
@@ -69,7 +69,7 @@ def test_1_half_day_sleeps_to_1300_not_1600(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        broker=mock_alpaca,
+        broker=mock_broker,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),
@@ -92,7 +92,7 @@ def test_1_half_day_sleeps_to_1300_not_1600(mock_alpaca, tmp_store):
     )
 
 
-def test_2_full_day_sleeps_to_1600(mock_alpaca, tmp_store):
+def test_2_full_day_sleeps_to_1600(mock_broker, tmp_store):
     """
     _wait_until_eod on a normal day should sleep until 16:00 ET.
 
@@ -106,7 +106,7 @@ def test_2_full_day_sleeps_to_1600(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        broker=mock_alpaca,
+        broker=mock_broker,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),
@@ -129,7 +129,7 @@ def test_2_full_day_sleeps_to_1600(mock_alpaca, tmp_store):
     )
 
 
-def test_3_half_day_warning_fires(mock_alpaca, tmp_store):
+def test_3_half_day_warning_fires(mock_broker, tmp_store):
     """
     _wait_until_eod must log 'half_day_detected' when is_half_day() is True.
     """
@@ -147,7 +147,7 @@ def test_3_half_day_warning_fires(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        broker=mock_alpaca,
+        broker=mock_broker,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),
@@ -168,7 +168,7 @@ def test_3_half_day_warning_fires(mock_alpaca, tmp_store):
     )
 
 
-def test_4_full_day_no_half_day_warning(mock_alpaca, tmp_store):
+def test_4_full_day_no_half_day_warning(mock_broker, tmp_store):
     """
     _wait_until_eod must NOT log 'half_day_detected' on a normal trading day.
     """
@@ -186,7 +186,7 @@ def test_4_full_day_no_half_day_warning(mock_alpaca, tmp_store):
 
     runner = SessionRunner(
         config=cfg,
-        broker=mock_alpaca,
+        broker=mock_broker,
         state_store=tmp_store,
         bar_cache=SimpleNamespace(),
         bar_router=_StubRouter(),

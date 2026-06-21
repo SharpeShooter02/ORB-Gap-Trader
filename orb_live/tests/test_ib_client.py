@@ -6,6 +6,7 @@ All IB Gateway network calls are mocked so these run without a live connection.
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
@@ -53,6 +54,7 @@ class TestConnectLifecycle:
             MockIB.return_value = mock_ib
 
             client = IBClient(paper=True, host="127.0.0.1", port=4002, client_id=3)
+            client._allow_delayed_data = True  # skip SPY validation in this plumbing test
             client.connect()
 
             mock_ib.connect.assert_called_once_with(
@@ -439,6 +441,7 @@ def _make_trade(
     order_type: str = "LMT",
     total_qty: float = 100.0,
     lmt_price: float = 50.0,
+    aux_price: float = 0.0,
     status: str = "Submitted",
     filled: float = 0.0,
     avg_fill: float = 0.0,
@@ -451,6 +454,7 @@ def _make_trade(
         orderType=order_type,
         totalQuantity=total_qty,
         lmtPrice=lmt_price,
+        auxPrice=aux_price,
         orderRef=order_ref,
     )
     order_status = SimpleNamespace(
@@ -528,6 +532,42 @@ class TestSubmitLimitOrder:
         with pytest.raises(ConnectionError):
             client.submit_limit_order("TQQQ", "buy", 10, 50.0)
 
+    def test_submit_limit_order_blocks_until_terminal(self):
+        client = _client_with_asset("TQQQ")
+        pending   = _make_trade(order_id=50, status="PendingSubmit")
+        submitted = _make_trade(order_id=50, status="Submitted")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = pending
+        client._ib.trades.side_effect       = [[pending], [submitted]]
+
+        result = client.submit_limit_order("TQQQ", "buy", 10, 50.0)
+        assert result["status"]     == "new"
+        assert result["status_raw"] == "Submitted"
+
+    def test_submit_limit_order_returns_on_validation_error(self):
+        client = _client_with_asset("TQQQ")
+        pending  = _make_trade(order_id=51, status="PendingSubmit")
+        inactive = _make_trade(order_id=51, status="Inactive")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = pending
+        client._ib.trades.side_effect       = [[pending], [inactive]]
+
+        result = client.submit_limit_order("TQQQ", "buy", 10, 50.0)
+        assert result["status"]     == "rejected"
+        assert result["status_raw"] == "Inactive"
+
+    def test_submit_limit_order_timeout_logs_warning(self):
+        client = _client_with_asset("TQQQ")
+        client._log = MagicMock()
+        pending = _make_trade(order_id=52, status="PendingSubmit")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = pending
+        client._ib.trades.return_value      = [pending]
+
+        result = client.submit_limit_order("TQQQ", "buy", 10, 50.0, timeout=0.1)
+        assert result["status"] == "new"  # PendingSubmit → "new"
+        client._log.warning.assert_called_once()
+
 
 class TestSubmitMarketOrder:
     def test_submit_market_order_uses_marketorder(self):
@@ -554,6 +594,185 @@ class TestSubmitMarketOrder:
             client.submit_market_order("BADTICKER", "buy", 10)
 
 
+class TestSubmitStopOrder:
+    def test_submit_stop_order_builds_stp_order(self):
+        """placeOrder must receive a StopOrder with correct fields."""
+        from ib_async import StopOrder
+        client = _client_with_asset("SOXL")
+        trade  = _make_trade(order_id=70, action="SELL", order_type="STP",
+                              lmt_price=0.0, status="Submitted")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = trade
+
+        client.submit_stop_order("SOXL", "sell", 100, 185.50)
+
+        client._ib.placeOrder.assert_called_once()
+        _, placed_order = client._ib.placeOrder.call_args[0]
+        assert isinstance(placed_order, StopOrder)
+        assert placed_order.orderType  == "STP"
+        assert placed_order.auxPrice   == pytest.approx(185.50)
+        assert float(placed_order.totalQuantity) == pytest.approx(100.0)
+        assert placed_order.action     == "SELL"
+        assert placed_order.lmtPrice   != pytest.approx(185.50)  # no limit price on stop-market
+
+    def test_submit_stop_order_blocks_until_terminal(self):
+        client = _client_with_asset("SOXL")
+        pending   = _make_trade(order_id=71, status="PendingSubmit")
+        submitted = _make_trade(order_id=71, status="Submitted")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = pending
+        client._ib.trades.side_effect       = [[pending], [submitted]]
+
+        result = client.submit_stop_order("SOXL", "sell", 1, 185.50)
+        assert result["status"]     == "new"
+        assert result["status_raw"] == "Submitted"
+
+    def test_submit_stop_order_raises_if_disconnected(self):
+        client = _client_with_asset("SOXL")
+        client._ib.isConnected.return_value = False
+
+        with pytest.raises(ConnectionError):
+            client.submit_stop_order("SOXL", "sell", 1, 185.50)
+
+    def test_submit_stop_order_raises_if_not_tradable(self):
+        client = _client_with_asset("BADTICKER", tradable=False)
+        client._ib.isConnected.return_value = True
+
+        with pytest.raises(ValueError, match="not tradable"):
+            client.submit_stop_order("BADTICKER", "sell", 1, 50.0)
+
+    def test_submit_stop_order_buy_side(self):
+        from ib_async import StopOrder
+        client = _client_with_asset("SOXL")
+        trade  = _make_trade(order_id=72, action="BUY", order_type="STP",
+                              lmt_price=0.0, status="Submitted")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = trade
+
+        client.submit_stop_order("SOXL", "buy", 50, 10.0)
+
+        _, placed_order = client._ib.placeOrder.call_args[0]
+        assert placed_order.action == "BUY"
+
+    def test_submit_stop_order_caches_order(self):
+        client = _client_with_asset("SOXL")
+        trade  = _make_trade(order_id=73, order_type="STP", lmt_price=0.0,
+                              status="Submitted")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = trade
+
+        client.submit_stop_order("SOXL", "sell", 1, 185.50)
+        assert 73 in client._order_cache
+
+    def test_submit_stop_order_includes_client_order_id(self):
+        from ib_async import StopOrder
+        client = _client_with_asset("SOXL")
+        trade  = _make_trade(order_id=74, order_type="STP", lmt_price=0.0,
+                              order_ref="test-123", status="Submitted")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = trade
+
+        client.submit_stop_order("SOXL", "sell", 1, 185.50,
+                                  client_order_id="test-123")
+
+        _, placed_order = client._ib.placeOrder.call_args[0]
+        assert placed_order.orderRef == "test-123"
+
+
+class TestModifyStopOrder:
+    def _client(self) -> IBClient:
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+        client._ib.isConnected.return_value = True
+        return client
+
+    def _stop_trade(self, order_id=80, qty=100.0, aux_price=95.0, status="Submitted"):
+        return _make_trade(
+            order_id=order_id, order_type="STP",
+            total_qty=qty, aux_price=aux_price, lmt_price=0.0, status=status,
+        )
+
+    def test_modify_stop_order_updates_quantity(self):
+        client = self._client()
+        trade = self._stop_trade(order_id=80, qty=100.0, aux_price=95.0)
+        client._ib.trades.return_value = [trade]
+        client._ib.placeOrder.return_value = trade
+
+        client.modify_stop_order("80", new_qty=20)
+
+        assert float(trade.order.totalQuantity) == pytest.approx(20.0)
+        assert float(trade.order.auxPrice) == pytest.approx(95.0)  # unchanged
+        client._ib.placeOrder.assert_called_once_with(trade.contract, trade.order)
+
+    def test_modify_stop_order_updates_stop_price(self):
+        client = self._client()
+        trade = self._stop_trade(order_id=81, qty=100.0, aux_price=95.0)
+        client._ib.trades.return_value = [trade]
+        client._ib.placeOrder.return_value = trade
+
+        client.modify_stop_order("81", new_stop_price=100.10)
+
+        assert float(trade.order.auxPrice) == pytest.approx(100.10)
+        assert float(trade.order.totalQuantity) == pytest.approx(100.0)  # unchanged
+
+    def test_modify_stop_order_updates_both(self):
+        client = self._client()
+        trade = self._stop_trade(order_id=82, qty=100.0, aux_price=95.0)
+        client._ib.trades.return_value = [trade]
+        client._ib.placeOrder.return_value = trade
+
+        client.modify_stop_order("82", new_qty=65, new_stop_price=100.10)
+
+        assert float(trade.order.totalQuantity) == pytest.approx(65.0)
+        assert float(trade.order.auxPrice) == pytest.approx(100.10)
+        assert client._ib.placeOrder.call_count == 1  # single atomic call
+
+    def test_modify_stop_order_raises_if_disconnected(self):
+        client = self._client()
+        client._ib.isConnected.return_value = False
+
+        with pytest.raises(ConnectionError):
+            client.modify_stop_order("80", new_qty=20)
+
+    def test_modify_stop_order_raises_if_no_changes_requested(self):
+        client = self._client()
+        with pytest.raises(ValueError, match="requires new_qty or new_stop_price"):
+            client.modify_stop_order("80")
+
+    def test_modify_stop_order_raises_if_order_not_found(self):
+        client = self._client()
+        client._ib.trades.return_value = []
+
+        with pytest.raises(KeyError, match="9999"):
+            client.modify_stop_order("9999", new_qty=10)
+
+    def test_modify_stop_order_raises_if_terminal(self):
+        client = self._client()
+        for terminal_status in ("Filled", "Cancelled"):
+            trade = self._stop_trade(order_id=83, status=terminal_status)
+            client._ib.trades.return_value = [trade]
+            with pytest.raises(ValueError, match="terminal state"):
+                client.modify_stop_order("83", new_qty=10)
+
+    def test_modify_stop_order_raises_if_not_stop_order(self):
+        client = self._client()
+        trade = _make_trade(order_id=84, order_type="LMT", status="Submitted")
+        client._ib.trades.return_value = [trade]
+
+        with pytest.raises(ValueError, match="non-stop order"):
+            client.modify_stop_order("84", new_stop_price=100.0)
+
+    def test_modify_stop_order_caches_updated_state(self):
+        client = self._client()
+        trade = self._stop_trade(order_id=85, qty=100.0, aux_price=95.0)
+        client._ib.trades.return_value = [trade]
+        client._ib.placeOrder.return_value = trade
+
+        client.modify_stop_order("85", new_qty=20, new_stop_price=100.10)
+
+        assert 85 in client._order_cache
+
+
 class TestGetOrder:
     def test_get_order_from_cache(self):
         with patch("orb_live.data.ib_client.IB"):
@@ -577,12 +796,13 @@ class TestCancelOrder:
         with patch("orb_live.data.ib_client.IB"):
             client = IBClient(paper=True)
 
-        trade = _make_trade(order_id=10)
-        client._ib.trades.return_value = [trade]
+        submitted = _make_trade(order_id=10, status="Submitted")
+        cancelled = _make_trade(order_id=10, status="Cancelled")
+        client._ib.trades.side_effect = [[submitted], [cancelled]]
 
         result = client.cancel_order("10")
 
-        client._ib.cancelOrder.assert_called_once_with(trade.order)
+        client._ib.cancelOrder.assert_called_once_with(submitted.order)
         assert result is True
 
     def test_cancel_unknown_silent(self):
@@ -593,6 +813,65 @@ class TestCancelOrder:
 
         result = client.cancel_order("9999")  # no exception
         assert result is True
+
+    def test_cancel_blocks_until_terminal(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        submitted = _make_trade(order_id=10, status="Submitted")
+        cancelled = _make_trade(order_id=10, status="Cancelled")
+        # Stays Submitted for one extra poll, then transitions.
+        client._ib.trades.side_effect = [[submitted], [submitted], [cancelled]]
+
+        result = client.cancel_order("10")
+        assert result is True
+        client._ib.cancelOrder.assert_called_once()
+
+    def test_cancel_fill_race_returns_false(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        submitted = _make_trade(order_id=11, status="Submitted")
+        filled    = _make_trade(order_id=11, status="Filled")
+        client._ib.trades.side_effect = [[submitted], [filled]]
+
+        result = client.cancel_order("11")
+        assert result is False
+
+    def test_cancel_timeout_returns_false(self):
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+        mock_log = MagicMock()
+        client._log = mock_log
+        submitted = _make_trade(order_id=12, status="Submitted")
+        client._ib.trades.return_value = [submitted]
+
+        result = client.cancel_order("12", timeout=0.1)
+        assert result is False
+        mock_log.warning.assert_called_once()
+
+    def test_pending_cancel_not_terminal(self):
+        """PendingCancel must not cause cancel_order to return early."""
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
+
+        pending   = _make_trade(order_id=13, status="PendingCancel")
+        cancelled = _make_trade(order_id=13, status="Cancelled")
+        client._ib.trades.side_effect = [[pending], [pending], [cancelled]]
+
+        result = client.cancel_order("13")
+        assert result is True
+
+    def test_nan_bid_ask_sizes(self):
+        """NaN bid_size / ask_size must be coerced to 0, not raise ValueError."""
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=10.0, ask=10.5, bid_size=float("nan"), ask_size=float("nan"),
+        )
+        result = client.get_latest_quote("TQQQ")
+        assert result["bid_size"] == 0
+        assert result["ask_size"] == 0
 
 
 class TestOrderEventHandlers:
@@ -665,11 +944,12 @@ class TestTradeToDict:
         d = client._trade_to_dict(trade)
         assert d["limit_price"] is None
 
-    def test_trade_to_dict_has_alpaca_id_alias(self):
+    def test_trade_to_dict_has_id_key(self):
         client = self._client()
         trade  = _make_trade(order_id=77)
         d = client._trade_to_dict(trade)
-        assert d["alpaca_id"] == d["id"] == "77"
+        assert d["id"] == "77"
+        assert "alpaca_id" not in d
 
     def test_trade_to_dict_status_is_normalized(self):
         client = self._client()
@@ -792,9 +1072,11 @@ class TestBarAggregator:
 
 # ── get_intraday_bars ─────────────────────────────────────────────────────────
 
-def _make_hist_bar(epoch: float, open=100.0, high=101.0, low=99.0,
+def _make_hist_bar(dt: datetime, open=100.0, high=101.0, low=99.0,
                    close=100.5, volume=500.0) -> SimpleNamespace:
-    return SimpleNamespace(date=str(int(epoch)), open=open, high=high,
+    # formatDate=1: bar.date is a naive datetime in local exchange time (ET).
+    naive = dt.replace(tzinfo=None) if dt.tzinfo else dt
+    return SimpleNamespace(date=naive, open=open, high=high,
                            low=low, close=close, volume=volume)
 
 
@@ -828,27 +1110,27 @@ class TestGetIntradayBars:
         start = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
         end   = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
 
-        ts_before = datetime(2026, 5, 19, 9, 15, tzinfo=_ET).timestamp()
-        ts_in     = datetime(2026, 5, 19, 9, 35, tzinfo=_ET).timestamp()
-        ts_after  = datetime(2026, 5, 19, 10, 15, tzinfo=_ET).timestamp()
+        dt_before = datetime(2026, 5, 19, 9, 15)   # naive ET — before window
+        dt_in     = datetime(2026, 5, 19, 9, 35)   # naive ET — inside window
+        dt_after  = datetime(2026, 5, 19, 10, 15)  # naive ET — after window
 
         client = self._client()
         client._ib.reqHistoricalData.return_value = [
-            _make_hist_bar(ts_before),
-            _make_hist_bar(ts_in),
-            _make_hist_bar(ts_after),
+            _make_hist_bar(dt_before),
+            _make_hist_bar(dt_in),
+            _make_hist_bar(dt_after),
         ]
 
         df = client.get_intraday_bars("TQQQ", start, end)
         assert len(df) == 1
 
     def test_get_intraday_bars_dataframe_shape(self):
-        start   = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
-        end     = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
-        ts_in   = datetime(2026, 5, 19, 9, 35, tzinfo=_ET).timestamp()
+        start  = datetime(2026, 5, 19, 9, 30, tzinfo=_ET)
+        end    = datetime(2026, 5, 19, 10, 0, tzinfo=_ET)
+        dt_in  = datetime(2026, 5, 19, 9, 35)  # naive ET — inside window
 
         client = self._client()
-        client._ib.reqHistoricalData.return_value = [_make_hist_bar(ts_in)]
+        client._ib.reqHistoricalData.return_value = [_make_hist_bar(dt_in)]
 
         df = client.get_intraday_bars("TQQQ", start, end)
 
@@ -887,10 +1169,10 @@ class TestGetIntradayBars:
         client.get_intraday_bars("TQQQ", past_end - timedelta(minutes=30), past_end)
 
         call_kwargs = client._ib.reqHistoricalData.call_args.kwargs
-        end_str = call_kwargs.get("endDateTime")
-        assert end_str.endswith("US/Eastern")
-        assert " " in end_str        # space between date and time, not dash
-        assert not end_str.startswith("-")
+        end_dt = call_kwargs.get("endDateTime")
+        # A datetime object is passed directly (ib_async formats it correctly).
+        assert isinstance(end_dt, datetime)
+        assert end_dt != ""
 
     def test_get_intraday_bars_returns_empty_on_timeout(self):
         client = self._client()
@@ -1043,14 +1325,13 @@ class TestGetLatestQuote:
         assert result["bid"] == pytest.approx(9.0)
         assert result["ask"] == pytest.approx(9.0)
 
-    def test_get_latest_quote_all_zero_returns_zero(self):
+    def test_get_latest_quote_all_zero_raises(self):
         client = self._client()
         client._ib.reqMktData.return_value = _make_ticker(
             bid=0.0, ask=0.0, last=0.0, close=0.0,
         )
-        result = client.get_latest_quote("TQQQ")
-        assert result["bid"] == 0.0
-        assert result["ask"] == 0.0
+        with pytest.raises(RuntimeError, match="all-zero"):
+            client.get_latest_quote("TQQQ")
 
     def test_get_latest_quote_cancels_market_data(self):
         client = self._client()
@@ -1069,17 +1350,87 @@ class TestGetLatestQuote:
         with pytest.raises(ConnectionError):
             client.get_latest_quote("TQQQ")
 
-    def test_get_latest_quote_exception_returns_zero(self):
+    def test_get_latest_quote_exception_raises(self):
         client = self._client()
         client._ib.reqMktData.side_effect = Exception("network error")
-        result = client.get_latest_quote("TQQQ")
-        assert result == {"bid": 0.0, "ask": 0.0, "bid_size": 0, "ask_size": 0, "ts": None}
+        with pytest.raises(Exception, match="network error"):
+            client.get_latest_quote("TQQQ")
 
     def test_get_latest_quote_cancels_even_on_exception(self):
         client = self._client()
         client._ib.reqMktData.side_effect = Exception("boom")
-        client.get_latest_quote("TQQQ")
+        with pytest.raises(Exception):
+            client.get_latest_quote("TQQQ")
         client._ib.cancelMktData.assert_called_once()
+
+
+# ── Market data guards ────────────────────────────────────────────────────────
+
+class TestMarketDataGuards:
+    def _client(self, tradable: bool = True) -> IBClient:
+        client = _client_with_asset("TQQQ", tradable=tradable)
+        client._ib.isConnected.return_value = True
+        return client
+
+    def test_on_ib_error_10089_sets_degraded(self):
+        client = self._client()
+        assert not client._market_data_degraded
+        client._on_ib_error(1, 10089, "Market data farm connection is OK:ddfarm1", None)
+        assert client._market_data_degraded
+
+    def test_on_ib_error_other_code_does_not_set_degraded(self):
+        client = self._client()
+        client._on_ib_error(1, 200, "No security definition has been found", None)
+        assert not client._market_data_degraded
+
+    def test_get_latest_quote_raises_when_degraded(self):
+        client = self._client()
+        client._market_data_degraded = True
+        with pytest.raises(RuntimeError, match="10089"):
+            client.get_latest_quote("TQQQ")
+
+    def test_get_latest_quote_raises_on_zero_quote(self):
+        client = self._client()
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=0.0, ask=0.0, last=0.0, close=0.0,
+        )
+        with pytest.raises(RuntimeError, match="all-zero"):
+            client.get_latest_quote("TQQQ")
+
+    def test_allow_delayed_overrides_zero_check(self):
+        client = self._client()
+        client._allow_delayed_data = True
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=0.0, ask=0.0, last=0.0, close=0.0,
+        )
+        result = client.get_latest_quote("TQQQ")
+        assert result["bid"] == 0.0
+        assert result["ask"] == 0.0
+
+    def test_allow_delayed_overrides_degraded_check(self):
+        client = self._client()
+        client._allow_delayed_data = True
+        client._market_data_degraded = True
+        client._ib.reqMktData.return_value = _make_ticker(bid=10.0, ask=10.5)
+        result = client.get_latest_quote("TQQQ")
+        assert result["bid"] == pytest.approx(10.0)
+
+    def test_validate_subscription_raises_connection_error_on_zero(self):
+        """_validate_subscription translates RuntimeError → ConnectionError."""
+        client = _client_with_asset("SPY")
+        client._ib.isConnected.return_value = True
+        client._ib.reqMktData.return_value = _make_ticker(
+            bid=0.0, ask=0.0, last=0.0, close=0.0,
+        )
+        with pytest.raises(ConnectionError, match="validation"):
+            client._validate_subscription()
+
+    def test_validate_subscription_passes_on_good_quote(self):
+        """_validate_subscription does not raise when SPY returns a real quote."""
+        client = _client_with_asset("SPY")
+        client._ib.isConnected.return_value = True
+        client._ib.reqMktData.return_value = _make_ticker(bid=500.0, ask=500.1)
+        client._validate_subscription()  # must not raise
 
 
 # ── subscribe_bars / stop_bars_stream ─────────────────────────────────────────
@@ -1174,3 +1525,42 @@ class TestStopBarsStream:
         with patch("orb_live.data.ib_client.IB"):
             client = IBClient(paper=True)
         client.stop_bars_stream()  # must not raise
+
+
+# ── Heartbeat ─────────────────────────────────────────────────────────────────
+
+class TestHeartbeat:
+    def _client(self) -> IBClient:
+        with patch("orb_live.data.ib_client.IB"):
+            return IBClient(paper=True)
+
+    def test_heartbeat_ok_when_no_event_yet(self):
+        client = self._client()
+        result = client.check_heartbeat()
+        assert result["ok"] is True
+        assert result["seconds_since_event"] is None
+
+    def test_heartbeat_updates_on_order_status_event(self):
+        client = self._client()
+        trade = _make_trade(order_id=1, status="Submitted")
+        client._on_order_status(trade)
+        result = client.check_heartbeat()
+        assert result["ok"] is True
+        assert result["seconds_since_event"] is not None
+        assert result["seconds_since_event"] < 1.0
+
+    def test_heartbeat_detects_stale_connection(self):
+        client = self._client()
+        client._last_event_time    = time.time() - 120
+        client._heartbeat_timeout  = 60
+        result = client.check_heartbeat()
+        assert result["ok"] is False
+        assert result["seconds_since_event"] >= 60
+
+    def test_heartbeat_resets_after_disconnect(self):
+        client = self._client()
+        client._last_event_time = time.time()
+        client.disconnect()
+        result = client.check_heartbeat()
+        assert result["ok"] is True
+        assert result["seconds_since_event"] is None

@@ -11,9 +11,9 @@
 | Python   | 3.11+   | 3.12        |
 | Network  | 100 Mbps| 1 Gbps (low-latency) |
 
-Alpaca's WebSocket feed requires a stable outbound connection to
-`stream.data.alpaca.markets`. AWS `us-east-1`, Vultr Newark, or Linode
-Newark are good choices for US market latency.
+IB Gateway requires a stable outbound connection to Interactive Brokers.
+AWS `us-east-1`, Vultr Newark, or Linode Newark are good choices for
+US market latency.
 
 ---
 
@@ -55,10 +55,10 @@ python -m pytest orb_live/tests/ -q   # should be 150 passed
 Create `/opt/orb-live/.env` (never commit this file):
 
 ```bash
-# Alpaca credentials (live trading)
-ALPACA_API_KEY=your_key_here
-ALPACA_SECRET_KEY=your_secret_here
-ALPACA_PAPER=false          # set to "true" for paper trading
+# IB Gateway connection (IBClient reads these via build_client_from_env)
+IB_HOST=127.0.0.1
+IB_PORT=4001                # 4001=live, 4002=paper
+IB_CLIENT_ID=1
 
 # Alert webhook (Discord/Telegram/Slack)
 ALERT_WEBHOOK_URL=https://discord.com/api/webhooks/...

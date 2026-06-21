@@ -1,7 +1,7 @@
 """
 data/bar_cache.py — In-session 1-minute bar accumulator.
 
-Collects bars from Alpaca's data stream during the ORB window and provides
+Collects bars from the broker's data stream during the ORB window and provides
 a clean DataFrame interface for ORB high/low computation.
 """
 

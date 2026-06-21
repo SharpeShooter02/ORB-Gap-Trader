@@ -99,6 +99,9 @@ class Position:
     max_fav:             float = 0.0
     post_tp2_mfe:        float = 0.0
 
+    # Exchange stop order
+    stop_order_id:       Optional[str] = None  # IB order_id of resting stop-market
+
     # Lifecycle
     status:              str  = "open"   # entering/open/unfilled/closed
     decision_reason:     str  = ""
@@ -173,7 +176,7 @@ class LivePositionManager:
           - Risk gate rejects the entry.
           - Fill qty == 0 (unfilled).
 
-        Position sizing uses CURRENT ACCOUNT EQUITY from alpaca.get_account(),
+        Position sizing uses CURRENT ACCOUNT EQUITY from broker.get_account(),
         not a per-symbol equity pool (intentional divergence from backtest).
         """
         cfg = self._config
@@ -284,6 +287,55 @@ class LivePositionManager:
         pos.status             = "open"
         self._positions[symbol] = pos
         self._update_pos(pos)
+
+        # ── Place exchange-resident stop ──────────────────────────────────────
+        # Stop-market at the strategy's computed stop_price. Sits at IB;
+        # fires automatically if price crosses the level. Matches the
+        # backtest's guaranteed-exit-at-stop assumption.
+        exit_side = "sell" if pos.direction == 1 else "buy"
+        try:
+            stop_order = self._broker.submit_stop_order(
+                symbol=symbol,
+                side=exit_side,
+                qty=fill.qty,
+                stop_price=pos.stop_price,
+                client_order_id=f"stop-{symbol}-{pos.session_date.isoformat()}",
+                timeout=5.0,
+            )
+            pos.stop_order_id = stop_order.get("id")
+            self._update_pos(pos)
+            if self._log:
+                self._log.info(
+                    "stop_placed",
+                    symbol=symbol,
+                    stop_order_id=pos.stop_order_id,
+                    stop_price=pos.stop_price,
+                    qty=fill.qty,
+                )
+        except Exception as exc:
+            # Stop placement failure is SERIOUS — position is live without
+            # protection. Flatten immediately rather than continuing exposed.
+            if self._log:
+                self._log.critical(
+                    "stop_placement_failed_flattening_position",
+                    symbol=symbol,
+                    stop_price=pos.stop_price,
+                    error=str(exc),
+                )
+            try:
+                self._broker.submit_market_order(symbol, exit_side, fill.qty)
+            except Exception as flatten_exc:
+                if self._log:
+                    self._log.critical(
+                        "emergency_flatten_failed",
+                        symbol=symbol,
+                        error=str(flatten_exc),
+                    )
+            pos.status      = "closed"
+            pos.exit_reason = "STOP_PLACEMENT_FAILED"
+            self._update_pos(pos)
+            return None
+
         return pos
 
     # ── Per-bar processing ─────────────────────────────────────────────────────
@@ -305,6 +357,27 @@ class LivePositionManager:
         pos = self._positions.get(symbol)
         if pos is None or pos.status != "open":
             return
+
+        # ── Poll exchange-resident stop status ───────────────────────────────
+        # If IB fired the stop since the last bar, early-return so no TP/EMA
+        # logic runs against a position that's already closed at the exchange.
+        # On polling failure, log a warning and continue — the bar-by-bar stop
+        # check below acts as backup (removed in the next prompt).
+        if pos.stop_order_id:
+            try:
+                stop_state  = self._broker.get_order(pos.stop_order_id)
+                stop_status = stop_state.get("status", "")
+                if stop_status in ("filled", "partially_filled"):
+                    self._handle_stop_fired(pos, symbol, stop_state)
+                    return
+            except Exception as exc:
+                if self._log:
+                    self._log.warning(
+                        "stop_poll_failed",
+                        symbol=symbol,
+                        stop_order_id=pos.stop_order_id,
+                        error=str(exc),
+                    )
 
         cfg = self._config
         lo  = float(bar.get("low",   bar["close"]))
@@ -353,6 +426,33 @@ class LivePositionManager:
                 if pos.tp2_shares == 0:
                     pos.tp2_hit = True   # TP3 fires directly after TP1
                 self._update_pos(pos)
+
+                # Propagate post-TP1 stop change to IB: qty drops to remaining,
+                # price moves to breakeven (or trail init). Both changes atomic.
+                if pos.stop_order_id:
+                    try:
+                        self._broker.modify_stop_order(
+                            order_id=pos.stop_order_id,
+                            new_qty=pos.remaining,
+                            new_stop_price=pos.current_stop,
+                            timeout=5.0,
+                        )
+                        if self._log:
+                            self._log.info(
+                                "stop_modified_after_tp1",
+                                symbol=symbol,
+                                new_qty=pos.remaining,
+                                new_stop_price=pos.current_stop,
+                            )
+                    except Exception as exc:
+                        if self._log:
+                            self._log.error(
+                                "stop_modify_failed_attempting_recovery",
+                                symbol=symbol,
+                                stop_order_id=pos.stop_order_id,
+                                error=str(exc),
+                            )
+                        self._recover_stop_after_modify_failure(pos, symbol)
 
         # ── 4. trail_after_tp1 peak/stop update ──────────────────────────────
         if pos.tp1_hit and pos.use_trail_atp1 and pos.remaining > 0:
@@ -404,23 +504,6 @@ class LivePositionManager:
                 pos.tp3_hit = True
                 return
 
-        # ── 7. Stop-loss check ────────────────────────────────────────────────
-        if pos.remaining > 0:
-            stop_hit = (
-                (pos.direction == 1  and lo <= pos.current_stop) or
-                (pos.direction == -1 and hi >= pos.current_stop)
-            )
-            if stop_hit:
-                exit_reason = (
-                    "TRAIL"    if (pos.use_trail_atp1 and pos.tp1_hit) else
-                    "TP1_ONLY" if pos.tp1_hit else
-                    "STOP"
-                )
-                self._exit_all(pos, symbol, leg="stop",
-                               ref_price=pos.current_stop,
-                               exit_reason=exit_reason, exit_time=ts,
-                               session_date=pos.session_date)
-
     # ── EOD sweep (runner calls this at 16:00:30 ET) ──────────────────────────
 
     def flatten_all(self, reason: str = "manual") -> None:
@@ -456,7 +539,7 @@ class LivePositionManager:
 
     def reconcile_from_broker(self) -> dict[str, str]:
         """
-        Sync state_store open_positions against Alpaca broker on startup
+        Sync state_store open_positions against broker on startup
         or after detected network gap.
 
         Returns {symbol: action_taken} for every symbol examined.
@@ -517,6 +600,133 @@ class LivePositionManager:
 
     # ── Private helpers ────────────────────────────────────────────────────────
 
+    def _handle_stop_fired(
+        self, pos: Position, symbol: str, stop_state: dict
+    ) -> None:
+        """Called when polling detects the exchange-resident stop has filled.
+
+        IB already executed the stop. This method does NOT submit orders —
+        it records what happened and archives the trade.
+
+        exit_reason mirrors the (now-removed) bar-by-bar check:
+          TRAIL    → TP1 hit and trail mode active
+          TP1_ONLY → TP1 hit in breakeven mode
+          STOP     → stopped out before any TP1
+        """
+        fill_qty   = int(float(stop_state.get("filled_qty",   0) or 0))
+        fill_price = float(stop_state.get("filled_avg_price", 0) or 0)
+
+        exit_reason = (
+            "TRAIL"    if (pos.use_trail_atp1 and pos.tp1_hit) else
+            "TP1_ONLY" if pos.tp1_hit else
+            "STOP"
+        )
+
+        pos.status      = "closed"
+        pos.exit_reason = exit_reason
+        pos.exit_price  = fill_price if fill_price > 0 else pos.current_stop
+        pos.exit_time   = datetime.now(UTC)
+        pos.remaining   = max(0, pos.remaining - fill_qty)
+
+        self._update_pos(pos)
+        self._store.save_closed_trade(
+            trade_date=pos.session_date,
+            symbol=symbol,
+            direction=pos.direction,
+            entry_price=pos.actual_entry_price,
+            exit_price=pos.exit_price,
+            qty=pos.entry_shares,
+            exit_reason=exit_reason,
+            opened_at=datetime.now(UTC),
+        )
+        self._store.close_position(symbol)
+        del self._positions[symbol]
+
+        if self._log:
+            self._log.info(
+                "stop_fired_via_polling",
+                symbol=symbol,
+                stop_order_id=pos.stop_order_id,
+                fill_qty=fill_qty,
+                fill_price=fill_price,
+                intended_stop=pos.current_stop,
+                exit_reason=exit_reason,
+            )
+
+    def _recover_stop_after_modify_failure(
+        self, pos: Position, symbol: str
+    ) -> None:
+        """Recovery when modify_stop_order fails after TP1.
+
+        1. Cancel the now-incorrect stop (wrong qty/price)
+        2. Place a fresh stop with correct post-TP1 params
+        3. If both fail, flatten the remaining position via market exit
+        """
+        exit_side = "sell" if pos.direction == 1 else "buy"
+
+        try:
+            self._broker.cancel_order(pos.stop_order_id, timeout=5.0)
+        except Exception as exc:
+            if self._log:
+                self._log.critical(
+                    "stop_cancel_failed_during_recovery",
+                    symbol=symbol,
+                    error=str(exc),
+                )
+
+        try:
+            fresh = self._broker.submit_stop_order(
+                symbol=symbol,
+                side=exit_side,
+                qty=pos.remaining,
+                stop_price=pos.current_stop,
+                client_order_id=f"stop-recovered-{symbol}-{pos.session_date.isoformat()}",
+                timeout=5.0,
+            )
+            pos.stop_order_id = fresh.get("id")
+            self._update_pos(pos)
+            if self._log:
+                self._log.warning(
+                    "stop_replaced_after_modify_failure",
+                    symbol=symbol,
+                    new_stop_order_id=pos.stop_order_id,
+                )
+            return
+        except Exception as exc:
+            if self._log:
+                self._log.critical(
+                    "stop_replace_failed_flattening_remaining",
+                    symbol=symbol,
+                    error=str(exc),
+                )
+
+        # Last resort: flatten the unprotected remaining position
+        try:
+            self._broker.submit_market_order(symbol, exit_side, pos.remaining)
+        except Exception as flatten_exc:
+            if self._log:
+                self._log.critical(
+                    "emergency_flatten_failed_after_modify_recovery",
+                    symbol=symbol,
+                    error=str(flatten_exc),
+                )
+        pos.status        = "closed"
+        pos.exit_reason   = "STOP_RECOVERY_FAILED"
+        pos.stop_order_id = None
+        self._update_pos(pos)
+        self._store.save_closed_trade(
+            trade_date=pos.session_date,
+            symbol=symbol,
+            direction=pos.direction,
+            entry_price=pos.actual_entry_price,
+            exit_price=pos.current_stop,
+            qty=pos.entry_shares,
+            exit_reason="STOP_RECOVERY_FAILED",
+            opened_at=datetime.now(UTC),
+        )
+        self._store.close_position(symbol)
+        del self._positions[symbol]
+
     def _exit_partial(
         self,
         pos: Position,
@@ -542,7 +752,7 @@ class LivePositionManager:
             # Market fallback
             fallback_side = "sell" if pos.direction == 1 else "buy"
             order = self._broker.submit_market_order(symbol, fallback_side, qty)
-            order_id = order.get("alpaca_id", "")
+            order_id = order.get("id", "")
             from orb_live.execution.order_policy import Fill
             from datetime import timezone
             f = Fill(symbol=symbol, side=fallback_side, qty=qty,
@@ -574,7 +784,7 @@ class LivePositionManager:
                 order = self._broker.submit_market_order(
                     symbol, side, pos.remaining
                 )
-                order_id = order.get("alpaca_id", "")
+                order_id = order.get("id", "")
                 from orb_live.execution.order_policy import Fill
                 fill = Fill(symbol=symbol, side=side, qty=pos.remaining,
                             avg_price=0.0, order_id=order_id, leg=leg,
@@ -594,7 +804,7 @@ class LivePositionManager:
             from orb_live.execution.order_policy import Fill
             fill = Fill(symbol=symbol, side=side, qty=pos.remaining,
                         avg_price=ref_price or 0.0,
-                        order_id=order.get("alpaca_id", ""), leg=leg,
+                        order_id=order.get("id", ""), leg=leg,
                         attempts=99, reason="market_fallback",
                         submitted_at=datetime.now(UTC), filled_at=None)
 
@@ -662,6 +872,7 @@ class LivePositionManager:
             entry_shares=pos.entry_shares,
             remaining=pos.remaining,
             current_stop=pos.current_stop,
+            stop_order_id=pos.stop_order_id,
             tp1_hit=pos.tp1_hit,
             tp2_hit=pos.tp2_hit,
             tp3_hit=pos.tp3_hit,

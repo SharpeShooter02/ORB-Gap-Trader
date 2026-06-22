@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional, TYPE_CHECKING
 
+import pandas as pd
+
 if TYPE_CHECKING:
     from orb_live.config.live_config import LiveConfig
     from orb_live.core.state_store import StateStore
@@ -120,7 +122,7 @@ class PreFlightCheck:
     # ── Gate C: ADV / dollar volume ───────────────────────────────────────────
 
     def _check_liquidity(
-        self, symbol: str, current_equity: float
+        self, symbol: str, current_equity: float, session_date: date
     ) -> tuple[Optional[str], CandidateDecision]:
         """Fetch ADV data and verify dollar-volume thresholds."""
         cfg      = self._cfg
@@ -145,10 +147,16 @@ class PreFlightCheck:
         bars = bars.copy()
         bars["dv"] = bars["close"] * bars["volume"]
 
-        dv_window = bars["dv"].tail(cfg.adv_lookback_days)
+        # Exclude any partial current-day bar so we only use completed sessions.
+        if "date" in bars.columns:
+            completed = bars[bars["date"] < pd.Timestamp(session_date)]
+        else:
+            completed = bars
+
+        dv_window = completed["dv"].tail(cfg.adv_lookback_days)
         adv_dollars  = float(dv_window.mean()) if len(dv_window) > 0 else 0.0
         min_dv_20d   = float(dv_window.min())  if len(dv_window) > 0 else 0.0
-        yesterday_dv = float(bars["dv"].iloc[-1])
+        yesterday_dv = float(completed["dv"].iloc[-1]) if not completed.empty else 0.0
 
         decision.adv_dollars  = adv_dollars
         decision.min_dv_20d   = min_dv_20d
@@ -215,7 +223,7 @@ class PreFlightCheck:
             return decision
 
         # C: ADV / dollar volume
-        liquidity_fail, decision = self._check_liquidity(symbol, current_equity)
+        liquidity_fail, decision = self._check_liquidity(symbol, current_equity, session_date)
         decision.warnings.extend(asset_warnings)
 
         if liquidity_fail:

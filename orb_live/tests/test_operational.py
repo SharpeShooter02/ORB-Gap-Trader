@@ -488,3 +488,84 @@ def test_op15_token_refresh_failure_enters_degraded_mode():
     assert "ws_token_refresh_failed" in log_events, (
         f"Expected 'ws_token_refresh_failed' CRITICAL log; got: {log_events}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PreFlightCheck / liquidity gate tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_liquidity_check(cfg=None, bars_df=None, asset=None):
+    """Return a PreFlightCheck wired to a mock broker with canned daily bars."""
+    from orb_live.signals.liquidity import PreFlightCheck
+    from orb_live.config.live_config import LiveConfig
+    from unittest.mock import MagicMock
+    import pandas as pd
+
+    if cfg is None:
+        cfg = LiveConfig()
+
+    client = MagicMock()
+    if bars_df is None:
+        bars_df = pd.DataFrame({
+            "date":   pd.date_range("2026-05-15", periods=22),
+            "close":  [100.0] * 22,
+            "volume": [50_000] * 22,
+        })
+    client.get_daily_bars.return_value = bars_df
+    client.get_asset.return_value = asset or {"tradable": True, "status": "active"}
+
+    store = MagicMock()
+    store.save_liquidity_metrics = MagicMock()
+
+    return PreFlightCheck(cfg, store, client)
+
+
+def test_lq01_low_yesterday_dv_passes_with_neutralized_defaults():
+    """Under v1 defaults (min_yesterday_dv_ratio=0.0, min_dollar_volume_floor=0.0),
+    a candidate whose yesterday DV is far below 20-day ADV still passes Gate C."""
+    import pandas as pd
+    from datetime import date
+
+    # Normal ADV ~$5M/day; yesterday was near-zero (1 share)
+    dates  = pd.date_range("2026-05-18", periods=21)
+    closes = [100.0] * 21
+    vols   = [50_000] * 20 + [1]       # yesterday: 1 share traded
+    bars   = pd.DataFrame({"date": dates, "close": closes, "volume": vols})
+
+    pfc = _make_liquidity_check(bars_df=bars)
+    decision = pfc.check("TQQQ", date(2026, 6, 22), +1, 100_000.0, persist=False)
+
+    assert decision.passed, (
+        f"Expected passed=True with neutralized defaults, got reason={decision.reason!r}"
+    )
+
+
+def test_lq02_partial_current_day_bar_excluded_from_adv():
+    """
+    If get_daily_bars returns a row for the current session_date (partial bar),
+    yesterday_dv must be taken from the last COMPLETED session, not that row.
+    """
+    import pandas as pd
+    from datetime import date
+
+    session_date = date(2026, 6, 22)
+
+    # 20 completed days (DV = $5M each), plus partial current-day bar (DV = $10B).
+    completed_dates = list(pd.date_range("2026-05-22", periods=20))
+    all_dates  = completed_dates + [pd.Timestamp("2026-06-22")]
+    volumes    = [50_000] * 20 + [100_000_000]   # current-day bar: massive
+    bars = pd.DataFrame({
+        "date":   all_dates,
+        "close":  [100.0] * 21,
+        "volume": volumes,
+    })
+
+    pfc = _make_liquidity_check(bars_df=bars)
+    decision = pfc.check("TQQQ", session_date, +1, 100_000.0, persist=False)
+
+    # yesterday_dv must be from the last completed day ($5M), not the current-day bar ($10B)
+    expected_yesterday_dv = 100.0 * 50_000
+    assert decision.yesterday_dv == pytest.approx(expected_yesterday_dv), (
+        f"Expected yesterday_dv={expected_yesterday_dv} (prior completed day), "
+        f"got {decision.yesterday_dv} (partial-day bar leaked through)"
+    )

@@ -208,10 +208,13 @@ class LiveConfig:
     max_position_pct:        float = 0.50
 
     # ── Pre-flight liquidity check ────────────────────────────────────────────
+    # Gate C thresholds are neutralised for v1: the only liquidity filter is the
+    # universe-build ADV floor.  Set to non-zero values to re-enable per-trade
+    # liquidity gating (reversible via overrides.yaml).
     adv_lookback_days:       int   = 20
-    min_dollar_volume_floor: float = 1_000_000.0
-    max_pct_of_adv:          float = 0.01
-    min_yesterday_dv_ratio:  float = 0.30
+    min_dollar_volume_floor: float = 0.0
+    max_pct_of_adv:          float = 1.0
+    min_yesterday_dv_ratio:  float = 0.0
     allow_htb_shorts:        bool  = False
 
     # ── Risk management ───────────────────────────────────────────────────────

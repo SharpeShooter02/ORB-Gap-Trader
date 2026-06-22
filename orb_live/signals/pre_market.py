@@ -43,6 +43,7 @@ from orb_live.strategy.v1_strategy import (
     SessionPlan,
     GAP_THRESHOLD,
 )
+from orb_live.core.calendar import is_trading_day
 
 if TYPE_CHECKING:
     from orb_live.config.live_config import LiveConfig
@@ -187,10 +188,10 @@ class PreMarketJob:
             prior_etf_close[symbol] = prior_close
 
             # 4. Convert ETF gap to UL-equivalent gap.
-            #    ETF gap ≈ UL gap × leverage × direction_factor
-            #    UL gap  = ETF_signed_gap / leverage (direction cancels)
+            #    Non-inverse: ETF_gap =  UL_gap × leverage → UL_gap =  ETF_signed / leverage
+            #    Inverse:     ETF_gap = -UL_gap × leverage → UL_gap = -ETF_signed / leverage
             etf_gap_signed = etf_gap_abs * gap_direction
-            ul_gap         = etf_gap_signed / inst.leverage
+            ul_gap = (-etf_gap_signed if inst.inverse else etf_gap_signed) / inst.leverage
 
             # 5. ETF-level gap size check (same as |ul_gap| ≥ GAP_THRESHOLD).
             if etf_gap_abs < effective_gap_filter:
@@ -228,13 +229,40 @@ class PreMarketJob:
                 cfg, underlying_data,
                 logger=warn_cap,
             )
-            ps_spec    = cfg.prior_session_filters.get(symbol)
+            ps_spec       = cfg.prior_session_filters.get(symbol)
             ul_sym_for_db = ps_spec[0] if ps_spec else None
+
+            # Compute PS metrics for the state store (mirrors check_prior_session_filter).
+            ul_move_pct   = None
+            threshold_pct = float(ps_spec[1]) if ps_spec else None
+            if ul_sym_for_db:
+                _ul_df = underlying_data.get(ul_sym_for_db)
+                if _ul_df is not None:
+                    _pr = _ul_df[_ul_df["date"] < pd.Timestamp(trade_date)].tail(2)
+                    if len(_pr) >= 2:
+                        _c1, _c2 = float(_pr.iloc[-1]["close"]), float(_pr.iloc[-2]["close"])
+                        if _c2 > 0:
+                            _ps_raw = (_c1 - _c2) / _c2
+                            _is_inv = len(ps_spec) == 3 and ps_spec[2] is True
+                            _eff    = -gap_direction if _is_inv else gap_direction
+                            ul_move_pct = _ps_raw * _eff
+
             self._store.save_ps_filter(
                 trade_date, symbol,
                 underlying=ul_sym_for_db,
+                ul_move_pct=ul_move_pct,
+                threshold_pct=threshold_pct,
                 passed=ps_passed,
             )
+
+            if self._log:
+                self._log.info(
+                    "ps_filter",
+                    symbol=symbol, ul=ul_sym_for_db,
+                    ul_move=round(ul_move_pct, 4) if ul_move_pct is not None else None,
+                    threshold=round(threshold_pct, 4) if threshold_pct is not None else None,
+                    passed=ps_passed,
+                )
 
             if not ps_passed:
                 continue
@@ -288,12 +316,30 @@ class PreMarketJob:
         results  = [r for r in preliminary_p1 if r.symbol in plan_set]
 
         if self._log:
+            for _ul, _gap in sorted(overnight_gaps.items()):
+                _ptc  = prior_two_closes.get(_ul)
+                _c_t1 = round(_ptc[0], 4) if _ptc else None
+                _c_t2 = round(_ptc[1], 4) if _ptc else None
+                _ul_df = underlying_data.get(_ul)
+                _d_t1 = _d_t2 = None
+                if _ul_df is not None:
+                    _pr = _ul_df[_ul_df["date"] < pd.Timestamp(trade_date)].tail(2)
+                    if len(_pr) >= 2:
+                        _d_t1 = str(_pr.iloc[-1]["date"].date())
+                        _d_t2 = str(_pr.iloc[-2]["date"].date())
+                self._log.info(
+                    "ul_overnight_gap",
+                    ul=_ul, ul_gap=round(_gap, 4),
+                    c_t1=_c_t1, d_t1=_d_t1,
+                    c_t2=_c_t2, d_t2=_d_t2,
+                )
             self._log.info(
                 "plan_session_complete",
                 n_candidates=len(self._session_plan.candidates),
                 regime=self._session_plan.regime,
                 n_uls=self._session_plan.n_uls,
                 cap_factor=round(self._session_plan.cap_factor, 4),
+                overnight_uls=sorted(overnight_gaps.keys()),
             )
 
         return results
@@ -429,6 +475,11 @@ class PreMarketJob:
             try:
                 df = self._ul.get(ul_sym)
                 if not df.empty:
+                    # Filter to NYSE trading days so crypto weekend/holiday bars
+                    # do not contaminate the PS-filter prior-two-closes window.
+                    # Aligns live behaviour with the backtester, which sources UL
+                    # data from equity-calendar feeds with no weekend rows.
+                    df = df[df["date"].dt.date.apply(is_trading_day)].copy()
                     data[ul_sym] = df
                 else:
                     warn = self._ul.warn_if_stale(ul_sym, trade_date)

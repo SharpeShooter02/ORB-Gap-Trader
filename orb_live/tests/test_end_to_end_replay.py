@@ -175,7 +175,14 @@ def test_a_tp1_only_full_exit(mock_broker, tmp_store):
     assert pos.tp2_shares == 0
     assert pos.tp3_shares == 0
 
-    # Bar 1: hi=105 ≥ TP1=104 → all shares exit; remaining=0 → position closes
+    # Simulate IB filling the OCA TP1 limit order (happens when hi crosses tp1_price).
+    # The MockBroker's get_order will then auto-cancel the stop (OCA behavior).
+    if pos.tp1_order_id:
+        mock_broker._orders[pos.tp1_order_id]["status"]           = "filled"
+        mock_broker._orders[pos.tp1_order_id]["filled_qty"]       = str(pos.entry_shares)
+        mock_broker._orders[pos.tp1_order_id]["filled_avg_price"] = str(pos.tp1_price)
+
+    # Bar 1: hi=105 ≥ TP1=104 → OCA TP1 confirmed filled → position closes
     bar1 = _bar(_et(10, 2), close=104.5, hi=105.0, lo=103.5)
     ind.on_bar(bar1)
     mgr.on_bar("TQQQ", bar1, _et(10, 2))

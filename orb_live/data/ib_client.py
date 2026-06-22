@@ -606,6 +606,58 @@ class IBClient(BrokerClient):
         self._order_cache[order_int] = self._trade_to_dict(trade)
         return self._wait_for_submit_terminal(order_int, trade.contract.symbol, timeout)
 
+    def submit_oca_pair(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        tp1_limit_price: float,
+        stop_price: float,
+        oca_group: Optional[str] = None,
+        tif: str = "day",
+        timeout: float = 5.0,
+    ) -> dict:
+        """Place a TP1 limit order and a protective stop as an IB OCA group.
+
+        When one leg fills, IB cancels the sibling at the exchange (ocaType=1).
+        Returns {"tp1_order_id": str, "stop_order_id": str, "oca_group": str}.
+        """
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        contract = self._contract_cache[symbol]
+        action   = "SELL" if side.lower() == "sell" else "BUY"
+        oca_tag  = oca_group or (
+            f"OCA-{symbol}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        )
+
+        tp1_order           = LimitOrder(action, qty, tp1_limit_price)
+        tp1_order.ocaGroup  = oca_tag
+        tp1_order.ocaType   = 1   # cancel remaining with block
+        tp1_order.tif       = tif.upper()
+
+        stop_order          = StopOrder(action, qty, stop_price)
+        stop_order.ocaGroup = oca_tag
+        stop_order.ocaType  = 1
+        stop_order.tif      = tif.upper()
+
+        tp1_trade  = self._ib.placeOrder(contract, tp1_order)
+        stop_trade = self._ib.placeOrder(contract, stop_order)
+
+        tp1_int  = tp1_trade.order.orderId
+        stop_int = stop_trade.order.orderId
+        self._order_cache[tp1_int]  = self._trade_to_dict(tp1_trade)
+        self._order_cache[stop_int] = self._trade_to_dict(stop_trade)
+
+        self._wait_for_submit_terminal(tp1_int,  symbol, timeout)
+        self._wait_for_submit_terminal(stop_int, symbol, timeout)
+
+        return {
+            "tp1_order_id":  str(tp1_int),
+            "stop_order_id": str(stop_int),
+            "oca_group":     oca_tag,
+        }
+
     def cancel_all_orders(self) -> int:
         raise NotImplementedError("IBClient.cancel_all_orders — Part 4")
 

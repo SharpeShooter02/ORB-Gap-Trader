@@ -101,6 +101,11 @@ class Position:
 
     # Exchange stop order
     stop_order_id:       Optional[str] = None  # IB order_id of resting stop-market
+    tp1_order_id:        Optional[str] = None  # IB order_id of OCA TP1 limit leg
+
+    # OCA diagnostic / partial-fill tracking (in-memory only; crash recovery via reconcile)
+    tp1_crossed_unfilled_bars: int = 0  # consecutive bars price past TP1 but fill unconfirmed
+    tp1_filled_qty_booked:     int = 0  # cumulative OCA-filled shares booked (partial-fill guard)
 
     # Lifecycle
     status:              str  = "open"   # entering/open/unfilled/closed
@@ -288,33 +293,57 @@ class LivePositionManager:
         self._positions[symbol] = pos
         self._update_pos(pos)
 
-        # ── Place exchange-resident stop ──────────────────────────────────────
-        # Stop-market at the strategy's computed stop_price. Sits at IB;
-        # fires automatically if price crosses the level. Matches the
-        # backtest's guaranteed-exit-at-stop assumption.
-        exit_side = "sell" if pos.direction == 1 else "buy"
+        # ── Place exchange-resident stop (or OCA bracket for v1 TP1-only) ──────
+        # v1 TP1-only: all shares exit at TP1, so place TP1 limit + stop as
+        # an IB OCA group.  When TP1 fills, IB cancels the stop at the exchange
+        # with no client-side cancel race.  Multi-leg positions use the legacy
+        # stop-only path (stop gets modified after TP1 partial exit).
+        exit_side    = "sell" if pos.direction == 1 else "buy"
+        is_tp1_only  = (pos.tp1_shares == fill.qty)   # all shares allocated to TP1
+        place_failed = False
         try:
-            stop_order = self._broker.submit_stop_order(
-                symbol=symbol,
-                side=exit_side,
-                qty=fill.qty,
-                stop_price=pos.stop_price,
-                client_order_id=f"stop-{symbol}-{pos.session_date.isoformat()}",
-                timeout=5.0,
-            )
-            pos.stop_order_id = stop_order.get("id")
-            self._update_pos(pos)
-            if self._log:
-                self._log.info(
-                    "stop_placed",
+            if is_tp1_only and hasattr(self._broker, "submit_oca_pair"):
+                oca = self._broker.submit_oca_pair(
                     symbol=symbol,
-                    stop_order_id=pos.stop_order_id,
-                    stop_price=pos.stop_price,
+                    side=exit_side,
                     qty=fill.qty,
+                    tp1_limit_price=pos.tp1_price,
+                    stop_price=pos.stop_price,
+                    timeout=5.0,
                 )
+                pos.tp1_order_id  = oca.get("tp1_order_id")
+                pos.stop_order_id = oca.get("stop_order_id")
+                if self._log:
+                    self._log.info(
+                        "oca_bracket_placed",
+                        symbol=symbol,
+                        tp1_order_id=pos.tp1_order_id,
+                        stop_order_id=pos.stop_order_id,
+                        tp1_price=pos.tp1_price,
+                        stop_price=pos.stop_price,
+                        qty=fill.qty,
+                    )
+            else:
+                stop_order = self._broker.submit_stop_order(
+                    symbol=symbol,
+                    side=exit_side,
+                    qty=fill.qty,
+                    stop_price=pos.stop_price,
+                    client_order_id=f"stop-{symbol}-{pos.session_date.isoformat()}",
+                    timeout=5.0,
+                )
+                pos.stop_order_id = stop_order.get("id")
+                if self._log:
+                    self._log.info(
+                        "stop_placed",
+                        symbol=symbol,
+                        stop_order_id=pos.stop_order_id,
+                        stop_price=pos.stop_price,
+                        qty=fill.qty,
+                    )
+            self._update_pos(pos)
         except Exception as exc:
-            # Stop placement failure is SERIOUS — position is live without
-            # protection. Flatten immediately rather than continuing exposed.
+            place_failed = True
             if self._log:
                 self._log.critical(
                     "stop_placement_failed_flattening_position",
@@ -322,6 +351,8 @@ class LivePositionManager:
                     stop_price=pos.stop_price,
                     error=str(exc),
                 )
+        if place_failed:
+            # Position is live without protection — flatten immediately.
             try:
                 self._broker.submit_market_order(symbol, exit_side, fill.qty)
             except Exception as flatten_exc:
@@ -405,80 +436,270 @@ class LivePositionManager:
 
         # ── 3. TP1 check ──────────────────────────────────────────────────────
         if not pos.tp1_hit and pos.tp1_shares > 0:
-            tp1_hit = (
-                (pos.direction == 1  and hi >= pos.tp1_price) or
-                (pos.direction == -1 and lo <= pos.tp1_price)
-            )
-            if tp1_hit:
-                self._exit_partial(pos, symbol, leg="tp1", qty=pos.tp1_shares,
-                                   ref_price=pos.tp1_price,
-                                   session_date=pos.session_date)
-                pos.remaining -= pos.tp1_shares
-                pos.tp1_hit   = True
-                if pos.use_trail_atp1:
-                    pos.trail_atp1_peak = pos.tp1_price
-                    if pos.direction == 1:
-                        pos.current_stop = pos.tp1_price - pos.trail_atp1_dist
-                    else:
-                        pos.current_stop = pos.tp1_price + pos.trail_atp1_dist
-                else:
-                    pos.current_stop = pos.actual_entry_price  # breakeven
-                if pos.tp2_shares == 0:
-                    pos.tp2_hit = True   # TP3 fires directly after TP1
-                self._update_pos(pos)
+            tp1_realized_price = pos.tp1_price   # updated from confirmed fill below
+            tp1_hit            = False
+            _tp1_qty           = pos.tp1_shares  # shares to book; OCA partials reduce this
+            _tp1_terminal      = True            # False for OCA partially_filled
 
-                # All shares exited at TP1 (v1 TP1-only mode) — cancel the
-                # now-unneeded stop and record the closed trade immediately.
-                if pos.remaining == 0:
-                    try:
-                        if pos.stop_order_id:
-                            self._broker.cancel_order(pos.stop_order_id)
-                    except Exception:
-                        pass
-                    pos.status      = "closed"
-                    pos.exit_reason = "TP1_ONLY"
-                    pos.exit_time   = ts
-                    pos.exit_price  = pos.tp1_price
-                    self._update_pos(pos)
-                    self._store.save_closed_trade(
-                        trade_date=pos.session_date, symbol=symbol,
-                        direction=pos.direction,
-                        entry_price=pos.actual_entry_price,
-                        exit_price=pos.tp1_price,
-                        qty=pos.entry_shares,
-                        exit_reason="TP1_ONLY",
-                        opened_at=datetime.now(UTC),
+            if pos.tp1_order_id:
+                # OCA bracket: IB placed a resting TP1 limit at entry.
+                # Only commit on confirmed fill — never synthesize from bar price.
+                # A wick to TP1 that reverses before IB confirms causes double-booking
+                # and a zombie position with remaining=0 but status="open".
+                try:
+                    tp1_state  = self._broker.get_order(pos.tp1_order_id)
+                    tp1_status = tp1_state.get("status", "")
+                    if tp1_status in ("filled", "partially_filled"):
+                        current_filled = int(float(tp1_state.get("filled_qty", 0) or 0))
+                        newly_filled   = current_filled - pos.tp1_filled_qty_booked
+                        if newly_filled > 0:
+                            raw_float = float(tp1_state.get("filled_avg_price", 0) or 0)
+                            if raw_float == 0.0:
+                                # Re-poll once: filled_avg_price may lag the status
+                                # event by one TWS round-trip (~50 ms).
+                                try:
+                                    import time
+                                    time.sleep(0.05)
+                                    tp1_state2 = self._broker.get_order(pos.tp1_order_id)
+                                    raw_float  = float(
+                                        tp1_state2.get("filled_avg_price", 0) or 0
+                                    )
+                                except Exception:
+                                    pass
+                            tp1_realized_price        = raw_float if raw_float > 0 else pos.tp1_price
+                            _tp1_qty                  = newly_filled
+                            _tp1_terminal             = (tp1_status == "filled")
+                            tp1_hit                   = True
+                            pos.tp1_filled_qty_booked = current_filled
+                        # else: no new fills since last poll; wait for next bar
+                    else:
+                        # Order still working — count bars where price has already
+                        # crossed so a thin-book / mis-priced limit surfaces as an alert.
+                        bar_crossed = (
+                            (pos.direction == 1  and hi >= pos.tp1_price) or
+                            (pos.direction == -1 and lo <= pos.tp1_price)
+                        )
+                        if bar_crossed:
+                            pos.tp1_crossed_unfilled_bars += 1
+                            if pos.tp1_crossed_unfilled_bars >= 2:
+                                self._store.log_alert(
+                                    level="CRITICAL",
+                                    message=(
+                                        f"OCA TP1 limit not filling after "
+                                        f"{pos.tp1_crossed_unfilled_bars} bars past "
+                                        f"target for {symbol} "
+                                        f"(tp1_order_id={pos.tp1_order_id}, "
+                                        f"tp1_price={pos.tp1_price:.4f})"
+                                    ),
+                                    category="tp1_limit_not_filling",
+                                    symbol=symbol,
+                                    trade_date=pos.session_date,
+                                )
+                        else:
+                            pos.tp1_crossed_unfilled_bars = 0
+                except Exception as exc:
+                    if self._log:
+                        self._log.warning(
+                            "tp1_order_poll_failed",
+                            symbol=symbol,
+                            tp1_order_id=pos.tp1_order_id,
+                            error=str(exc),
+                        )
+                    # Poll failure: wait for next bar; do not synthesize a fill.
+            else:
+                # Non-OCA path: bar-price trigger submits exit via _exit_partial.
+                tp1_hit = (
+                    (pos.direction == 1  and hi >= pos.tp1_price) or
+                    (pos.direction == -1 and lo <= pos.tp1_price)
+                )
+
+            if tp1_hit:
+                if pos.tp1_order_id:
+                    # ── OCA path: IB already executed the exit ────────────────
+                    # Book only the newly-confirmed shares (_tp1_qty ≤ tp1_shares).
+                    pnl = (
+                        (tp1_realized_price - pos.actual_entry_price)
+                        * _tp1_qty * pos.direction
                     )
-                    self._store.close_position(symbol)
-                    del self._positions[symbol]
+                    self._gate.record_realized_pnl(pnl)
+                    pos.remaining -= _tp1_qty
+                    if _tp1_terminal:
+                        # Full fill: advance state flags and move stop to breakeven.
+                        pos.tp1_hit = True
+                        if pos.use_trail_atp1:
+                            pos.trail_atp1_peak = pos.tp1_price
+                            if pos.direction == 1:
+                                pos.current_stop = pos.tp1_price - pos.trail_atp1_dist
+                            else:
+                                pos.current_stop = pos.tp1_price + pos.trail_atp1_dist
+                        else:
+                            pos.current_stop = pos.actual_entry_price  # breakeven
+                        if pos.tp2_shares == 0:
+                            pos.tp2_hit = True
+                    self._update_pos(pos)
+
+                    # ── All shares exited at TP1 (v1 TP1-only mode) ──────────
+                    if pos.remaining == 0:
+                        # Verify IB cancelled the stop sibling via OCA.
+                        stop_cancelled = False
+                        try:
+                            stop_state = self._broker.get_order(pos.stop_order_id)
+                            stop_cancelled = stop_state.get("status") in (
+                                "cancelled", "filled", "ApiCancelled", "Inactive"
+                            )
+                        except Exception as exc:
+                            if self._log:
+                                self._log.warning(
+                                    "stop_poll_failed_after_tp1",
+                                    symbol=symbol,
+                                    stop_order_id=pos.stop_order_id,
+                                    error=str(exc),
+                                )
+                        if not stop_cancelled:
+                            self._store.log_alert(
+                                level="CRITICAL",
+                                message=(
+                                    f"OCA stop sibling not cancelled after TP1 fill "
+                                    f"for {symbol} (stop_order_id={pos.stop_order_id}) "
+                                    "— position left for reconcile_from_broker"
+                                ),
+                                category="oca_cancel_failure",
+                                symbol=symbol,
+                                trade_date=pos.session_date,
+                            )
+                            if self._log:
+                                self._log.critical(
+                                    "oca_stop_not_cancelled_after_tp1",
+                                    symbol=symbol,
+                                    stop_order_id=pos.stop_order_id,
+                                )
+                            return   # position retained; reconcile will close it
+
+                        pos.status      = "closed"
+                        pos.exit_reason = "TP1_ONLY"
+                        pos.exit_time   = ts
+                        pos.exit_price  = pos.tp1_price
+                        self._update_pos(pos)
+                        self._store.save_closed_trade(
+                            trade_date=pos.session_date, symbol=symbol,
+                            direction=pos.direction,
+                            entry_price=pos.actual_entry_price,
+                            exit_price=pos.tp1_price,
+                            realized_exit_price=tp1_realized_price,
+                            qty=pos.entry_shares,
+                            exit_reason="TP1_ONLY",
+                            opened_at=datetime.now(UTC),
+                        )
+                        self._store.close_position(symbol)
+                        del self._positions[symbol]
+                        return
+
+                    # Partial OCA fill (remaining > 0): the resting OCA stop leg
+                    # remains exchange-resident protection — do not modify it.
                     return
 
-                # Propagate post-TP1 stop change to IB: qty drops to remaining,
-                # price moves to breakeven (or trail init). Both changes atomic.
-                if pos.stop_order_id:
-                    try:
-                        self._broker.modify_stop_order(
-                            order_id=pos.stop_order_id,
-                            new_qty=pos.remaining,
-                            new_stop_price=pos.current_stop,
-                            timeout=5.0,
-                        )
-                        if self._log:
-                            self._log.info(
-                                "stop_modified_after_tp1",
+                else:
+                    # ── Non-OCA path: submit marketable-limit exit now ────────
+                    fill = self._exit_partial(pos, symbol, leg="tp1", qty=pos.tp1_shares,
+                                              ref_price=pos.tp1_price,
+                                              session_date=pos.session_date)
+                    tp1_realized_price = fill.avg_price
+
+                    pos.remaining -= pos.tp1_shares
+                    pos.tp1_hit   = True
+                    if pos.use_trail_atp1:
+                        pos.trail_atp1_peak = pos.tp1_price
+                        if pos.direction == 1:
+                            pos.current_stop = pos.tp1_price - pos.trail_atp1_dist
+                        else:
+                            pos.current_stop = pos.tp1_price + pos.trail_atp1_dist
+                    else:
+                        pos.current_stop = pos.actual_entry_price  # breakeven
+                    if pos.tp2_shares == 0:
+                        pos.tp2_hit = True   # TP3 fires directly after TP1
+                    self._update_pos(pos)
+
+                    # ── All shares exited at TP1 (non-OCA TP1-only mode) ──────
+                    if pos.remaining == 0:
+                        # Explicitly cancel the now-unneeded stop.
+                        cancelled = False
+                        try:
+                            if pos.stop_order_id:
+                                cancelled = bool(
+                                    self._broker.cancel_order(pos.stop_order_id)
+                                )
+                        except Exception as exc:
+                            if self._log:
+                                self._log.warning(
+                                    "stop_cancel_exception_after_tp1",
+                                    symbol=symbol,
+                                    stop_order_id=pos.stop_order_id,
+                                    error=str(exc),
+                                )
+                        if pos.stop_order_id and not cancelled:
+                            self._store.log_alert(
+                                level="CRITICAL",
+                                message=(
+                                    f"cancel_order failed for stop {pos.stop_order_id} "
+                                    f"after TP1 full exit ({symbol}) — position left "
+                                    "for reconcile_from_broker; live stop may still be active"
+                                ),
+                                category="stop_cancel_failure",
                                 symbol=symbol,
+                                trade_date=pos.session_date,
+                            )
+                            if self._log:
+                                self._log.critical(
+                                    "stop_cancel_failed_after_tp1_leaving_for_reconcile",
+                                    symbol=symbol,
+                                    stop_order_id=pos.stop_order_id,
+                                )
+                            return   # position retained; reconcile will close it
+
+                        pos.status      = "closed"
+                        pos.exit_reason = "TP1_ONLY"
+                        pos.exit_time   = ts
+                        pos.exit_price  = pos.tp1_price
+                        self._update_pos(pos)
+                        self._store.save_closed_trade(
+                            trade_date=pos.session_date, symbol=symbol,
+                            direction=pos.direction,
+                            entry_price=pos.actual_entry_price,
+                            exit_price=pos.tp1_price,
+                            realized_exit_price=tp1_realized_price,
+                            qty=pos.entry_shares,
+                            exit_reason="TP1_ONLY",
+                            opened_at=datetime.now(UTC),
+                        )
+                        self._store.close_position(symbol)
+                        del self._positions[symbol]
+                        return
+
+                    # Non-OCA multi-leg: propagate post-TP1 stop change to IB.
+                    if pos.stop_order_id:
+                        try:
+                            self._broker.modify_stop_order(
+                                order_id=pos.stop_order_id,
                                 new_qty=pos.remaining,
                                 new_stop_price=pos.current_stop,
+                                timeout=5.0,
                             )
-                    except Exception as exc:
-                        if self._log:
-                            self._log.error(
-                                "stop_modify_failed_attempting_recovery",
-                                symbol=symbol,
-                                stop_order_id=pos.stop_order_id,
-                                error=str(exc),
-                            )
-                        self._recover_stop_after_modify_failure(pos, symbol)
+                            if self._log:
+                                self._log.info(
+                                    "stop_modified_after_tp1",
+                                    symbol=symbol,
+                                    new_qty=pos.remaining,
+                                    new_stop_price=pos.current_stop,
+                                )
+                        except Exception as exc:
+                            if self._log:
+                                self._log.error(
+                                    "stop_modify_failed_attempting_recovery",
+                                    symbol=symbol,
+                                    stop_order_id=pos.stop_order_id,
+                                    error=str(exc),
+                                )
+                            self._recover_stop_after_modify_failure(pos, symbol)
 
         # ── 4. trail_after_tp1 peak/stop update ──────────────────────────────
         if pos.tp1_hit and pos.use_trail_atp1 and pos.remaining > 0:
@@ -661,6 +882,7 @@ class LivePositionManager:
             direction=pos.direction,
             entry_price=pos.actual_entry_price,
             exit_price=pos.exit_price,
+            realized_exit_price=fill_price if fill_price > 0 else pos.current_stop,
             qty=pos.entry_shares,
             exit_reason=exit_reason,
             opened_at=datetime.now(UTC),
@@ -746,6 +968,7 @@ class LivePositionManager:
             direction=pos.direction,
             entry_price=pos.actual_entry_price,
             exit_price=pos.current_stop,
+            realized_exit_price=pos.current_stop,
             qty=pos.entry_shares,
             exit_reason="STOP_RECOVERY_FAILED",
             opened_at=datetime.now(UTC),
@@ -852,9 +1075,10 @@ class LivePositionManager:
             direction=pos.direction,
             entry_price=pos.actual_entry_price,
             exit_price=fill.avg_price,
+            realized_exit_price=fill.avg_price,
             qty=pos.entry_shares,
             exit_reason=exit_reason,
-            opened_at=datetime.now(UTC),  # opened_at not tracked here
+            opened_at=datetime.now(UTC),
         )
         self._store.close_position(symbol)
         del self._positions[symbol]
@@ -887,6 +1111,7 @@ class LivePositionManager:
             max_fav=pos.max_fav,
             post_tp2_mfe=pos.post_tp2_mfe,
             decision_reason=pos.decision_reason,
+            tp1_order_id=pos.tp1_order_id,
         )
 
     def _update_pos(self, pos: Position) -> None:
@@ -899,6 +1124,7 @@ class LivePositionManager:
             remaining=pos.remaining,
             current_stop=pos.current_stop,
             stop_order_id=pos.stop_order_id,
+            tp1_order_id=pos.tp1_order_id,
             tp1_hit=pos.tp1_hit,
             tp2_hit=pos.tp2_hit,
             tp3_hit=pos.tp3_hit,

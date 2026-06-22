@@ -72,17 +72,20 @@ YF_TICKER_MAP: dict[str, str] = {
     "MDY":  "MDY",  "FEZ":  "FEZ",  "VGK":  "VGK",  "EWJ":  "EWJ",
     "EWZ":  "EWZ",  "XLY":  "XLY",  "XLU":  "XLU",  "XLB":  "XLB",
     "XLP":  "XLP",  "XLI":  "XLI",  "KBE":  "KBE",
+    "MSOS": "MSOS",  # AdvisorShares Pure US Cannabis — underlying for MSOX
 }
 
 
 def _yf_ticker(underlying: str) -> str:
-    """Resolve underlying symbol → yfinance ticker.  Raises if unknown."""
-    if underlying in YF_TICKER_MAP:
-        return YF_TICKER_MAP[underlying]
-    raise KeyError(
-        f"Unknown underlying '{underlying}' — add it to YF_TICKER_MAP "
-        f"in data/underlying_data.py before using it."
-    )
+    """Resolve underlying symbol → yfinance ticker.
+
+    Special cases (crypto → ``*-USD``, VIX → ``^VIX``) come from YF_TICKER_MAP.
+    Unknown symbols default to identity — equity ETF tickers are their own
+    yfinance symbol — so a missing map entry degrades to a normal fetch (and,
+    if that returns nothing, a seed-sigma fallback) instead of crashing the
+    entire backfill on the first unmapped name.
+    """
+    return YF_TICKER_MAP.get(underlying, underlying)
 
 
 # ── UnderlyingDataStore ───────────────────────────────────────────────────────

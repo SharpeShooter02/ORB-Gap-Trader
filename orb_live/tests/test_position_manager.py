@@ -885,3 +885,307 @@ def test_aj_tp1_no_stop_order_id_skips_modify(mock_broker, tmp_store):
 
     mock_mod.assert_not_called()
     assert pos.tp1_hit is True
+
+
+# ── ak–an: OCA bracket hardening (Items 1, 2, 3) ─────────────────────────────
+
+def _make_v1_entry(
+    entry_price=100.0,
+    shares=100,
+    orb_range=2.0,
+    stop_price=99.0,
+    tp1_price=102.0,
+):
+    """v1 TP1-only entry: all shares at TP1."""
+    return {
+        "entry_price": entry_price,
+        "shares":      shares,
+        "orb_range":   orb_range,
+        "stop_price":  stop_price,
+        "tp1_price":   tp1_price,
+        "tp2_price":   tp1_price + orb_range,  # unused in v1
+        "tp1_shares":  shares,
+        "tp2_shares":  0,
+        "tp3_shares":  0,
+        "exit_override": {},
+    }
+
+
+def test_ak_v1_tp1_only_places_oca_bracket(mock_broker, tmp_store):
+    """v1 TP1-only (tp1_shares==entry_shares): submit_oca_pair must be called;
+    submit_stop_order must NOT be called; pos.tp1_order_id must be set."""
+    from unittest.mock import patch, MagicMock
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    oca_return = {"tp1_order_id": "oca-tp1-1", "stop_order_id": "oca-stop-1"}
+    with patch.object(mock_broker, "submit_oca_pair",
+                      return_value=oca_return) as mock_oca, \
+         patch.object(mock_broker, "submit_stop_order") as mock_stop:
+        pos = mgr.open_position(_make_v1_entry(), SYMBOL, +1, TRADE_DATE)
+
+    assert pos is not None
+    mock_oca.assert_called_once()
+    mock_stop.assert_not_called()
+    assert pos.tp1_order_id  == "oca-tp1-1"
+    assert pos.stop_order_id == "oca-stop-1"
+
+    # OCA kwargs include correct prices
+    kw = mock_oca.call_args.kwargs
+    assert kw["symbol"]          == SYMBOL
+    assert kw["tp1_limit_price"] == pytest.approx(pos.tp1_price)
+    assert kw["stop_price"]      == pytest.approx(pos.stop_price)
+    assert kw["qty"]             == 100
+
+
+def test_al_oca_tp1_fill_cancels_stop_and_closes_position(mock_broker, tmp_store):
+    """OCA TP1 fill path:
+    1. open_position places OCA pair
+    2. test pre-fills tp1_order in mock (simulates IB fill at tp1_price)
+    3. MockBroker.get_order auto-cancels stop (OCA sibling linkage)
+    4. on_bar closes position with exit_reason='TP1_ONLY'
+    """
+    from orb_live.core.state_store import closed_trades
+
+    mgr = _build_mgr(mock_broker, tmp_store,
+                     strategy_cfg=_strategy_cfg(exit_ratio_tp1=1.0, exit_ratio_tp2=0.0))
+    pos = mgr.open_position(_make_v1_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    assert pos.tp1_order_id is not None
+
+    # Simulate IB filling the OCA TP1 limit at the exact tp1_price.
+    tp1_id = pos.tp1_order_id
+    mock_broker._orders[tp1_id]["status"]           = "filled"
+    mock_broker._orders[tp1_id]["filled_qty"]       = str(pos.entry_shares)
+    mock_broker._orders[tp1_id]["filled_avg_price"] = str(pos.tp1_price)
+    # MockBroker.get_order will auto-cancel stop on next get_order(tp1_id) call.
+
+    # Bar where hi >= tp1_price confirms the fill context (bar-price fallback matches too)
+    mgr.on_bar(SYMBOL, _bar(hi=pos.tp1_price + 0.5, lo=pos.tp1_price - 1.0), _ts())
+
+    assert mgr._positions.get(SYMBOL) is None, "Position should be removed on TP1_ONLY close"
+    assert pos.status      == "closed"
+    assert pos.exit_reason == "TP1_ONLY"
+
+    # Stop order should now be cancelled (OCA auto-cancelled it)
+    stop_state = mock_broker._orders.get(pos.stop_order_id, {})
+    assert stop_state.get("status") == "cancelled", \
+        f"OCA should have cancelled stop; got status={stop_state.get('status')}"
+
+    # closed_trades record must exist
+    with tmp_store.conn() as c:
+        rows = c.execute(closed_trades.select()).mappings().all()
+    assert rows, "save_closed_trade must be called"
+    assert any(dict(r)["exit_reason"] == "TP1_ONLY" for r in rows)
+
+
+def test_am_oca_stop_not_cancelled_emits_critical_retains_position(mock_broker, tmp_store):
+    """OCA cancel failure: if IB doesn't cancel the stop sibling after TP1 fill,
+    position_manager must:
+      - emit a CRITICAL alert into state_store.alert_log
+      - NOT delete the position (leave for reconcile_from_broker)
+    """
+    from orb_live.core.state_store import alert_log
+
+    mgr = _build_mgr(mock_broker, tmp_store,
+                     strategy_cfg=_strategy_cfg(exit_ratio_tp1=1.0, exit_ratio_tp2=0.0))
+    pos = mgr.open_position(_make_v1_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    assert pos.tp1_order_id is not None
+
+    # Simulate OCA linkage failure: remove the sibling mapping so the stop
+    # does NOT get auto-cancelled when TP1 fills.
+    tp1_id  = pos.tp1_order_id
+    stop_id = pos.stop_order_id
+    mock_broker._oca_siblings.pop(tp1_id,  None)
+    mock_broker._oca_siblings.pop(stop_id, None)
+
+    # Pre-fill the TP1 order (IB filled it, but OCA didn't cancel the stop).
+    mock_broker._orders[tp1_id]["status"]           = "filled"
+    mock_broker._orders[tp1_id]["filled_qty"]       = str(pos.entry_shares)
+    mock_broker._orders[tp1_id]["filled_avg_price"] = str(pos.tp1_price)
+    # Stop remains "new" — the OCA cancel did not arrive.
+    mock_broker._orders[stop_id]["status"] = "new"
+
+    mgr.on_bar(SYMBOL, _bar(hi=pos.tp1_price + 0.5, lo=pos.tp1_price - 1.0), _ts())
+
+    # Position must NOT be deleted — it's left for reconcile.
+    assert mgr._positions.get(SYMBOL) is not None, \
+        "Position must be retained when OCA cancel fails (left for reconcile)"
+    assert pos.status != "closed", \
+        "Position must not be marked closed if the stop cancel was unconfirmed"
+
+    # A CRITICAL alert must have been written to the DB.
+    with tmp_store.conn() as c:
+        rows = c.execute(alert_log.select()).mappings().all()
+    critical_rows = [dict(r) for r in rows if r["level"] == "CRITICAL"]
+    assert critical_rows, "A CRITICAL alert must be logged on OCA cancel failure"
+    assert any("oca_cancel_failure" in r.get("category", "") for r in critical_rows), \
+        f"Expected oca_cancel_failure category in alerts; got {critical_rows}"
+
+
+def test_an_realized_exit_price_stored_in_closed_trades(mock_broker, tmp_store):
+    """realized_exit_price must reflect the actual IB fill price, not just the
+    tp1_price target. exit_price stays at the target (backtest-parity field)."""
+    from orb_live.core.state_store import closed_trades
+
+    mgr = _build_mgr(mock_broker, tmp_store,
+                     strategy_cfg=_strategy_cfg(exit_ratio_tp1=1.0, exit_ratio_tp2=0.0))
+    pos = mgr.open_position(_make_v1_entry(tp1_price=102.0), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+
+    # IB fills at 102.03 — slightly above the limit (positive slippage simulation).
+    realized = 102.03
+    tp1_id   = pos.tp1_order_id
+    mock_broker._orders[tp1_id]["status"]           = "filled"
+    mock_broker._orders[tp1_id]["filled_qty"]       = str(pos.entry_shares)
+    mock_broker._orders[tp1_id]["filled_avg_price"] = str(realized)
+
+    mgr.on_bar(SYMBOL, _bar(hi=102.5, lo=101.0), _ts())
+
+    with tmp_store.conn() as c:
+        rows = c.execute(closed_trades.select()).mappings().all()
+    assert rows, "save_closed_trade must be called"
+    row = dict(rows[-1])
+
+    # exit_price = target (tp1_price), realized_exit_price = actual fill
+    assert row["exit_price"]          == pytest.approx(102.0),   \
+        f"exit_price should be tp1_price=102.0, got {row['exit_price']}"
+    assert row["realized_exit_price"] == pytest.approx(realized), \
+        f"realized_exit_price should be {realized}, got {row['realized_exit_price']}"
+
+
+# ── ao–ar: OCA premature-commit fix ───────────────────────────────────────────
+
+def test_ao_oca_bar_crosses_unfilled_no_commit(mock_broker, tmp_store):
+    """OCA resting, bar price crosses TP1 but order still 'new':
+    no P&L booked, remaining unchanged, tp1_hit=False, position stays open."""
+    mgr = _build_mgr(mock_broker, tmp_store,
+                     strategy_cfg=_strategy_cfg(exit_ratio_tp1=1.0, exit_ratio_tp2=0.0))
+    pos = mgr.open_position(_make_v1_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    assert pos.tp1_order_id is not None
+
+    initial_remaining = pos.remaining
+
+    # OCA tp1_order stays "new" — do not set it to "filled"
+    bar = _bar(hi=pos.tp1_price + 1.0, lo=pos.tp1_price - 0.5)
+    mgr.on_bar(SYMBOL, bar, _ts())
+
+    pos_after = mgr._positions.get(SYMBOL)
+    assert pos_after is not None, "Position must stay open when OCA order is unfilled"
+    assert pos_after.remaining == initial_remaining, \
+        "remaining must not change on bar-price cross with unconfirmed OCA fill"
+    assert not pos_after.tp1_hit, "tp1_hit must stay False on unconfirmed OCA fill"
+
+
+def test_ap_oca_unfilled_2bars_emits_tp1_limit_not_filling_alert(mock_broker, tmp_store):
+    """After 2 consecutive bars with price past TP1 but OCA order unfilled,
+    a CRITICAL alert with category 'tp1_limit_not_filling' must be emitted."""
+    from orb_live.core.state_store import alert_log
+
+    mgr = _build_mgr(mock_broker, tmp_store,
+                     strategy_cfg=_strategy_cfg(exit_ratio_tp1=1.0, exit_ratio_tp2=0.0))
+    pos = mgr.open_position(_make_v1_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+
+    # tp1_order stays "new" throughout
+    bar = _bar(hi=pos.tp1_price + 1.0, lo=pos.tp1_price - 0.5)
+
+    # Bar 1: counter reaches 1 — no alert yet (threshold is 2)
+    mgr.on_bar(SYMBOL, bar, _ts(10, 30))
+    with tmp_store.conn() as c:
+        rows = c.execute(alert_log.select()).mappings().all()
+    assert not any(r["category"] == "tp1_limit_not_filling" for r in rows), \
+        "No alert should fire on the first crossed-but-unfilled bar"
+
+    # Bar 2: counter reaches 2 — alert must fire
+    mgr.on_bar(SYMBOL, bar, _ts(10, 31))
+    with tmp_store.conn() as c:
+        rows = c.execute(alert_log.select()).mappings().all()
+    tp1_alerts = [dict(r) for r in rows if r["category"] == "tp1_limit_not_filling"]
+    assert tp1_alerts, "CRITICAL alert must fire after 2 bars crossed but OCA unfilled"
+    assert tp1_alerts[0]["level"] == "CRITICAL"
+
+    # Position still open, no trade record
+    assert mgr._positions.get(SYMBOL) is not None
+
+
+def test_aq_wick_then_stop_no_zombie_one_trade(mock_broker, tmp_store):
+    """Wick-then-reverse: price crosses TP1 (OCA unfilled), later bar fires stop.
+    Result: exactly one closed trade (STOP), no TP1 gain booked, no zombie."""
+    from orb_live.core.state_store import closed_trades
+
+    mgr = _build_mgr(mock_broker, tmp_store,
+                     strategy_cfg=_strategy_cfg(exit_ratio_tp1=1.0, exit_ratio_tp2=0.0))
+    pos = mgr.open_position(_make_v1_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    stop_id = pos.stop_order_id
+
+    # Bar 1: hi wicks above tp1_price but OCA order never fills (status="new")
+    bar_wick = _bar(hi=pos.tp1_price + 0.5, lo=pos.tp1_price - 0.5)
+    mgr.on_bar(SYMBOL, bar_wick, _ts(10, 30))
+
+    pos_after_wick = mgr._positions.get(SYMBOL)
+    assert pos_after_wick is not None, "Position must survive the wick with OCA unconfirmed"
+    remaining_after_wick = pos_after_wick.remaining
+
+    # Bar 2: IB fires the stop; price reverses hard
+    mock_broker._orders[stop_id]["status"]           = "filled"
+    mock_broker._orders[stop_id]["filled_qty"]       = str(remaining_after_wick)
+    mock_broker._orders[stop_id]["filled_avg_price"] = str(pos_after_wick.stop_price)
+
+    bar_stop = _bar(hi=pos.tp1_price - 0.5, lo=pos.stop_price - 0.5)
+    mgr.on_bar(SYMBOL, bar_stop, _ts(10, 31))
+
+    assert mgr._positions.get(SYMBOL) is None, "Position must close on stop"
+
+    with tmp_store.conn() as c:
+        rows = c.execute(closed_trades.select()).mappings().all()
+    assert len(rows) == 1, f"Exactly one trade record expected; got {len(rows)}"
+    row = dict(rows[0])
+    assert row["exit_reason"] == "STOP", \
+        f"exit_reason must be STOP (no TP1 was committed); got {row['exit_reason']}"
+
+
+def test_ar_oca_repoll_for_filled_avg_price(mock_broker, tmp_store):
+    """When filled_avg_price reads 0 on the first poll (IB TWS latency),
+    a single re-poll recovers the real price; realized_exit_price uses it."""
+    from orb_live.core.state_store import closed_trades
+    from unittest.mock import patch
+
+    mgr = _build_mgr(mock_broker, tmp_store,
+                     strategy_cfg=_strategy_cfg(exit_ratio_tp1=1.0, exit_ratio_tp2=0.0))
+    pos = mgr.open_position(_make_v1_entry(tp1_price=102.0), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    tp1_id = pos.tp1_order_id
+
+    _repoll_price = 102.5
+    _tp1_calls    = [0]
+
+    # Set tp1 as filled in _orders so OCA auto-cancel fires on stop verification
+    mock_broker._orders[tp1_id]["status"]           = "filled"
+    mock_broker._orders[tp1_id]["filled_qty"]       = str(pos.entry_shares)
+    mock_broker._orders[tp1_id]["filled_avg_price"] = "0"  # latency: not yet populated
+
+    _real_get_order = type(mock_broker).get_order   # unbound method
+
+    def _staged(order_id):
+        result = _real_get_order(mock_broker, order_id)
+        if order_id == tp1_id:
+            _tp1_calls[0] += 1
+            if _tp1_calls[0] >= 2:
+                result = dict(result)
+                result["filled_avg_price"] = str(_repoll_price)
+        return result
+
+    with patch.object(mock_broker, "get_order", side_effect=_staged):
+        mgr.on_bar(SYMBOL, _bar(hi=103.0, lo=101.5), _ts())
+
+    with tmp_store.conn() as c:
+        rows = c.execute(closed_trades.select()).mappings().all()
+    assert rows, "save_closed_trade must be called"
+    row = dict(rows[-1])
+    assert row["realized_exit_price"] == pytest.approx(_repoll_price), \
+        f"realized_exit_price should be re-polled {_repoll_price}; got {row['realized_exit_price']}"
+    assert row["exit_price"] == pytest.approx(102.0), \
+        f"exit_price should be tp1_price=102.0; got {row['exit_price']}"

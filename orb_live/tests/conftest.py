@@ -68,6 +68,7 @@ class MockBroker:
         self._positions: dict = {}
         self._fill_sequence: list = []
         self._default_fill_fraction: float = 1.0
+        self._oca_siblings: dict = {}   # order_id → sibling_order_id (bidirectional)
 
     # ── Configuration helpers ─────────────────────────────────────────────────
 
@@ -176,19 +177,60 @@ class MockBroker:
         }
         return {"id": client_order_id, "status": "new"}
 
+    def submit_oca_pair(
+        self,
+        symbol: str,
+        side: str,
+        qty: int,
+        tp1_limit_price: float,
+        stop_price: float,
+        **kwargs,
+    ) -> dict:
+        """Place a TP1 limit + protective stop as an OCA group.
+
+        When one leg is set to 'filled', get_order will auto-cancel the sibling,
+        simulating IB OCA (one-cancels-all) behavior.
+        """
+        tp1_id  = str(uuid.uuid4())
+        stop_id = str(uuid.uuid4())
+        self._orders[tp1_id] = {
+            "id": tp1_id, "status": "new",
+            "filled_qty": "0", "filled_avg_price": "0",
+        }
+        self._orders[stop_id] = {
+            "id": stop_id, "status": "new",
+            "filled_qty": "0", "filled_avg_price": "0",
+            "stop_price": str(stop_price),
+        }
+        # Bidirectional OCA linkage
+        self._oca_siblings[tp1_id]  = stop_id
+        self._oca_siblings[stop_id] = tp1_id
+        return {"tp1_order_id": tp1_id, "stop_order_id": stop_id, "oca_group": f"OCA-{symbol}"}
+
     def get_order(self, order_id: str) -> dict:
-        return dict(
+        order = dict(
             self._orders.get(
                 order_id,
                 {"status": "not_found", "filled_qty": "0", "filled_avg_price": "0"},
             )
         )
+        # OCA: auto-cancel the sibling when one leg is filled
+        sibling_id = self._oca_siblings.get(order_id)
+        if sibling_id and order.get("status") == "filled":
+            sibling = self._orders.get(sibling_id)
+            if sibling and sibling.get("status") not in ("filled", "cancelled"):
+                sibling["status"] = "cancelled"
+        return order
 
-    def cancel_order(self, order_id: str) -> None:
+    def cancel_order(self, order_id: str) -> bool:
         if order_id in self._orders:
             o = self._orders[order_id]
-            if o["status"] == "partially_filled":
+            if o["status"] not in ("filled",):
                 o["status"] = "cancelled"
+                return True
+            # Already filled — cancel failed (race)
+            return False
+        return True   # not found → idempotent success
 
     def get_position(self, symbol: str) -> Optional[dict]:
         return self._positions.get(symbol)

@@ -170,21 +170,23 @@ open_positions = Table("open_positions", _metadata,
     Column("opened_at",         DateTime,   nullable=False),
     Column("broker_order_id",   String(64)),
     Column("stop_order_id",     String(64)),
+    Column("tp1_order_id",      String(64)),  # OCA bracket TP1 leg order ID
 )
 
 closed_trades = Table("closed_trades", _metadata,
-    Column("id",           Integer, primary_key=True, autoincrement=True),
-    Column("trade_date",   Date,    nullable=False),
-    Column("symbol",       String(16), nullable=False),
-    Column("direction",    Integer),
-    Column("entry_price",  Float),
-    Column("exit_price",   Float),
-    Column("qty",          Float),
-    Column("pnl_pct",      Float),
-    Column("dollar_pnl",   Float),
-    Column("exit_reason",  String(32)),  # tp1/tp2/tp3/eod/stop/kill
-    Column("opened_at",    DateTime),
-    Column("closed_at",    DateTime),
+    Column("id",                  Integer, primary_key=True, autoincrement=True),
+    Column("trade_date",          Date,    nullable=False),
+    Column("symbol",              String(16), nullable=False),
+    Column("direction",           Integer),
+    Column("entry_price",         Float),
+    Column("exit_price",          Float),   # target price (backtest-parity field)
+    Column("realized_exit_price", Float),   # actual IB fill avg_price
+    Column("qty",                 Float),
+    Column("pnl_pct",             Float),
+    Column("dollar_pnl",          Float),
+    Column("exit_reason",         String(32)),  # tp1/tp2/tp3/eod/stop/kill
+    Column("opened_at",           DateTime),
+    Column("closed_at",           DateTime),
 )
 
 equity_curve = Table("equity_curve", _metadata,

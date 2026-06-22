@@ -89,6 +89,7 @@ CLASS_2_SYMS: frozenset[str] = frozenset({
 EXPLICIT_DROPS: frozenset[str] = frozenset({
     "CWEB", "CHAU", "BNKU", "DFEN", "DPST",
     "NAIL", "RETL", "DRN", "MIDU", "NRGU",
+    "BTFX",  # untradable on IB (no security definition); BTC covered by 5 other C1 vehicles
 })
 
 # Force-include — added to universe even if missing from master (synthetic rows).

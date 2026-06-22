@@ -54,3 +54,18 @@ def next_trading_day(from_date: date) -> date:
             return d
         d += timedelta(days=1)
     return d
+
+
+def prev_trading_day(from_date: date) -> date:
+    """Most recent NYSE trading day strictly before from_date.
+
+    Used to judge data freshness without false-alarming over weekends and
+    holidays: the latest expected daily bar on any day is the prior trading
+    day's close (e.g. on a Monday after a Friday holiday, that's Thursday).
+    """
+    d = from_date - timedelta(days=1)
+    for _ in range(14):
+        if is_trading_day(d):
+            return d
+        d -= timedelta(days=1)
+    return d

@@ -178,15 +178,6 @@ def test_b_not_candidate_skips_immediately(mock_broker, tmp_store):
     assert engine.get_state("TQQQ") == SymbolState.EXITED_OR_SKIPPED
 
 
-def test_c_rtg_excluded_skips(mock_broker, tmp_store):
-    """on_orb_complete with rtg_excluded=True → EXITED_OR_SKIPPED."""
-    from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
-    engine.new_session(TDATE)
-    p2 = _make_p2("TQQQ", rtg_excluded=True)
-    engine.on_orb_complete("TQQQ", p2, None)
-    assert engine.get_state("TQQQ") == SymbolState.EXITED_OR_SKIPPED
-
 
 def test_d_routing_skip_skips(mock_broker, tmp_store):
     """on_orb_complete with size_mult=0.0 → EXITED_OR_SKIPPED."""

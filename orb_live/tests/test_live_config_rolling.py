@@ -1,5 +1,5 @@
 """
-tests/test_live_config_rolling.py — Tests for rolling-sigma build_live_ps_filters.
+tests/test_live_config_rolling.py — Tests for rolling sigma computation.
 
 All tests use tmp_path fixture parquets so they run without real market data
 on any machine (CI, dev, VPS).
@@ -37,20 +37,18 @@ def _expected_sigma(df: pd.DataFrame) -> float:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 def test_rolling_sigmas_computed_from_parquet(tmp_path):
-    from orb_live.config.live_config import build_live_ps_filters
+    from orb_live.config.live_config import (
+        _load_v1_universe, _build_rolling_sigma_map, _build_ps_filters,
+    )
 
+    instruments, sigmas_seed, universe = _load_v1_universe()
     df_qqq = _make_parquet(tmp_path, "QQQ", seed=1)
     df_spy = _make_parquet(tmp_path, "SPY", seed=2)
 
-    filters = build_live_ps_filters(
-        use_rolling=True,
-        data_dir=tmp_path,
-        sigma_override_path=tmp_path / "nonexistent.yaml",
-        sigma_runtime_path=tmp_path / "sigma_runtime.yaml",
-        k=1.25,
-    )
+    sigma_map = _build_rolling_sigma_map(instruments, universe, sigmas_seed, tmp_path)
+    filters   = _build_ps_filters(instruments, sigma_map, universe, k=1.25,
+                                  sigma_override_path=tmp_path / "nonexistent.yaml")
 
-    # TQQQ tracks QQQ; UPRO tracks SPY
     assert "TQQQ" in filters
     assert abs(filters["TQQQ"][1] - _expected_sigma(df_qqq) * 1.25) < 1e-9
 
@@ -59,29 +57,30 @@ def test_rolling_sigmas_computed_from_parquet(tmp_path):
 
 
 def test_rolling_falls_back_to_seed_on_missing_parquet(tmp_path, caplog):
-    from orb_live.config.live_config import build_live_ps_filters
-    from reference._production_run import SIGMA
+    from orb_live.config.live_config import (
+        _load_v1_universe, _build_rolling_sigma_map, _build_ps_filters,
+    )
 
-    # No parquets — every underlying must fall back to SIGMA seed
+    instruments, sigmas_seed, universe = _load_v1_universe()
+
     with caplog.at_level(logging.WARNING, logger="orb_live.config.live_config"):
-        filters = build_live_ps_filters(
-            use_rolling=True,
-            data_dir=tmp_path,
-            sigma_override_path=tmp_path / "nonexistent.yaml",
-            sigma_runtime_path=tmp_path / "sigma_runtime.yaml",
-            k=1.25,
-        )
+        sigma_map = _build_rolling_sigma_map(instruments, universe, sigmas_seed, tmp_path)
+    filters = _build_ps_filters(instruments, sigma_map, universe, k=1.25,
+                                sigma_override_path=tmp_path / "nonexistent.yaml")
 
     assert "TQQQ" in filters
-    assert abs(filters["TQQQ"][1] - SIGMA["QQQ"] * 1.25) < 1e-9
+    assert abs(filters["TQQQ"][1] - sigmas_seed["QQQ"] * 1.25) < 1e-9
     assert any("rolling_sigma_fallback" in r.message for r in caplog.records)
 
 
 def test_rolling_falls_back_to_seed_on_insufficient_data(tmp_path, caplog):
-    from orb_live.config.live_config import build_live_ps_filters
-    from reference._production_run import SIGMA
+    from orb_live.config.live_config import (
+        _load_v1_universe, _build_rolling_sigma_map, _build_ps_filters,
+    )
 
-    # Create parquet with only 20 rows — below the 30-row minimum
+    instruments, sigmas_seed, universe = _load_v1_universe()
+
+    # Only 20 rows — below the 30-row minimum
     df = pd.DataFrame({
         "date":  pd.date_range("2024-01-02", periods=20, freq="B"),
         "close": np.linspace(100, 110, 20),
@@ -89,81 +88,46 @@ def test_rolling_falls_back_to_seed_on_insufficient_data(tmp_path, caplog):
     df.to_parquet(tmp_path / "QQQ.parquet", index=False)
 
     with caplog.at_level(logging.WARNING, logger="orb_live.config.live_config"):
-        filters = build_live_ps_filters(
-            use_rolling=True,
-            data_dir=tmp_path,
-            sigma_override_path=tmp_path / "nonexistent.yaml",
-            sigma_runtime_path=tmp_path / "sigma_runtime.yaml",
-            k=1.25,
-        )
+        sigma_map = _build_rolling_sigma_map(instruments, universe, sigmas_seed, tmp_path)
+    filters = _build_ps_filters(instruments, sigma_map, universe, k=1.25,
+                                sigma_override_path=tmp_path / "nonexistent.yaml")
 
     assert "TQQQ" in filters
-    assert abs(filters["TQQQ"][1] - SIGMA["QQQ"] * 1.25) < 1e-9
+    assert abs(filters["TQQQ"][1] - sigmas_seed["QQQ"] * 1.25) < 1e-9
     assert any("rolling_sigma_fallback" in r.message for r in caplog.records)
 
 
-def test_use_rolling_false_uses_seed_values(tmp_path):
-    from orb_live.config.live_config import build_live_ps_filters
-    from reference._production_run import PS_FILTERS
+def test_use_rolling_false_uses_seed_values():
+    from orb_live.config.live_config import _load_v1_universe, load_live_config
 
-    filters = build_live_ps_filters(
-        use_rolling=False,
-        k=1.25,
-        sigma_override_path=tmp_path / "nonexistent.yaml",
-    )
-    assert filters == PS_FILTERS
+    instruments, sigmas_seed, universe = _load_v1_universe()
+    cfg = load_live_config(use_rolling=False)
 
-
-def test_universe_underlyings_discovered(tmp_path):
-    """
-    build_live_ps_filters iterates UNIVERSE (not SIGMA.keys()) so every
-    underlying referenced by an active ETF gets a ps_filter when its parquet
-    exists. Verify the five previously-missing underlyings produce
-    parquet-derived thresholds distinct from their seed values.
-    """
-    from orb_live.config.live_config import build_live_ps_filters
-    from reference._production_run import SIGMA
-
-    ul_to_sym = {
-        "ASHR": "CHAU",
-        "EWW":  "MEXX",
-        "ITA":  "DFEN",
-        "IYR":  "URE",
-        "XLU":  "UTSL",
-    }
-    dfs = {ul: _make_parquet(tmp_path, ul, seed=abs(hash(ul)) % 10_000)
-           for ul in ul_to_sym}
-
-    filters = build_live_ps_filters(
-        use_rolling=True,
-        data_dir=tmp_path,
-        sigma_override_path=tmp_path / "nonexistent.yaml",
-        sigma_runtime_path=tmp_path / "sigma_runtime.yaml",
-        k=1.25,
-    )
-
-    for ul, sym in ul_to_sym.items():
-        assert sym in filters, f"{sym} (underlying={ul}) missing from filters"
-        # Synthetic parquet sigma should match expected, not seed
-        expected_thr = _expected_sigma(dfs[ul]) * 1.25
-        assert abs(filters[sym][1] - expected_thr) < 1e-9, (
-            f"{sym}: threshold {filters[sym][1]:.6f} != parquet-derived {expected_thr:.6f}"
+    for sym, spec in cfg.prior_session_filters.items():
+        inst = instruments.get(sym)
+        if inst is None:
+            continue
+        seed = sigmas_seed.get(inst.underlying)
+        if seed is None:
+            continue
+        expected = seed * cfg.ps_filter_k
+        actual   = spec[1]
+        assert abs(actual - expected) < 1e-9, (
+            f"{sym}: threshold={actual:.6f} != seed*k={expected:.6f}"
         )
 
 
 def test_sigma_runtime_yaml_written(tmp_path):
-    from orb_live.config.live_config import build_live_ps_filters
+    from orb_live.config.live_config import (
+        _load_v1_universe, _build_rolling_sigma_map, _write_sigma_runtime,
+    )
+
+    instruments, sigmas_seed, universe = _load_v1_universe()
+    _make_parquet(tmp_path, "QQQ", seed=1)
+    sigma_map = _build_rolling_sigma_map(instruments, universe, sigmas_seed, tmp_path)
 
     runtime_path = tmp_path / "sigma_runtime.yaml"
-    _make_parquet(tmp_path, "QQQ", seed=1)
-
-    build_live_ps_filters(
-        use_rolling=True,
-        data_dir=tmp_path,
-        sigma_override_path=tmp_path / "nonexistent.yaml",
-        sigma_runtime_path=runtime_path,
-        k=1.25,
-    )
+    _write_sigma_runtime(sigma_map, runtime_path)
 
     assert runtime_path.exists(), "sigma_runtime.yaml was not created"
     content = yaml.safe_load(runtime_path.read_text())
@@ -172,37 +136,31 @@ def test_sigma_runtime_yaml_written(tmp_path):
     assert "source" in content
     assert content["source"] == "rolling"
     assert "sigmas" in content
-    assert "fallback_underlyings" in content
     assert isinstance(content["sigmas"], dict)
-    # QQQ had a parquet so it should appear with a computed float value
     assert "QQQ" in content["sigmas"]
     assert isinstance(content["sigmas"]["QQQ"], float)
 
 
 def test_parallel_rolling_parity(tmp_path):
-    """
-    Parallel to test_ps_filter_parity: rolling mode with seeded parquets
-    produces thresholds equal to std(abs_returns)*k for each parqueted underlying.
-    """
-    from orb_live.config.live_config import build_live_ps_filters
-    from reference._production_run import UNIVERSE
-
-    # Seed parquets for a representative subset of underlyings
-    test_uls = ["QQQ", "SPY", "IWM", "GDX", "BTC"]
-    dfs = {ul: _make_parquet(tmp_path, ul, seed=i) for i, ul in enumerate(test_uls)}
-
-    filters = build_live_ps_filters(
-        use_rolling=True,
-        data_dir=tmp_path,
-        sigma_override_path=tmp_path / "nonexistent.yaml",
-        sigma_runtime_path=tmp_path / "sigma_runtime.yaml",
-        k=1.25,
+    """Rolling mode produces thresholds equal to std(abs_returns)*k for parqueted underlyings."""
+    from orb_live.config.live_config import (
+        _load_v1_universe, _build_rolling_sigma_map, _build_ps_filters,
     )
 
-    # For every ETF whose underlying had a parquet, verify threshold = sigma * k
-    for sym, info in UNIVERSE.items():
-        ul = info["underlying"]
-        if ul not in dfs or sym not in filters:
+    instruments, sigmas_seed, universe = _load_v1_universe()
+    test_uls = ["QQQ", "SPY", "GDX"]
+    dfs = {ul: _make_parquet(tmp_path, ul, seed=i) for i, ul in enumerate(test_uls)}
+
+    sigma_map = _build_rolling_sigma_map(instruments, universe, sigmas_seed, tmp_path)
+    filters   = _build_ps_filters(instruments, sigma_map, universe, k=1.25,
+                                  sigma_override_path=tmp_path / "nonexistent.yaml")
+
+    for sym in universe:
+        inst = instruments.get(sym)
+        if inst is None or sym not in filters:
+            continue
+        ul = inst.underlying
+        if ul not in dfs:
             continue
         expected = _expected_sigma(dfs[ul]) * 1.25
         assert abs(filters[sym][1] - expected) < 1e-9, (

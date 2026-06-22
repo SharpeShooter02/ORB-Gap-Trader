@@ -427,6 +427,32 @@ class LivePositionManager:
                     pos.tp2_hit = True   # TP3 fires directly after TP1
                 self._update_pos(pos)
 
+                # All shares exited at TP1 (v1 TP1-only mode) — cancel the
+                # now-unneeded stop and record the closed trade immediately.
+                if pos.remaining == 0:
+                    try:
+                        if pos.stop_order_id:
+                            self._broker.cancel_order(pos.stop_order_id)
+                    except Exception:
+                        pass
+                    pos.status      = "closed"
+                    pos.exit_reason = "TP1_ONLY"
+                    pos.exit_time   = ts
+                    pos.exit_price  = pos.tp1_price
+                    self._update_pos(pos)
+                    self._store.save_closed_trade(
+                        trade_date=pos.session_date, symbol=symbol,
+                        direction=pos.direction,
+                        entry_price=pos.actual_entry_price,
+                        exit_price=pos.tp1_price,
+                        qty=pos.entry_shares,
+                        exit_reason="TP1_ONLY",
+                        opened_at=datetime.now(UTC),
+                    )
+                    self._store.close_position(symbol)
+                    del self._positions[symbol]
+                    return
+
                 # Propagate post-TP1 stop change to IB: qty drops to remaining,
                 # price moves to breakeven (or trail init). Both changes atomic.
                 if pos.stop_order_id:

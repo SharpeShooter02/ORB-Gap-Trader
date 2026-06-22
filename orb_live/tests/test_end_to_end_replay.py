@@ -142,35 +142,26 @@ def _replay_bars(bars: list[dict], mgr, indicators_store, symbol="TQQQ"):
         mgr.on_bar(symbol, bar, ts)
 
 
-# ── Scenario A: TP3 EMA-crossback exit ────────────────────────────────────────
+# ── Scenario A: v1 TP1-only full exit ────────────────────────────────────────
 
-def test_a_tp3_crossback_exit_reason(mock_broker, tmp_store):
+def test_a_tp1_only_full_exit(mock_broker, tmp_store):
     """
-    Full replay: entry at 102, TP1+TP2 hit on bar1, TP3 crossback on bar2.
+    v1 TP1-only: entry fires, TP1 consumes all shares, position closes immediately.
 
-    ORB: high=101, low=99 (range=2), ema=100 (EMA #1 for breakout check)
-    Indicator seeded with midpoint≈103 (EMA #2 for TP3 check; starts above entry)
+    ORB: high=101, low=99 (range=2), ema=100
+    v1 config: exit_ratio_tp1=1.0, tp1_target_multiple=1.0
+    v1 sizing: shares = floor(1000 × 1.0 / 102) = 9
+    TP1 price = 102 + 2×1.0 = 104.0; tp1_shares=9, tp2_shares=0, tp3_shares=0
 
-    tp1 = 102 + 2×0.35 = 102.70
-    tp2 = 102 + 2×0.05 = 102.10
-    actual_entry ≈ 102.102 (10bps slippage on 102.0)
-
-    Bar 1: hi=103.5, lo=102.2, close=103.0
-        → TP1 fires (hi≥102.70), TP2 fires (hi≥102.10); lo > actual_entry → no stop
-        → close=103.0 > ema≈102.93 → NO TP3 crossback
-        → remaining=tp3_shares=119 still open
-
-    Bar 2: hi=102.6, lo=102.2, close=102.5
-        → ind.on_bar updates ema (still ~102.90)
-        → close=102.5 < ema≈102.90 → crossback=True
-        → close=102.5 > actual_entry≈102.102 → is_profitable=True
-        → TP3 fires → position closed
+    Bar 1: hi=105.0 ≥ TP1=104.0 → TP1 fires, all 9 shares exit, remaining=0
+    → position closes immediately with exit_reason="TP1_ONLY"
     """
     orb = _orb(high=101.0, low=99.0, ema=100.0)
     mgr, engine, indicators_store, ind, scfg = _build_live_stack(
         tmp_store, mock_broker, tp3_ema_value=103.0
     )
-    p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=0.35, tp2_mult=0.05)
+    # v1: tp1_mult=1.0 sets TP1 price = entry + 1×range; tp2_mult=0.0 unused
+    p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=1.0, tp2_mult=0.0)
     engine.on_orb_complete("TQQQ", p2, None)
 
     # Entry bar: close=102 > orb_high=101 AND > orb_ema=100 → breakout
@@ -179,40 +170,28 @@ def test_a_tp3_crossback_exit_reason(mock_broker, tmp_store):
     engine.on_bar("TQQQ", entry_bar, _et(10, 1))
 
     pos = mgr._positions.get("TQQQ")
-    assert pos is not None, "Position should have opened on breakout bar"
-    assert pos.status == "open"
+    assert pos is not None, "Position should open on breakout"
+    assert pos.tp1_shares == pos.entry_shares, "v1: all shares allocated to TP1"
+    assert pos.tp2_shares == 0
+    assert pos.tp3_shares == 0
 
-    # Bar 1: TP1+TP2 both fire; close above EMA so no TP3 yet
-    # lo=102.2 > actual_entry≈102.102 → stop not triggered
-    bar1 = _bar(_et(10, 2), close=103.0, hi=103.5, lo=102.2)
+    # Bar 1: hi=105 ≥ TP1=104 → all shares exit; remaining=0 → position closes
+    bar1 = _bar(_et(10, 2), close=104.5, hi=105.0, lo=103.5)
     ind.on_bar(bar1)
     mgr.on_bar("TQQQ", bar1, _et(10, 2))
 
-    # After bar1: tp3_shares remain open, tp2_hit=True
     pos = mgr._positions.get("TQQQ")
-    assert pos is not None, "Position should remain open after TP1+TP2 (tp3 shares remain)"
-    assert pos.tp2_hit is True
-    assert pos.remaining == pos.tp3_shares
-
-    # Bar 2: close=102.5 < ema (~102.90) → crossback; close > actual_entry → profitable
-    # lo=102.2 > current_stop=actual_entry≈102.102 → no stop
-    bar2 = _bar(_et(10, 3), close=102.5, hi=102.6, lo=102.2)
-    ind.on_bar(bar2)
-    mgr.on_bar("TQQQ", bar2, _et(10, 3))
-
-    # TP3 should have fired → position closed
-    pos = mgr._positions.get("TQQQ")
-    assert pos is None or pos.status == "closed", "TP3 should close the position"
+    assert pos is None or pos.status == "closed", \
+        "TP1-only: position must close when all shares exit at TP1"
 
     from orb_live.core.state_store import closed_trades
     with tmp_store.conn() as c:
         rows = c.execute(closed_trades.select()).mappings().all()
 
-    assert rows, "Should have at least one closed trade record"
+    assert rows, "Should have a closed trade record"
     exit_reasons = [dict(r)["exit_reason"] for r in rows]
-    # TP3 is the final exit; TP1/TP2 partial exits write rows too
-    assert any("TP3" in r for r in exit_reasons), \
-        f"Expected TP3 exit among {exit_reasons}"
+    assert any("TP1_ONLY" in r for r in exit_reasons), \
+        f"Expected TP1_ONLY exit among {exit_reasons}"
 
 
 # ── Scenario B: Stop hit ───────────────────────────────────────────────────────

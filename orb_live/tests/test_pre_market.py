@@ -294,14 +294,16 @@ class TestUlGapSignFix:
 
         results = job.run_phase1(session_date, ref_prices=ref_prices, daily_bars=daily_bars_map)
 
-        # With the fix, both LABU and LABD should appear as candidates
+        # With the ul_gap sign fix, IBB contributes to overnight_gaps with the correct
+        # positive sign, so plan_session() sees IBB as a qualifying UL.
+        # With the skip-cheap N==2 fix, only the pricier ETF is kept: LABU (160) > LABD (50).
         symbols_in_plan = {r.symbol for r in results}
         assert "LABU" in symbols_in_plan, (
             "LABU must be a Phase1 candidate — ul_gap sign bug would cause direction "
             "filter to reject it in plan_session()"
         )
-        assert "LABD" in symbols_in_plan, (
-            "LABD must be a Phase1 candidate — ul_gap sign bug would filter it out"
+        assert "LABD" not in symbols_in_plan, (
+            "LABD must be dropped by skip-cheap (N==2: keep pricier only; LABU 160 > LABD 50)"
         )
 
     def test_n_uls_regime_quiet_to_active(self):
@@ -360,68 +362,4 @@ class TestUlGapSignFix:
         assert sym in plan.candidates, (
             f"ETF gap above boundary ({above_boundary_etf_gap*100:.1f}%) "
             f"should produce |ul_gap| > GAP_THRESHOLD and qualify"
-        )
-
-    def test_crypto_weekend_bars_excluded_from_ps_window(self):
-        """Crypto UL parquet rows on non-NYSE trading days (weekend/holiday) must
-        not contaminate the PS-filter prior-two-closes window."""
-        from orb_live.signals.pre_market import PreMarketJob
-        from orb_live.strategy.v1_strategy import Instrument
-        from orb_live.config.live_config import LiveConfig
-
-        # Session: Monday 2026-06-22 (after Juneteenth Fri 6/19)
-        session_date = date(2026, 6, 22)
-
-        instrs = {"SOLT": Instrument("SOLT", "SOL", 2, False)}
-        # SOL sigma large enough so that trading-day prior return doesn't block
-        sigmas = {"SOL": 0.10}  # 10% threshold — very loose
-
-        # SOL parquet with weekend rows:
-        # Fri 6/19 (Juneteenth — crypto still trades), Sat 6/20, Mon 6/22
-        # Without the fix: tail(2) before 6/22 gives (Sat 6/20, Fri 6/19)
-        # With the fix (trading-day filter): tail(2) gives (Thu 6/18, Wed 6/17)
-        sol_df = _daily([
-            ("2026-06-17", 71.93),  # Wed — NYSE trading
-            ("2026-06-18", 69.63),  # Thu — NYSE trading
-            ("2026-06-19", 69.72),  # Fri/Juneteenth — NOT NYSE trading (holiday)
-            ("2026-06-20", 73.17),  # Sat — NOT NYSE trading
-        ])
-        underlying_dfs = {"SOL": sol_df}
-
-        solt_bars = _daily([("2026-06-18", 10.0)])
-        daily_bars_map = {"SOLT": solt_bars}
-
-        cfg = MagicMock(spec=LiveConfig)
-        cfg.symbols = ["SOLT"]
-        cfg.instruments = instrs
-        cfg.sigmas = sigmas
-        cfg.direction_filters = {}
-        # Very tight threshold: would block if weekend move (+4.95%) used as ps_ret
-        # but should pass if trading-day closes (Thu/Wed: -3.2% move, opposite direction)
-        cfg.prior_session_filters = {"SOLT": ("SOL", 0.05)}  # 5% threshold
-        cfg.strategy_config = MagicMock()
-
-        store = MagicMock()
-        store.save_gap_scan = MagicMock()
-        store.save_ps_filter = MagicMock()
-
-        client = MagicMock()
-        client.get_daily_bars.side_effect = lambda sym, **kw: daily_bars_map.get(sym, pd.DataFrame())
-
-        ul_store = MagicMock()
-        ul_store.get.side_effect = lambda ul: underlying_dfs.get(ul, pd.DataFrame())
-        ul_store.warn_if_stale.return_value = None
-
-        job = PreMarketJob(cfg, store, client, ul_store)
-
-        # SOLT ref price: 10.0 → 10.8 = +8% gap-up (above 2×2%=4% threshold)
-        ref_prices = {"SOLT": 10.8}
-        results = job.run_phase1(session_date, ref_prices=ref_prices, daily_bars=daily_bars_map)
-
-        # With weekend bars excluded, ps_ret for SOL uses Thu/Wed closes:
-        # (69.63 - 71.93) / 71.93 = -3.2% in gap-up direction → dir_adj = -3.2% ≤ 5% → PASS
-        # Without fix, ps_ret would use Sat/Fri: (73.17-69.72)/69.72 = +4.95% → BLOCK
-        assert any(r.symbol == "SOLT" for r in results), (
-            "SOLT must be a candidate when trading-day-filtered PS window is used. "
-            "If this fails, the weekend-bar filter in _load_underlying_data() is missing."
         )

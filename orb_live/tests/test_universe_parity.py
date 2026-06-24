@@ -52,3 +52,51 @@ def test_no_instrument_gap_filters(live_cfg):
     assert live_cfg.strategy_config.instrument_gap_filters == {}, (
         "v1 config must have no instrument_gap_filters"
     )
+
+
+class TestSkipCheapParity:
+    """Parity test for the skip-cheap-top-2 pruning rule.
+
+    Backtest rule (skip_cheap_by_class.py :: skip_cheap_then_top2_when_3plus):
+      N==1 → keep 1; N==2 → drop cheaper, keep 1; N>=3 → keep top-2 by prior close
+    """
+
+    def _run(self, syms_with_prices: list[tuple[str, float]]) -> list[str]:
+        from orb_live.strategy.v1_strategy import (
+            compute_candidates, Instrument,
+        )
+        ul = "TESTUL"
+        instruments = {
+            sym: Instrument(sym, ul, 2, False)
+            for sym, _ in syms_with_prices
+        }
+        universe = [s for s, _ in syms_with_prices]
+        prior_etf_close = {s: p for s, p in syms_with_prices}
+        overnight_gaps = {ul: 0.05}  # 5% gap, above 2% threshold
+        prior_two_closes = {ul: (100.0, 100.0)}  # flat — PS filter always passes
+
+        cands = compute_candidates(
+            universe, instruments, {"TESTUL": 0.02},
+            overnight_gaps, prior_two_closes, prior_etf_close,
+        )
+        return [c.symbol for c in cands]
+
+    def test_n1_keeps_1(self):
+        kept = self._run([("A", 100.0)])
+        assert kept == ["A"]
+
+    def test_n2_keeps_1_most_expensive(self):
+        # N==2: classic skip-cheap — keep only the pricier one
+        kept = self._run([("CHEAP", 50.0), ("PRICEY", 150.0)])
+        assert len(kept) == 1
+        assert kept[0] == "PRICEY"
+
+    def test_n3_keeps_2_most_expensive(self):
+        kept = self._run([("A", 30.0), ("B", 100.0), ("C", 200.0)])
+        assert len(kept) == 2
+        assert set(kept) == {"B", "C"}
+
+    def test_n4_keeps_2_most_expensive(self):
+        kept = self._run([("A", 10.0), ("B", 50.0), ("C", 100.0), ("D", 200.0)])
+        assert len(kept) == 2
+        assert set(kept) == {"C", "D"}

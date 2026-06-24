@@ -146,12 +146,6 @@ class SessionRunner:
                 date=str(session_date),
             )
 
-        # Subscribe to bars for ALL universe symbols before market open so the
-        # 09:30 bar lands in the cache for ORB seeding.  Phase 1 runs later at
-        # 09:31 (after the 9:30 bar closes) so we cannot wait until after Phase 1
-        # to start streaming.
-        self._router.subscribe(list(self._cfg.symbols))
-
         # Wait until 09:31 — the 9:30 bar must be closed before Phase 1 can
         # read its close price as the gap reference.
         open_eval_dt = self._clock.next_open_eval_start()
@@ -243,6 +237,24 @@ class SessionRunner:
                     is_candidate=p2.is_candidate,
                     rtg_excluded=p2.rtg_excluded,
                 )
+
+        # Subscribe only the day's candidates after ORB close (~10:00 ET).
+        # Subscribing all ~59 symbols at open exceeds IB's market-data line cap,
+        # causing IB to silently deliver no bars at all (silent failure — no error).
+        watched = [r.symbol for r in p2_results if r.is_candidate]
+        if watched:
+            self._router.subscribe(watched)
+            if self._log:
+                self._log.info("bar_subscription_started", n=len(watched), symbols=watched)
+            # Watchdog: 5-min grace period, then CRITICAL if any candidate has no bars.
+            self._sleep(300)
+            for sym in watched:
+                if self._router.bars_received(sym) == 0:
+                    if self._log:
+                        self._log.critical(
+                            "zero_bars_watchdog", symbol=sym,
+                            msg="No bars 5 min post-ORB; IB subscription may be silently dead",
+                        )
 
         self._wait_until_eod(session_date)
 

@@ -117,6 +117,10 @@ class BarRouter:
             return None
         return (datetime.now(ET) - self._ws_connected_at).total_seconds() / 60.0
 
+    def bars_received(self, symbol: str) -> int:
+        """Return the number of bars delivered for symbol since last subscribe()."""
+        return self._bars_received.get(symbol, 0)
+
     def unsubscribe(self) -> None:
         """
         Stop streaming: close the WebSocket connection, wait for the streaming

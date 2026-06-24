@@ -84,6 +84,9 @@ class _StubBarRouter:
     def unsubscribe(self):
         self.unsubscribed = True
 
+    def bars_received(self, symbol: str) -> int:
+        return 0
+
     def push_bar(self, symbol, bar):
         for fn in self._listeners:
             fn(symbol, bar)
@@ -422,3 +425,77 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_broker, tmp_store):
     # Cached but engine state unchanged (still ORB_COMPLETE, not triggered)
     assert len(cache.added) == 1
     assert engine.get_state("TQQQ") == SymbolState.ORB_COMPLETE
+
+
+def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
+    """
+    End-to-end dispatch path: runner._on_bar_dispatch → engine.on_bar → order placed.
+
+    Existing tests a-h call engine.on_bar() directly.  This test goes through
+    the full live bar-dispatch chain (the path that was silently dead in production
+    because subscribing all 59 symbols exceeded IB's market-data line cap).
+    """
+    from orb_live.config.live_config import load_live_config
+    from orb_live.execution.indicators import RollingIndicators
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from orb_live.execution.position_manager import LivePositionManager
+    from orb_live.execution.risk_gate import RiskGate
+    from orb_live.runner.session_runner import SessionRunner
+    from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
+
+    cfg  = load_live_config()
+    scfg = cfg.strategy_config
+
+    exc = SimpleNamespace(
+        entry_slippage_bps=10, entry_repeg_seconds=60.0,
+        entry_repeg_max_attempts=3, entry_slippage_max_bps=30,
+        exit_slippage_bps=5, stop_order_type="market",
+        session_kill_loss_pct=0.03, max_concurrent_positions=0,
+        max_gross_exposure_pct=2.0, max_position_pct=0.50,
+    )
+    policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
+    gate   = RiskGate(exc, tmp_store, mock_broker)
+    gate.session_start(100_000.0, TDATE)
+    indicators_store: dict = {}
+
+    mgr = LivePositionManager(
+        broker=mock_broker, policy=policy, state_store=tmp_store,
+        risk_gate=gate, indicators_store=indicators_store, config=scfg,
+    )
+    engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
+    engine.new_session(TDATE)
+
+    # Seed TQQQ as ORB_COMPLETE candidate (high=101, low=99, ema=100)
+    orb = _minimal_orb(high=101.0, low=99.0)
+    p2  = _make_p2("TQQQ", orb=orb)
+    engine.on_orb_complete("TQQQ", p2, None)
+
+    # Seed rolling indicator so check_breakout has a live EMA
+    ind = RollingIndicators("TQQQ", scfg)
+    orb_df = pd.DataFrame(
+        [{"high": 101.0, "low": 99.0, "close": 100.0}],
+        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
+    )
+    ind.seed_from_orb_bars(orb_df)
+    indicators_store["TQQQ"] = ind
+
+    runner = SessionRunner(
+        config=cfg, broker=mock_broker, state_store=tmp_store,
+        bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
+        pre_market_job=_StubPreMarket(), strategy_engine=engine,
+        position_manager=mgr, risk_gate=gate,
+        indicators_store=indicators_store,
+        underlying_store=SimpleNamespace(),
+        clock=_StubClock(), _sleep=lambda _: None,
+    )
+
+    # Post-ORB breakout bar (10:05 > orb_end=10:00): close=102 > orb_high=101 > ema≈100
+    breakout_bar = _bar(_et(10, 5), close=102.0, hi=103.0, lo=101.5)
+    runner._on_bar_dispatch("TQQQ", breakout_bar)
+
+    assert engine.get_state("TQQQ") == SymbolState.IN_POSITION, (
+        "_on_bar_dispatch must trigger breakout detection → IN_POSITION"
+    )
+    assert mock_broker._orders, (
+        "_on_bar_dispatch breakout must place an order in the broker"
+    )

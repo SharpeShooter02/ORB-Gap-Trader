@@ -336,9 +336,32 @@ def create_db_engine(db_path: Path) -> Engine:
     return engine
 
 
+def migrate_db(engine: Engine) -> None:
+    """ALTER TABLE to add any model columns missing from existing DB tables.
+
+    SQLite only supports ADD COLUMN — this handles the common case where a
+    column is added to the model after a live.db was already created.  Safe
+    to call repeatedly; existing columns are left untouched.
+    """
+    with engine.begin() as conn:
+        for table_name, table in _metadata.tables.items():
+            rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+            if not rows:
+                continue  # table doesn't exist yet; create_all will handle it
+            existing_cols = {row[1].lower() for row in rows}
+            for col in table.columns:
+                if col.name.lower() in existing_cols:
+                    continue
+                col_type = col.type.compile(dialect=engine.dialect)
+                conn.execute(
+                    text(f"ALTER TABLE {table_name} ADD COLUMN {col.name} {col_type}")
+                )
+
+
 def init_db(engine: Engine) -> None:
-    """Create all tables if they don't exist yet (idempotent)."""
+    """Create all tables if they don't exist yet, then add any missing columns."""
     _metadata.create_all(engine)
+    migrate_db(engine)
 
 
 # ── StateStore facade ─────────────────────────────────────────────────────────

@@ -97,3 +97,58 @@ def test_system_events(tmp_store):
         rows = c.execute(system_events.select()).mappings().all()
     assert len(rows) == 1
     assert rows[0]["event_type"] == "startup"
+
+
+def test_migrate_adds_missing_column(tmp_path):
+    """migrate_db must ADD COLUMN for any model column absent from existing tables.
+
+    Simulates a live.db created before realized_exit_price was added to
+    closed_trades — the crash path the suite never exercises because it always
+    builds a fresh schema.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy import text as sa_text
+    from orb_live.core.state_store import create_db_engine, init_db, migrate_db
+
+    db_path = tmp_path / "legacy.db"
+    engine = create_db_engine(db_path)
+
+    # Create closed_trades WITHOUT realized_exit_price (legacy schema)
+    with engine.begin() as conn:
+        conn.execute(sa_text("""
+            CREATE TABLE closed_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trade_date DATE NOT NULL,
+                symbol VARCHAR(16) NOT NULL,
+                direction INTEGER,
+                entry_price FLOAT,
+                exit_price FLOAT,
+                qty FLOAT,
+                pnl_pct FLOAT,
+                dollar_pnl FLOAT,
+                exit_reason VARCHAR(32),
+                opened_at DATETIME,
+                closed_at DATETIME
+            )
+        """))
+
+    # Confirm column is missing before migration
+    with engine.connect() as conn:
+        pragma = conn.execute(sa_text("PRAGMA table_info(closed_trades)")).fetchall()
+    col_names = {row[1] for row in pragma}
+    assert "realized_exit_price" not in col_names
+
+    # Run init_db (which calls migrate_db internally)
+    init_db(engine)
+
+    # Column must now exist
+    with engine.connect() as conn:
+        pragma = conn.execute(sa_text("PRAGMA table_info(closed_trades)")).fetchall()
+    col_names = {row[1] for row in pragma}
+    assert "realized_exit_price" in col_names, (
+        "migrate_db must add realized_exit_price to legacy closed_trades table"
+    )
+
+    # Query must succeed (no 'no such column' error)
+    with engine.connect() as conn:
+        conn.execute(sa_text("SELECT realized_exit_price FROM closed_trades LIMIT 1"))

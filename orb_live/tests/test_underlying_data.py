@@ -194,6 +194,61 @@ class TestHolidayAlignment:
         assert len(prior_rows) == 1  # only one available
 
 
+# ── check_freshness() ────────────────────────────────────────────────────────
+
+class TestCheckFreshness:
+    """Freshness gate: equity must be through prev_trading_day, crypto through yesterday."""
+
+    def _write_parquet(self, store, ul: str, dates: list[str], closes: list[float]):
+        df = pd.DataFrame({
+            "date": pd.to_datetime(dates),
+            "open": closes, "high": closes, "low": closes,
+            "close": closes, "volume": [1_000_000] * len(closes),
+        })
+        df.to_parquet(store._path(ul), index=False)
+
+    def test_stale_equity_flagged(self, tmp_path):
+        """Equity UL missing the prior trading day must appear in issues."""
+        store = _make_store(tmp_path)
+        # Session 2026-06-23 (Tue); prev_trading_day = 2026-06-22.
+        # Latest bar is 2026-06-20 (Fri) — stale.
+        self._write_parquet(store, "QQQ", ["2026-06-19", "2026-06-20"], [450.0, 451.0])
+        issues = store.check_freshness(date(2026, 6, 23), {"QQQ"})
+        assert issues, "Stale equity UL must be flagged"
+        assert any("QQQ" in m for m in issues)
+
+    def test_fresh_equity_passes(self, tmp_path):
+        """Equity UL current through prev_trading_day must pass."""
+        store = _make_store(tmp_path)
+        self._write_parquet(store, "QQQ", ["2026-06-19", "2026-06-20", "2026-06-22"], [450.0, 451.0, 453.0])
+        issues = store.check_freshness(date(2026, 6, 23), {"QQQ"})
+        assert not issues, f"Fresh equity must pass, got: {issues}"
+
+    def test_stale_crypto_flagged(self, tmp_path):
+        """Crypto UL missing yesterday (calendar day) must appear in issues."""
+        store = _make_store(tmp_path)
+        # Session 2026-06-23 (Tue); required = 2026-06-22.
+        # Latest bar is 2026-06-21 (Sun) — stale.
+        self._write_parquet(store, "BTC", ["2026-06-20", "2026-06-21"], [64000.0, 64500.0])
+        issues = store.check_freshness(date(2026, 6, 23), {"BTC"})
+        assert issues, "Stale crypto UL must be flagged"
+        assert any("BTC" in m for m in issues)
+
+    def test_fresh_crypto_passes(self, tmp_path):
+        """Crypto UL current through yesterday must pass."""
+        store = _make_store(tmp_path)
+        self._write_parquet(store, "BTC", ["2026-06-20", "2026-06-21", "2026-06-22"], [64000.0, 64500.0, 65000.0])
+        issues = store.check_freshness(date(2026, 6, 23), {"BTC"})
+        assert not issues, f"Fresh crypto must pass, got: {issues}"
+
+    def test_missing_parquet_flagged(self, tmp_path):
+        """UL with no parquet on disk must be flagged."""
+        store = _make_store(tmp_path)
+        issues = store.check_freshness(date(2026, 6, 23), {"QQQ"})
+        assert issues
+        assert any("no data" in m for m in issues)
+
+
 # ── warn_if_stale() ───────────────────────────────────────────────────────────
 
 class TestWarnIfStale:

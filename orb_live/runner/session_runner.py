@@ -114,6 +114,19 @@ class SessionRunner:
     # ── Phase runners ──────────────────────────────────────────────────────────
 
     def _run_pre_market(self, session_date: date) -> None:
+        # Refresh underlying data and abort loudly if any are still stale.
+        underlyings = {
+            spec[0]
+            for spec in self._cfg.prior_session_filters.values()
+            if spec is not None
+        }
+        try:
+            self._ul.refresh_and_assert_fresh(session_date, underlyings)
+        except RuntimeError as exc:
+            if self._log:
+                self._log.critical("underlying_refresh_failed", error=str(exc))
+            raise
+
         equity = float(self._broker.get_account().get("equity", 0.0))
         self._gate.session_start(equity, session_date)
         self._store.upsert_day_state(session_date, phase="pre_market")

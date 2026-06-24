@@ -76,6 +76,13 @@ YF_TICKER_MAP: dict[str, str] = {
 }
 
 
+# Underlyings whose parquets contain weekend/holiday rows (trade 7 days/week).
+# Derived from YF_TICKER_MAP entries that use the *-USD yfinance convention.
+CRYPTO_UNDERLYINGS: frozenset[str] = frozenset(
+    k for k, v in YF_TICKER_MAP.items() if v.endswith("-USD")
+)
+
+
 def _yf_ticker(underlying: str) -> str:
     """Resolve underlying symbol → yfinance ticker.
 
@@ -154,6 +161,49 @@ class UnderlyingDataStore:
                 f"max_age={max_age_days})"
             )
         return None
+
+    # ── Freshness gate ────────────────────────────────────────────────────────
+
+    def check_freshness(self, today: date, underlyings: set[str]) -> list[str]:
+        """Return a list of human-readable stale-data messages (empty = all fresh).
+
+        Freshness rules:
+          equity ULs  — latest bar must be >= prev_trading_day(today)
+          crypto ULs  — latest bar must be >= today - 1 calendar day
+                        (crypto trades 7 days/week so Saturday and Sunday bars
+                         must be present on a Monday)
+        """
+        from orb_live.core.calendar import prev_trading_day
+        issues: list[str] = []
+        for ul in sorted(underlyings):
+            df = self.get(ul)
+            if df.empty:
+                issues.append(f"{ul}: no data on disk")
+                continue
+            latest = df["date"].iloc[-1].date()
+            if ul in CRYPTO_UNDERLYINGS:
+                required = today - timedelta(days=1)
+            else:
+                required = prev_trading_day(today)
+            if latest < required:
+                issues.append(
+                    f"{ul}: stale — latest={latest}, required>={required}"
+                )
+        return issues
+
+    def refresh_and_assert_fresh(self, today: date, underlyings: set[str]) -> None:
+        """Refresh all UL data then abort loudly if any remain stale.
+
+        Call once at session startup, before pre-market.  Raises RuntimeError
+        so the session runner can catch it and emit a CRITICAL alert before
+        propagating the abort.
+        """
+        self.update_all()
+        issues = self.check_freshness(today, underlyings)
+        if issues:
+            msg = "STALE UNDERLYING DATA — session aborted:\n  " + "\n  ".join(issues)
+            self._log.critical("stale_underlying_data", issues=issues)
+            raise RuntimeError(msg)
 
     # ── Write ─────────────────────────────────────────────────────────────────
 

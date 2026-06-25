@@ -90,6 +90,7 @@ EXPLICIT_DROPS: frozenset[str] = frozenset({
     "CWEB", "CHAU", "BNKU", "DFEN", "DPST",
     "NAIL", "RETL", "DRN", "MIDU", "NRGU",
     "BTFX",  # untradable on IB (no security definition); BTC covered by 5 other C1 vehicles
+    "UBR",   # ProShares Ultra MSCI Brazil — delisted; IB HMDS returns error 162 (no data)
 })
 
 # Force-include — added to universe even if missing from master (synthetic rows).

@@ -23,6 +23,7 @@ Streaming design — 5-second bar aggregation:
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
@@ -48,6 +49,12 @@ _BAR_SIZE_MAP: dict[str, str] = {
     "1h":    "1 hour",
     "1hour": "1 hour",
 }
+
+
+class _Suppress162Filter(logging.Filter):
+    """Drop ib_insync's internal ERROR logs for code 162 (HMDS no data)."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "Error 162" not in record.getMessage()
 
 
 class BarAggregator:
@@ -172,6 +179,13 @@ class IBClient(BrokerClient):
         self._ib.orderStatusEvent += self._on_order_status
         self._ib.execDetailsEvent += self._on_exec_details
         self._ib.errorEvent       += self._on_ib_error
+
+        # Suppress ib_insync's internal logger for expected "no data" errors.
+        # Error 162 = HMDS query returned no data — handled by returning empty
+        # DataFrame; logging it as ERROR from ib_async.wrapper is just noise.
+        _ib_wrapper_log = logging.getLogger("ib_async.wrapper")
+        if not any(isinstance(f, _Suppress162Filter) for f in _ib_wrapper_log.filters):
+            _ib_wrapper_log.addFilter(_Suppress162Filter())
         self._ib.reqMarketDataType(self._market_data_type)
         if not self._allow_delayed_data:
             self._validate_subscription()
@@ -697,11 +711,14 @@ class IBClient(BrokerClient):
             self._order_cache[order_id]["last_fill_price"] = fill.execution.price
             self._order_cache[order_id]["last_fill_qty"]   = fill.execution.shares
 
-    # IB informational codes that are not actionable errors
+    # IB codes that are not actionable errors for our purposes.
+    # 162 = "HMDS query returned no data" — expected for delisted / illiquid symbols;
+    #        already handled by get_intraday_bars() returning an empty DataFrame.
     _IB_INFO_CODES = frozenset({
         2104, 2106, 2107, 2108, 2119, 2158,  # market data farm connected/disconnected
         2100,                                   # API client has been unsubscribed
         504,                                    # Not connected
+        162,                                    # HMDS no data — handled upstream
     })
 
     def _on_ib_error(self, reqId, errorCode, errorString, contract) -> None:

@@ -246,15 +246,18 @@ class SessionRunner:
             self._router.subscribe(watched)
             if self._log:
                 self._log.info("bar_subscription_started", n=len(watched), symbols=watched)
-            # Watchdog: 5-min grace period, then CRITICAL if any candidate has no bars.
+            # Watchdog: 5-min grace period, then CRITICAL + REST fallback if any
+            # candidate still has zero bars (reqRealTimeBars silently rejected by IB).
             self._sleep(300)
-            for sym in watched:
-                if self._router.bars_received(sym) == 0:
+            zero_bar_syms = [s for s in watched if self._router.bars_received(s) == 0]
+            if zero_bar_syms:
+                for sym in zero_bar_syms:
                     if self._log:
                         self._log.critical(
                             "zero_bars_watchdog", symbol=sym,
-                            msg="No bars 5 min post-ORB; IB subscription may be silently dead",
+                            msg="No bars 5 min post-ORB; switching to REST-poll fallback",
                         )
+                self._router.enter_degraded_mode()
 
         self._wait_until_eod(session_date)
 

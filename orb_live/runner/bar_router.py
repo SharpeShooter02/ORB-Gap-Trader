@@ -121,6 +121,10 @@ class BarRouter:
         """Return the number of bars delivered for symbol since last subscribe()."""
         return self._bars_received.get(symbol, 0)
 
+    def enter_degraded_mode(self) -> None:
+        """Force immediate REST-poll fallback (e.g. triggered by zero-bars watchdog)."""
+        self._enter_degraded_mode()
+
     def unsubscribe(self) -> None:
         """
         Stop streaming: close the WebSocket connection, wait for the streaming

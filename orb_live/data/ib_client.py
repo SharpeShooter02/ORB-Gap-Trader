@@ -697,16 +697,31 @@ class IBClient(BrokerClient):
             self._order_cache[order_id]["last_fill_price"] = fill.execution.price
             self._order_cache[order_id]["last_fill_qty"]   = fill.execution.shares
 
+    # IB informational codes that are not actionable errors
+    _IB_INFO_CODES = frozenset({
+        2104, 2106, 2107, 2108, 2119, 2158,  # market data farm connected/disconnected
+        2100,                                   # API client has been unsubscribed
+        504,                                    # Not connected
+    })
+
     def _on_ib_error(self, reqId, errorCode, errorString, contract) -> None:
         self._last_event_time = time.time()
+
+        if errorCode in self._IB_INFO_CODES:
+            return  # benign status messages
+
         if errorCode == 10089:
             self._market_data_degraded = True
-            if self._log:
-                self._log.error(
-                    "ib_market_data_subscription_required",
-                    error_code=errorCode,
-                    error_string=errorString,
-                )
+
+        if self._log:
+            sym = getattr(contract, "symbol", None) if contract else None
+            self._log.error(
+                "ib_error",
+                error_code=errorCode,
+                error_string=errorString,
+                req_id=reqId,
+                symbol=sym,
+            )
 
     def check_heartbeat(self) -> dict:
         """Return {'ok': bool, 'seconds_since_event': float | None}.

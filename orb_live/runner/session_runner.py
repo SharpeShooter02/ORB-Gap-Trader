@@ -340,6 +340,11 @@ class SessionRunner:
         self._mgr.on_bar(symbol, bar, ts)
 
         # 4. Entry detection
+        if self._log:
+            self._log.debug(
+                "engine_on_bar", symbol=symbol,
+                bar_time=str(bar_time), close=bar.get("close"),
+            )
         self._engine.on_bar(symbol, bar, ts)
 
     # ── Shutdown ───────────────────────────────────────────────────────────────

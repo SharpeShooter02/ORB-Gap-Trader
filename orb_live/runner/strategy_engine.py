@@ -162,6 +162,20 @@ class StrategyEngine:
         if not check_breakout(bar_series, p2.orb, p2.gap_direction, scfg):
             return
 
+        self._store.save_breakout_signal(
+            trade_date=self._trade_date,
+            symbol=symbol,
+            direction=p2.gap_direction,
+            breakout_price=float(bar["close"]),
+            orb_high=float(p2.orb["high"]),
+            orb_low=float(p2.orb["low"]),
+        )
+        if self._log:
+            self._log.info(
+                "breakout_detected", symbol=symbol,
+                direction=p2.gap_direction, price=float(bar["close"]),
+            )
+
         # max_entry_price gate
         entry_price_raw = float(bar["close"])
         if entry_price_raw > scfg.max_entry_price:

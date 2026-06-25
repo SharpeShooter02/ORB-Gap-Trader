@@ -456,6 +456,29 @@ class StateStore:
             ).mappings().all()
             return [r["symbol"] for r in rows]
 
+    # ── breakout_signal ───────────────────────────────────────────────────────
+
+    def save_breakout_signal(
+        self,
+        trade_date: date,
+        symbol: str,
+        direction: int,
+        breakout_price: float,
+        orb_high: float,
+        orb_low: float,
+    ) -> None:
+        with self.conn() as c:
+            c.execute(breakout_signal.insert().values(
+                trade_date=trade_date,
+                symbol=symbol,
+                direction=direction,
+                breakout_price=breakout_price,
+                orb_high=orb_high,
+                orb_low=orb_low,
+                detected_at=datetime.now(UTC),
+            ))
+            c.commit()
+
     # ── open_positions ────────────────────────────────────────────────────────
 
     def save_open_position(self, symbol: str, trade_date: date, **kwargs) -> None:

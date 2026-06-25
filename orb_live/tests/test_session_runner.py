@@ -499,3 +499,11 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
     assert mock_broker._orders, (
         "_on_bar_dispatch breakout must place an order in the broker"
     )
+
+    # breakout_signal row must be written
+    from orb_live.core.state_store import breakout_signal as bs_table
+    with tmp_store.conn() as c:
+        rows = c.execute(bs_table.select()).mappings().all()
+    assert len(rows) == 1, "breakout detection must write a breakout_signal row"
+    assert rows[0]["symbol"] == "TQQQ"
+    assert rows[0]["direction"] == 1

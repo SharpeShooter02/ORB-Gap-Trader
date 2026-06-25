@@ -1101,6 +1101,9 @@ class IBClient(BrokerClient):
         self._bar_aggregators.clear()
         self._bar_callback = None
 
+    def sleep(self, seconds: float) -> None:
+        self._ib.sleep(seconds)
+
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 

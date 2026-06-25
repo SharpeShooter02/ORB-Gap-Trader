@@ -67,7 +67,7 @@ class SessionRunner:
         self._ul          = underlying_store
         self._clock       = clock
         self._log         = logger
-        self._sleep       = _sleep or time.sleep
+        self._sleep       = _sleep or getattr(broker, "sleep", time.sleep)
 
         self._session_date: Optional[date] = None
         self._phase1_results = []

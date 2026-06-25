@@ -740,13 +740,19 @@ class IBClient(BrokerClient):
         }
 
     def _validate_subscription(self) -> None:
-        """Validate real-time data is available; raises ConnectionError if not."""
-        try:
-            self.get_latest_quote("SPY")
-        except RuntimeError as exc:
-            raise ConnectionError(
-                f"Market data subscription validation failed: {exc}"
-            ) from exc
+        """Validate market data is available; retries up to 3× for post-connect timing."""
+        last_exc: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                self.get_latest_quote("SPY")
+                return
+            except RuntimeError as exc:
+                last_exc = exc
+                if attempt < 2:
+                    self._ib.sleep(3)  # ticker data can arrive late after connect
+        raise ConnectionError(
+            f"Market data subscription validation failed: {last_exc}"
+        ) from last_exc
 
     def _normalize_status(self, ib_status: str) -> str:
         return self._IB_STATUS_MAP.get(ib_status, ib_status.lower())

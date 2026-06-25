@@ -507,3 +507,94 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
     assert len(rows) == 1, "breakout detection must write a breakout_signal row"
     assert rows[0]["symbol"] == "TQQQ"
     assert rows[0]["direction"] == 1
+
+
+def test_l_broker_sleep_pumps_loop_for_bar_delivery(tmp_store):
+    """
+    Regression for BUG 0b: runner._sleep must pump the IB event loop.
+
+    ib_insync's reqRealTimeBars updateEvent callbacks only fire while the event
+    loop is being pumped.  time.sleep() starves the loop; ib.sleep() (forwarded
+    via broker.sleep) keeps it alive so bars arrive during wait phases.
+
+    This test uses a real asyncio loop to verify the pump behaviour — a pure Mock
+    cannot catch this because it doesn't exercise blocking-vs-pumping.
+    """
+    import asyncio
+    import threading
+    from orb_live.config.live_config import load_live_config
+    from orb_live.runner.session_runner import SessionRunner
+    from orb_live.runner.strategy_engine import StrategyEngine
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from orb_live.execution.position_manager import LivePositionManager
+    from orb_live.execution.risk_gate import RiskGate
+
+    loop = asyncio.new_event_loop()
+    loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+    loop_thread.start()
+
+    class LoopAwareBroker:
+        _quote = {"bid": 99.90, "ask": 100.10}
+        _orders: dict = {}
+
+        def get_account(self):         return {"equity": 100_000.0}
+        def get_latest_quote(self, s): return dict(self._quote)
+        def get_positions(self):       return {}
+        def get_open_orders(self):     return []
+
+        def sleep(self, seconds: float) -> None:
+            fut = asyncio.run_coroutine_threadsafe(asyncio.sleep(seconds), loop)
+            fut.result(timeout=seconds + 2)
+
+    broker = LoopAwareBroker()
+    cfg    = load_live_config()
+    scfg   = cfg.strategy_config
+    exc    = SimpleNamespace(
+        entry_slippage_bps=10, entry_repeg_seconds=60.0,
+        entry_repeg_max_attempts=3, entry_slippage_max_bps=30,
+        exit_slippage_bps=5, stop_order_type="market",
+        session_kill_loss_pct=0.03, max_concurrent_positions=0,
+        max_gross_exposure_pct=2.0, max_position_pct=0.50,
+    )
+    policy = MarketableLimitPolicy(broker, exc, tmp_store, _sleep=lambda _: None)
+    gate   = RiskGate(exc, tmp_store, broker)
+    gate.session_start(100_000.0, TDATE)
+    ind_store: dict = {}
+    mgr = LivePositionManager(
+        broker=broker, policy=policy, state_store=tmp_store,
+        risk_gate=gate, indicators_store=ind_store, config=scfg,
+    )
+    engine = StrategyEngine(mgr, cfg, tmp_store, broker)
+    engine.new_session(TDATE)
+
+    # _sleep=None → SessionRunner picks up broker.sleep via getattr fallback
+    runner = SessionRunner(
+        config=cfg, broker=broker, state_store=tmp_store,
+        bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
+        pre_market_job=_StubPreMarket(), strategy_engine=engine,
+        position_manager=mgr, risk_gate=gate,
+        indicators_store=ind_store, underlying_store=SimpleNamespace(),
+        clock=_StubClock(), _sleep=None,
+    )
+
+    dispatched: list = []
+
+    async def _deliver_after_delay():
+        await asyncio.sleep(0.05)  # fire 50ms into the 200ms sleep
+        runner._on_bar_dispatch("TQQQ", _bar(_et(10, 5), close=100.5))
+        dispatched.append(True)
+
+    asyncio.run_coroutine_threadsafe(_deliver_after_delay(), loop)
+
+    # broker.sleep pumps the real loop — the 50ms callback must fire before this returns
+    runner._sleep(0.2)
+
+    loop.call_soon_threadsafe(loop.stop)
+    loop_thread.join(timeout=5)
+    loop.close()
+
+    assert dispatched, (
+        "broker.sleep must pump the asyncio loop so bars scheduled inside it reach "
+        "_on_bar_dispatch; failure means the runner is using time.sleep() which "
+        "starves the ib_insync event loop (BUG 0b)"
+    )

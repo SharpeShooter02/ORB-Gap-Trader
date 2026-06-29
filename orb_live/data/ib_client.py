@@ -83,7 +83,8 @@ class BarAggregator:
 
         if self.current_minute is None:
             self.current_minute = bar_minute
-            self.open  = float(bar.open)
+            _open = getattr(bar, "open_", None)
+            self.open  = float(_open if _open is not None else bar.open)
             self.high  = float(bar.high)
             self.low   = float(bar.low)
             self.close = float(bar.close)
@@ -93,7 +94,8 @@ class BarAggregator:
         if bar_minute > self.current_minute:
             completed = self.finalize()
             self.current_minute = bar_minute
-            self.open  = float(bar.open)
+            _open = getattr(bar, "open_", None)
+            self.open  = float(_open if _open is not None else bar.open)
             self.high  = float(bar.high)
             self.low   = float(bar.low)
             self.close = float(bar.close)

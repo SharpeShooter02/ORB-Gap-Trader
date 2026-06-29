@@ -1002,7 +1002,7 @@ def _make_5sec_bar(
     close: float = 100.5,
     volume: float = 1000.0,
 ) -> SimpleNamespace:
-    return SimpleNamespace(time=dt, open=open, high=high, low=low,
+    return SimpleNamespace(time=dt, open_=open, high=high, low=low,
                            close=close, volume=volume)
 
 

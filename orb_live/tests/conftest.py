@@ -232,6 +232,9 @@ class MockBroker:
             return False
         return True   # not found → idempotent success
 
+    def get_min_tick(self, symbol: str) -> float:
+        return 0.01
+
     def get_position(self, symbol: str) -> Optional[dict]:
         return self._positions.get(symbol)
 

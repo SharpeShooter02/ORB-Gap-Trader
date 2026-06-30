@@ -467,7 +467,11 @@ def _make_trade(
     return SimpleNamespace(order=order, orderStatus=order_status, contract=contract)
 
 
-def _client_with_asset(symbol: str = "TQQQ", tradable: bool = True) -> IBClient:
+def _client_with_asset(
+    symbol: str = "TQQQ",
+    tradable: bool = True,
+    min_tick: float = 0.01,
+) -> IBClient:
     """Return an IBClient whose asset + contract caches are pre-populated."""
     with patch("orb_live.data.ib_client.IB") as MockIB:
         mock_ib = MagicMock()
@@ -481,6 +485,7 @@ def _client_with_asset(symbol: str = "TQQQ", tradable: bool = True) -> IBClient:
     }
     fake_contract = SimpleNamespace(symbol=symbol, conId=12345, primaryExchange="ARCA")
     client._contract_cache[symbol] = fake_contract if tradable else None
+    client._min_tick_cache[symbol] = min_tick
     return client
 
 
@@ -532,41 +537,41 @@ class TestSubmitLimitOrder:
         with pytest.raises(ConnectionError):
             client.submit_limit_order("TQQQ", "buy", 10, 50.0)
 
-    def test_submit_limit_order_blocks_until_terminal(self):
+    def test_submit_limit_order_returns_initial_state_immediately(self):
         client = _client_with_asset("TQQQ")
-        pending   = _make_trade(order_id=50, status="PendingSubmit")
-        submitted = _make_trade(order_id=50, status="Submitted")
+        pending = _make_trade(order_id=50, status="PendingSubmit")
         client._ib.isConnected.return_value = True
         client._ib.placeOrder.return_value  = pending
-        client._ib.trades.side_effect       = [[pending], [submitted]]
 
         result = client.submit_limit_order("TQQQ", "buy", 10, 50.0)
         assert result["status"]     == "new"
-        assert result["status_raw"] == "Submitted"
+        assert result["status_raw"] == "PendingSubmit"
+        # Fire-and-forget: no polling; trades() must never be called during submit
+        client._ib.trades.assert_not_called()
 
-    def test_submit_limit_order_returns_on_validation_error(self):
+    def test_submit_limit_order_reflects_immediate_inactive(self):
         client = _client_with_asset("TQQQ")
-        pending  = _make_trade(order_id=51, status="PendingSubmit")
+        # If IB returns the trade already marked Inactive (synchronous rejection),
+        # the cached result must reflect that.
         inactive = _make_trade(order_id=51, status="Inactive")
         client._ib.isConnected.return_value = True
-        client._ib.placeOrder.return_value  = pending
-        client._ib.trades.side_effect       = [[pending], [inactive]]
+        client._ib.placeOrder.return_value  = inactive
 
         result = client.submit_limit_order("TQQQ", "buy", 10, 50.0)
         assert result["status"]     == "rejected"
         assert result["status_raw"] == "Inactive"
 
-    def test_submit_limit_order_timeout_logs_warning(self):
+    def test_submit_limit_order_no_blocking_regardless_of_timeout(self):
         client = _client_with_asset("TQQQ")
-        client._log = MagicMock()
         pending = _make_trade(order_id=52, status="PendingSubmit")
         client._ib.isConnected.return_value = True
         client._ib.placeOrder.return_value  = pending
-        client._ib.trades.return_value      = [pending]
 
+        # timeout param is accepted but ignored; must return immediately with
+        # initial state and must NOT call ib.sleep (which would re-enter the loop)
         result = client.submit_limit_order("TQQQ", "buy", 10, 50.0, timeout=0.1)
-        assert result["status"] == "new"  # PendingSubmit → "new"
-        client._log.warning.assert_called_once()
+        assert result["status"] == "new"
+        client._ib.sleep.assert_not_called()
 
 
 class TestSubmitMarketOrder:
@@ -615,17 +620,16 @@ class TestSubmitStopOrder:
         assert placed_order.action     == "SELL"
         assert placed_order.lmtPrice   != pytest.approx(185.50)  # no limit price on stop-market
 
-    def test_submit_stop_order_blocks_until_terminal(self):
+    def test_submit_stop_order_returns_initial_state_immediately(self):
         client = _client_with_asset("SOXL")
-        pending   = _make_trade(order_id=71, status="PendingSubmit")
-        submitted = _make_trade(order_id=71, status="Submitted")
+        pending = _make_trade(order_id=71, status="PendingSubmit")
         client._ib.isConnected.return_value = True
         client._ib.placeOrder.return_value  = pending
-        client._ib.trades.side_effect       = [[pending], [submitted]]
 
         result = client.submit_stop_order("SOXL", "sell", 1, 185.50)
         assert result["status"]     == "new"
-        assert result["status_raw"] == "Submitted"
+        assert result["status_raw"] == "PendingSubmit"
+        client._ib.trades.assert_not_called()
 
     def test_submit_stop_order_raises_if_disconnected(self):
         client = _client_with_asset("SOXL")
@@ -827,28 +831,31 @@ class TestCancelOrder:
         assert result is True
         client._ib.cancelOrder.assert_called_once()
 
-    def test_cancel_fill_race_returns_false(self):
-        with patch("orb_live.data.ib_client.IB"):
-            client = IBClient(paper=True)
-
-        submitted = _make_trade(order_id=11, status="Submitted")
-        filled    = _make_trade(order_id=11, status="Filled")
-        client._ib.trades.side_effect = [[submitted], [filled]]
-
-        result = client.cancel_order("11")
-        assert result is False
-
-    def test_cancel_timeout_returns_false(self):
+    def test_cancel_when_already_filled_returns_false(self):
+        """Order already Filled before cancel is called → returns False + logs warning."""
         with patch("orb_live.data.ib_client.IB"):
             client = IBClient(paper=True)
         mock_log = MagicMock()
         client._log = mock_log
+        filled = _make_trade(order_id=11, status="Filled")
+        client._ib.trades.return_value = [filled]
+
+        result = client.cancel_order("11")
+        assert result is False
+        client._ib.cancelOrder.assert_not_called()
+        mock_log.warning.assert_called_once()
+
+    def test_cancel_fire_and_forget_returns_true_when_pending(self):
+        """Active order: cancelOrder called once, True returned immediately (no wait)."""
+        with patch("orb_live.data.ib_client.IB"):
+            client = IBClient(paper=True)
         submitted = _make_trade(order_id=12, status="Submitted")
         client._ib.trades.return_value = [submitted]
 
         result = client.cancel_order("12", timeout=0.1)
-        assert result is False
-        mock_log.warning.assert_called_once()
+        assert result is True
+        client._ib.cancelOrder.assert_called_once()
+        client._ib.sleep.assert_not_called()
 
     def test_pending_cancel_not_terminal(self):
         """PendingCancel must not cause cancel_order to return early."""
@@ -872,6 +879,107 @@ class TestCancelOrder:
         result = client.get_latest_quote("TQQQ")
         assert result["bid_size"] == 0
         assert result["ask_size"] == 0
+
+
+class TestRoundToTick:
+    """BUG 7 — price rounding to minTick."""
+
+    def _r(self, price, tick, side):
+        return IBClient._round_to_tick(price, tick, side)
+
+    def test_buy_rounds_up(self):
+        assert self._r(26.603369999999998, 0.01, "buy") == pytest.approx(26.61)
+
+    def test_sell_rounds_down(self):
+        assert self._r(26.603369999999998, 0.01, "sell") == pytest.approx(26.60)
+
+    def test_already_on_tick_unchanged(self):
+        assert self._r(26.60, 0.01, "buy")  == pytest.approx(26.60)
+        assert self._r(26.60, 0.01, "sell") == pytest.approx(26.60)
+
+    def test_zero_tick_passthrough(self):
+        assert self._r(26.603369999999998, 0.0, "buy") == pytest.approx(26.603369999999998)
+
+    def test_submitted_price_is_multiple_of_mintick(self):
+        """submit_limit_order must round price so IB never sees a sub-tick value."""
+        client = _client_with_asset("TQQQ", min_tick=0.01)
+        pending = _make_trade(order_id=60, status="PendingSubmit")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = pending
+
+        # sub-penny price that caused IB Error 110 in production
+        client.submit_limit_order("TQQQ", "buy", 10, 26.603369999999998)
+
+        _, placed_order = client._ib.placeOrder.call_args[0]
+        price = placed_order.lmtPrice
+        tick  = client.get_min_tick("TQQQ")
+        remainder = round(price / tick) * tick
+        assert price == pytest.approx(remainder), f"price {price} not on tick {tick}"
+
+    def test_sell_stop_price_rounds_down(self):
+        """submit_stop_order sell must round stop price DOWN to stay marketable."""
+        client = _client_with_asset("SOXL", min_tick=0.01)
+        pending = _make_trade(order_id=61, status="PendingSubmit")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = pending
+
+        client.submit_stop_order("SOXL", "sell", 1, 185.507)
+
+        _, placed_order = client._ib.placeOrder.call_args[0]
+        assert placed_order.auxPrice == pytest.approx(185.50)
+
+
+class TestNonBlockingSubmit:
+    """BUG 0e — submit methods must not call ib.sleep (safe in ib_async callbacks)."""
+
+    def test_submit_limit_order_does_not_call_ib_sleep(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = _make_trade(order_id=70, status="PendingSubmit")
+        client.submit_limit_order("TQQQ", "buy", 5, 50.0)
+        client._ib.sleep.assert_not_called()
+
+    def test_submit_stop_order_does_not_call_ib_sleep(self):
+        client = _client_with_asset("SOXL")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = _make_trade(order_id=71, status="PendingSubmit")
+        client.submit_stop_order("SOXL", "sell", 1, 185.0)
+        client._ib.sleep.assert_not_called()
+
+    def test_submit_market_order_does_not_call_ib_sleep(self):
+        client = _client_with_asset("SOXL")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = _make_trade(order_id=72, status="PendingSubmit")
+        client.submit_market_order("SOXL", "sell", 1)
+        client._ib.sleep.assert_not_called()
+
+    def test_submit_from_running_asyncio_loop_no_reentrance(self):
+        """
+        Calling submit_limit_order from inside a running asyncio event loop must
+        not raise 'This event loop is already running'.
+        """
+        import asyncio
+
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        client._ib.placeOrder.return_value  = _make_trade(order_id=73, status="PendingSubmit")
+
+        errors = []
+
+        async def _run():
+            try:
+                # Simulate being called from inside an ib_async event callback:
+                # the asyncio loop is already running at this point.
+                client.submit_limit_order("TQQQ", "buy", 10, 50.0)
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_run())
+        finally:
+            loop.close()
+        assert errors == [], f"submit raised from async context: {errors}"
 
 
 class TestOrderEventHandlers:

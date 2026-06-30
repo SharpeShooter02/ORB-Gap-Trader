@@ -159,6 +159,7 @@ class IBClient(BrokerClient):
         self._streams:        dict[str, object]       = {}
         self._bar_aggregators: dict[str, BarAggregator] = {}
         self._bar_callback:   Optional[Callable]      = None
+        self._min_tick_cache: dict[str, float]        = {}
         self._market_data_type     = int(os.getenv("IB_MARKET_DATA_TYPE", "1"))
         self._allow_delayed_data   = os.getenv("IB_ALLOW_DELAYED_DATA", "").lower() in ("1", "true")
         self._market_data_degraded = False
@@ -371,6 +372,14 @@ class IBClient(BrokerClient):
             if qualified:
                 c = qualified[0]
                 self._contract_cache[symbol] = c
+                # Cache minTick now (outside any event callback) so submit methods
+                # can round prices without a blocking reqContractDetails call.
+                try:
+                    details = self._ib.reqContractDetails(c)
+                    tick = float(details[0].minTick) if details and details[0].minTick else 0.0
+                    self._min_tick_cache[symbol] = tick if tick > 0 else 0.01
+                except Exception:
+                    self._min_tick_cache[symbol] = 0.01
                 result = {
                     "symbol":           symbol,
                     "tradable":         True,
@@ -405,6 +414,27 @@ class IBClient(BrokerClient):
         self._asset_cache[symbol] = result
         return result
 
+    # ── Min-tick helpers ──────────────────────────────────────────────────────
+
+    def get_min_tick(self, symbol: str) -> float:
+        """Return the minimum price variation for symbol (cached from get_asset)."""
+        return self._min_tick_cache.get(symbol, 0.01)
+
+    def _get_min_tick(self, symbol: str) -> float:
+        return self._min_tick_cache.get(symbol, 0.01)
+
+    @staticmethod
+    def _round_to_tick(price: float, tick: float, side: str) -> float:
+        """Round price to the nearest tick in the marketable direction.
+
+        Buy → round up  (limit stays ≥ reference, remains immediately fillable).
+        Sell → round down (limit stays ≤ reference).
+        """
+        if tick <= 0:
+            return price
+        mult = price / tick
+        return (math.ceil(mult) * tick) if side == "buy" else (math.floor(mult) * tick)
+
     # ── Orders ────────────────────────────────────────────────────────────────
 
     def submit_limit_order(
@@ -425,8 +455,9 @@ class IBClient(BrokerClient):
         if not asset["tradable"]:
             raise ValueError(f"{symbol} is not tradable on IB")
 
-        contract = self._contract_cache[symbol]
-        action   = "BUY" if side.lower() == "buy" else "SELL"
+        contract   = self._contract_cache[symbol]
+        action     = "BUY" if side.lower() == "buy" else "SELL"
+        limit_price = self._round_to_tick(limit_price, self._get_min_tick(symbol), side.lower())
         order    = LimitOrder(action, qty, limit_price)
         order.tif        = tif.upper()
         order.outsideRth = extended_hours
@@ -436,7 +467,9 @@ class IBClient(BrokerClient):
         trade = self._ib.placeOrder(contract, order)
         order_int = trade.order.orderId
         self._order_cache[order_int] = self._trade_to_dict(trade)
-        return self._wait_for_submit_terminal(order_int, symbol, timeout)
+        # Non-blocking: return initial state; _on_order_status will update
+        # the cache asynchronously as IB confirms submission and fills.
+        return self._order_cache[order_int]
 
     def submit_market_order(
         self,
@@ -462,42 +495,37 @@ class IBClient(BrokerClient):
         trade = self._ib.placeOrder(contract, order)
         order_int = trade.order.orderId
         self._order_cache[order_int] = self._trade_to_dict(trade)
-        return self._wait_for_submit_terminal(order_int, symbol, timeout)
+        return self._order_cache[order_int]
 
     def get_order(self, order_id: str) -> dict:
+        """Return current order state, preferring live ib_async trade state.
+
+        _find_trade reads from ib_async's internal trade table, which the
+        reader thread updates independently of the asyncio event loop — so
+        this method returns fresh status even when called from inside an
+        ib_async event callback (where ib.sleep / run_until_complete are
+        forbidden).
+        """
         key = int(order_id)
+        trade = self._find_trade(key)
+        if trade is not None:
+            current = self._trade_to_dict(trade)
+            self._order_cache[key] = current
+            return current
         if key not in self._order_cache:
             raise KeyError(f"Order {order_id} not found in cache")
         return self._order_cache[key]
-
-    def _wait_for_submit_terminal(self, order_int: int, symbol: str, timeout: float) -> dict:
-        _TERMINAL = {"Submitted", "Filled", "PartiallyFilled", "Cancelled", "ApiCancelled", "Inactive"}
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            trade = self._find_trade(order_int)
-            if trade is None:
-                break
-            current = self._trade_to_dict(trade)
-            self._order_cache[order_int] = current
-            if trade.orderStatus.status in _TERMINAL:
-                return current
-            self._ib.sleep(0.25)
-
-        cached = self._order_cache.get(order_int, {})
-        if self._log:
-            self._log.warning(
-                "submit_order_timeout",
-                order_id=str(order_int),
-                symbol=symbol,
-                timeout=timeout,
-            )
-        return cached
 
     def _find_trade(self, order_int: int):
         matching = [t for t in self._ib.trades() if t.order.orderId == order_int]
         return matching[0] if matching else None
 
     def cancel_order(self, order_id: str, timeout: float = 5.0) -> bool:
+        """Cancel an order and return immediately (fire-and-forget).
+
+        Never calls ib.sleep — safe to call from inside ib_async event
+        callbacks.  Cancellation confirmation arrives via _on_order_status.
+        """
         _TERMINAL = {"Filled", "Cancelled", "ApiCancelled", "Inactive"}
         order_int = int(order_id)
 
@@ -506,35 +534,16 @@ class IBClient(BrokerClient):
             return True  # already done — idempotent success
 
         if trade.orderStatus.status in _TERMINAL:
+            if trade.orderStatus.status == "Filled" and self._log:
+                self._log.warning(
+                    "cancel_order_fill_race",
+                    order_id=order_id,
+                    symbol=trade.contract.symbol,
+                )
             return trade.orderStatus.status in ("Cancelled", "ApiCancelled", "Inactive")
 
         self._ib.cancelOrder(trade.order)
-
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            self._ib.sleep(0.25)
-            trade = self._find_trade(order_int)
-            if trade is None:
-                return True
-            status = trade.orderStatus.status
-            if status in _TERMINAL:
-                if status == "Filled":
-                    if self._log:
-                        self._log.warning(
-                            "cancel_order_fill_race",
-                            order_id=order_id,
-                            symbol=trade.contract.symbol,
-                        )
-                    return False
-                return True
-
-        if self._log:
-            self._log.warning(
-                "cancel_order_timeout",
-                order_id=order_id,
-                timeout=timeout,
-            )
-        return False
+        return True  # _on_order_status will confirm when IB acks the cancel
 
     def submit_stop_order(
         self,
@@ -553,8 +562,9 @@ class IBClient(BrokerClient):
         if not asset["tradable"]:
             raise ValueError(f"{symbol} is not tradable on IB")
 
-        contract = self._contract_cache[symbol]
-        action   = "BUY" if side.lower() == "buy" else "SELL"
+        contract   = self._contract_cache[symbol]
+        action     = "BUY" if side.lower() == "buy" else "SELL"
+        stop_price = self._round_to_tick(stop_price, self._get_min_tick(symbol), side.lower())
 
         # Stop-market: orderType="STP", auxPrice is the trigger level.
         # When market crosses auxPrice, IB fires a market order — no limit.
@@ -566,7 +576,7 @@ class IBClient(BrokerClient):
         trade = self._ib.placeOrder(contract, order)
         order_int = trade.order.orderId
         self._order_cache[order_int] = self._trade_to_dict(trade)
-        return self._wait_for_submit_terminal(order_int, symbol, timeout)
+        return self._order_cache[order_int]
 
     def modify_stop_order(
         self,
@@ -620,7 +630,7 @@ class IBClient(BrokerClient):
         self._ib.placeOrder(trade.contract, trade.order)
 
         self._order_cache[order_int] = self._trade_to_dict(trade)
-        return self._wait_for_submit_terminal(order_int, trade.contract.symbol, timeout)
+        return self._order_cache[order_int]
 
     def submit_oca_pair(
         self,
@@ -646,6 +656,9 @@ class IBClient(BrokerClient):
         oca_tag  = oca_group or (
             f"OCA-{symbol}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
         )
+        tick = self._get_min_tick(symbol)
+        tp1_limit_price = self._round_to_tick(tp1_limit_price, tick, side.lower())
+        stop_price      = self._round_to_tick(stop_price,      tick, side.lower())
 
         tp1_order           = LimitOrder(action, qty, tp1_limit_price)
         tp1_order.ocaGroup  = oca_tag
@@ -664,9 +677,7 @@ class IBClient(BrokerClient):
         stop_int = stop_trade.order.orderId
         self._order_cache[tp1_int]  = self._trade_to_dict(tp1_trade)
         self._order_cache[stop_int] = self._trade_to_dict(stop_trade)
-
-        self._wait_for_submit_terminal(tp1_int,  symbol, timeout)
-        self._wait_for_submit_terminal(stop_int, symbol, timeout)
+        # Non-blocking: _on_order_status will update cache when IB confirms.
 
         return {
             "tp1_order_id":  str(tp1_int),

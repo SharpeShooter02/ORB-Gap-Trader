@@ -175,17 +175,19 @@ def test_b_entry_full_fill_returns_open_position(mock_broker, tmp_store):
 
 # ── c. Zero fill → unfilled ────────────────────────────────────────────────────
 
-def test_c_zero_fill_returns_none_status_unfilled(mock_broker, tmp_store):
-    """Zero fill: open_position returns None; DB row has status='unfilled'."""
+def test_c_zero_fill_returns_none_no_db_row(mock_broker, tmp_store):
+    """Zero fill: open_position returns None; 'entering' row must be deleted.
+
+    A left-behind row blocks re-entry on the same symbol (UNIQUE constraint).
+    After BUG 8 fix the row is deleted, not left as 'unfilled'.
+    """
     mock_broker.set_fill_fraction(0.0)
     mgr = _build_mgr(mock_broker, tmp_store)
     pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
 
     assert pos is None
     assert mgr._positions.get(SYMBOL) is None
-    db_row = tmp_store.get_open_position(SYMBOL)
-    assert db_row is not None
-    assert db_row["status"] == "unfilled"
+    assert tmp_store.get_open_position(SYMBOL) is None
 
 
 # ── d. Partial fill → shares recomputed ───────────────────────────────────────
@@ -1189,3 +1191,152 @@ def test_ar_oca_repoll_for_filled_avg_price(mock_broker, tmp_store):
         f"realized_exit_price should be re-polled {_repoll_price}; got {row['realized_exit_price']}"
     assert row["exit_price"] == pytest.approx(102.0), \
         f"exit_price should be tp1_price=102.0; got {row['exit_price']}"
+
+
+# ── BUG 8: stale 'entering' row cleanup ───────────────────────────────────────
+
+def test_as_failed_entry_exception_leaves_no_db_row(mock_broker, tmp_store):
+    """Entry submission raises → 'entering' row must be deleted immediately.
+
+    A left-behind row causes IntegrityError on the next breakout for the same
+    symbol.
+    """
+    from unittest.mock import patch
+
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    with patch.object(mock_broker, "submit_limit_order",
+                      side_effect=RuntimeError("IB connection lost")):
+        pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+
+    assert pos is None
+    assert mgr._positions.get(SYMBOL) is None
+    assert tmp_store.get_open_position(SYMBOL) is None, \
+        "Stale 'entering' row must be deleted after a submission exception"
+
+
+def test_at_second_breakout_after_failed_entry_succeeds(mock_broker, tmp_store):
+    """After a failed entry (no DB row left), a second breakout on the same symbol
+    must open successfully without IntegrityError.
+    """
+    from unittest.mock import patch
+
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    # First attempt: submission fails
+    with patch.object(mock_broker, "submit_limit_order",
+                      side_effect=RuntimeError("timeout")):
+        pos1 = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos1 is None
+
+    # Second attempt: normal fill — must NOT raise IntegrityError
+    pos2 = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos2 is not None
+    assert pos2.status == "open"
+
+
+def test_au_startup_reconcile_purges_entering_row(mock_broker, tmp_store):
+    """startup_reconcile must delete 'entering' rows left from a prior session.
+
+    Simulates a process restart where the previous run crashed after persisting
+    the 'entering' row but before entry filled (or the position was rejected).
+    """
+    # Manually insert a stale 'entering' row (simulates prior crash)
+    tmp_store.save_open_position(
+        symbol=SYMBOL, trade_date=TRADE_DATE,
+        direction=1, status="entering",
+        entry_price=100.0, actual_entry_price=100.0,
+        qty=100, entry_shares=100, remaining=100,
+        orb_range=1.0, stop_price=99.0, current_stop=99.0,
+        tp1_price=101.0, tp2_price=102.0,
+        tp1_shares=35, tp2_shares=5, tp3_shares=60,
+        tp1_hit=False, tp2_hit=False, tp3_hit=False,
+        use_trail_atp1=False, trail_atp1_dist=0.0,
+        max_fav=0.0, post_tp2_mfe=0.0, decision_reason="",
+    )
+    assert tmp_store.get_open_position(SYMBOL) is not None
+
+    mgr = _build_mgr(mock_broker, tmp_store)
+    mgr.startup_reconcile()
+
+    assert tmp_store.get_open_position(SYMBOL) is None, \
+        "startup_reconcile must purge non-'open' rows"
+
+
+def test_av_startup_reconcile_purges_broker_orphan(mock_broker, tmp_store):
+    """startup_reconcile must delete an 'open' DB row when the broker has no position.
+
+    Simulates a position that was closed at the broker (filled EOD or manually)
+    but whose DB row was never cleaned up due to a crash.
+    """
+    tmp_store.save_open_position(
+        symbol=SYMBOL, trade_date=TRADE_DATE,
+        direction=1, status="open",
+        entry_price=100.0, actual_entry_price=100.1,
+        qty=100, entry_shares=100, remaining=100,
+        orb_range=1.0, stop_price=99.0, current_stop=99.0,
+        tp1_price=101.0, tp2_price=102.0,
+        tp1_shares=35, tp2_shares=5, tp3_shares=60,
+        tp1_hit=False, tp2_hit=False, tp3_hit=False,
+        use_trail_atp1=False, trail_atp1_dist=0.0,
+        max_fav=0.0, post_tp2_mfe=0.0, decision_reason="",
+    )
+    # Broker has no position (the position was closed externally)
+    mock_broker.set_broker_position(SYMBOL, 0)
+
+    mgr = _build_mgr(mock_broker, tmp_store)
+    mgr.startup_reconcile()
+
+    assert tmp_store.get_open_position(SYMBOL) is None, \
+        "startup_reconcile must purge 'open' rows with no matching broker position"
+
+
+def test_aw_startup_reconcile_keeps_live_broker_position(mock_broker, tmp_store):
+    """startup_reconcile must NOT delete an 'open' row that the broker still holds."""
+    tmp_store.save_open_position(
+        symbol=SYMBOL, trade_date=TRADE_DATE,
+        direction=1, status="open",
+        entry_price=100.0, actual_entry_price=100.1,
+        qty=100, entry_shares=100, remaining=100,
+        orb_range=1.0, stop_price=99.0, current_stop=99.0,
+        tp1_price=101.0, tp2_price=102.0,
+        tp1_shares=35, tp2_shares=5, tp3_shares=60,
+        tp1_hit=False, tp2_hit=False, tp3_hit=False,
+        use_trail_atp1=False, trail_atp1_dist=0.0,
+        max_fav=0.0, post_tp2_mfe=0.0, decision_reason="",
+    )
+    mock_broker.set_broker_position(SYMBOL, 100)
+
+    mgr = _build_mgr(mock_broker, tmp_store)
+    mgr.startup_reconcile()
+
+    assert tmp_store.get_open_position(SYMBOL) is not None, \
+        "startup_reconcile must keep rows where the broker still holds the position"
+
+
+def test_ax_open_position_blocked_by_db_open_row(mock_broker, tmp_store):
+    """If the DB has an 'open' row (in-memory is empty after restart), open_position
+    must return None rather than overwriting the real position's record.
+    """
+    tmp_store.save_open_position(
+        symbol=SYMBOL, trade_date=TRADE_DATE,
+        direction=1, status="open",
+        entry_price=100.0, actual_entry_price=100.1,
+        qty=100, entry_shares=100, remaining=100,
+        orb_range=1.0, stop_price=99.0, current_stop=99.0,
+        tp1_price=101.0, tp2_price=102.0,
+        tp1_shares=35, tp2_shares=5, tp3_shares=60,
+        tp1_hit=False, tp2_hit=False, tp3_hit=False,
+        use_trail_atp1=False, trail_atp1_dist=0.0,
+        max_fav=0.0, post_tp2_mfe=0.0, decision_reason="",
+    )
+    # in-memory is empty (simulates fresh process start)
+    mgr = _build_mgr(mock_broker, tmp_store)
+    assert mgr._positions == {}
+
+    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+
+    assert pos is None, "open_position must not overwrite an existing 'open' DB row"
+    # Original row must survive intact
+    row = tmp_store.get_open_position(SYMBOL)
+    assert row is not None and row["status"] == "open"

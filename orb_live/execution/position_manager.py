@@ -221,6 +221,19 @@ class LivePositionManager:
         trail_mult = float(override.get("mult", 1.0)) if use_trail else 0.0
         trail_dist = trail_mult * entry["orb_range"]
 
+        # Block re-entry if a real 'open' position already exists in the DB but
+        # not in memory (happens when the process restarts with an open position
+        # that startup_reconcile didn't purge because the broker still holds it).
+        existing_db = self._store.get_open_position(symbol)
+        if existing_db and existing_db.get("status") == "open":
+            if self._log:
+                self._log.warning(
+                    "open_position_skipped_db_already_open",
+                    symbol=symbol,
+                    db_status=existing_db.get("status"),
+                )
+            return None
+
         pos = Position(
             symbol=symbol,
             session_date=session_date,
@@ -257,15 +270,13 @@ class LivePositionManager:
             if self._log:
                 self._log.critical("entry_order_exception", symbol=symbol,
                                    exc=str(exc))
-            pos.status = "unfilled"
-            pos.decision_reason = "entry_exception"
-            self._update_pos(pos)
+            # Delete the 'entering' row so it can't block re-entry on this symbol.
+            self._store.close_position(symbol)
             return None
 
         if fill.qty == 0:
-            pos.status = "unfilled"
-            pos.decision_reason = "entry_unfilled"
-            self._update_pos(pos)
+            # Delete the 'entering' row — no position opened at the broker.
+            self._store.close_position(symbol)
             return None
 
         # Adjust share counts for partial fill
@@ -781,6 +792,40 @@ class LivePositionManager:
                     self._log.critical("flatten_all_exception",
                                        symbol=symbol, reason=reason,
                                        exc=str(exc))
+
+    # ── Startup cleanup ────────────────────────────────────────────────────────
+
+    def startup_reconcile(self) -> None:
+        """Purge stale DB rows so they can't block today's entries.
+
+        Must be called unconditionally at session start (not gated by --recover):
+          1. Non-'open' rows (entering/unfilled) are abandoned attempts — delete.
+          2. 'open' rows with no matching broker position are ghosts — delete.
+
+        Does NOT load surviving positions into memory; use reconcile_from_broker()
+        for crash-recovery (--recover path) which requires full position reload.
+        """
+        # Step 1: delete non-open rows
+        purged = self._store.purge_stale_entering_rows()
+        for sym in purged:
+            if self._log:
+                self._log.warning("startup_purged_stale_row", symbol=sym)
+
+        # Step 2: delete 'open' rows that no longer have a broker position
+        for sym in list(self._store.all_open_symbols()):
+            try:
+                broker_pos = self._broker.get_position(sym)
+                broker_qty = abs(int(float((broker_pos or {}).get("qty", 0))))
+            except Exception as exc:
+                if self._log:
+                    self._log.warning(
+                        "startup_reconcile_broker_error", symbol=sym, exc=str(exc)
+                    )
+                continue
+            if broker_qty == 0:
+                self._store.close_position(sym)
+                if self._log:
+                    self._log.warning("startup_purged_orphan_position", symbol=sym)
 
     # ── Broker reconciliation ─────────────────────────────────────────────────
 

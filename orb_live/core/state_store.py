@@ -483,11 +483,31 @@ class StateStore:
 
     def save_open_position(self, symbol: str, trade_date: date, **kwargs) -> None:
         with self.conn() as c:
+            # Delete any pre-existing row so a stale 'entering'/'unfilled' row from a
+            # prior session never causes a UNIQUE constraint failure on re-entry.
+            c.execute(open_positions.delete().where(open_positions.c.symbol == symbol))
             c.execute(open_positions.insert().values(
                 symbol=symbol, trade_date=trade_date,
                 opened_at=datetime.now(UTC), **kwargs,
             ))
             c.commit()
+
+    def purge_stale_entering_rows(self) -> list:
+        """Delete all non-'open' rows (entering/unfilled/closed leftovers).
+
+        Returns list of purged symbols.  Safe to call every session start.
+        """
+        with self.conn() as c:
+            rows = c.execute(
+                open_positions.select().where(open_positions.c.status != "open")
+            ).mappings().all()
+            purged = [r["symbol"] for r in rows]
+            if purged:
+                c.execute(
+                    open_positions.delete().where(open_positions.c.status != "open")
+                )
+                c.commit()
+        return purged
 
     def update_open_position(self, symbol: str, **kwargs) -> None:
         """Update mutable fields of an open position (stop, TP flags, etc.)."""

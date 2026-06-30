@@ -85,6 +85,10 @@ class SessionRunner:
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT,  self._handle_signal)
 
+        # Purge stale DB rows before any trading begins so that a crashed prior
+        # session's 'entering' or ghost 'open' rows never block re-entry.
+        self._mgr.startup_reconcile()
+
         try:
             self._run_pre_market(session_date)
             self._run_open_eval(session_date)
@@ -255,9 +259,13 @@ class SessionRunner:
                     if self._log:
                         self._log.critical(
                             "zero_bars_watchdog", symbol=sym,
-                            msg="No bars 5 min post-ORB; switching to REST-poll fallback",
+                            msg="No bars 5 min post-ORB; re-issuing reqRealTimeBars",
                         )
-                self._router.enter_degraded_mode()
+                # Re-issue subscriptions on the main thread (IB is not thread-safe;
+                # the original subscribe call must already be on the main thread, and
+                # re-subscribing here recovers any silently-dropped registrations).
+                self._router.unsubscribe()
+                self._router.subscribe(watched)
 
         self._wait_until_eod(session_date)
 

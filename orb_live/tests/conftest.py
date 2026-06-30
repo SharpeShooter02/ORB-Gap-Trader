@@ -69,6 +69,7 @@ class MockBroker:
         self._fill_sequence: list = []
         self._default_fill_fraction: float = 1.0
         self._oca_siblings: dict = {}   # order_id → sibling_order_id (bidirectional)
+        self._pending_fill_polls: int = 0  # >0 → next submit_limit_order fills async
 
     # ── Configuration helpers ─────────────────────────────────────────────────
 
@@ -79,6 +80,10 @@ class MockBroker:
     def set_fill_sequence(self, *fractions: float) -> None:
         """Per-order fill fractions, consumed left-to-right on each submit."""
         self._fill_sequence = list(fractions)
+
+    def set_pending_fill(self, n_polls: int = 1) -> None:
+        """Next submit_limit_order returns 'new' for n_polls get_order calls, then fills."""
+        self._pending_fill_polls = n_polls
 
     def set_equity(self, equity: float) -> None:
         self._equity = equity
@@ -114,18 +119,31 @@ class MockBroker:
             else self._default_fill_fraction
         )
         fill_qty = int(qty * fraction)
-        if fill_qty >= qty:
-            status = "filled"
-        elif fill_qty > 0:
-            status = "partially_filled"
+        if self._pending_fill_polls > 0:
+            # Async fill: order starts as "new"; get_order transitions it after n polls
+            self._orders[client_order_id] = {
+                "id":                    client_order_id,
+                "status":                "new",
+                "filled_qty":            "0",
+                "filled_avg_price":      "0",
+                "_pending_polls_left":   self._pending_fill_polls,
+                "_fill_qty":             str(fill_qty),
+                "_fill_price":           str(limit_price),
+            }
+            self._pending_fill_polls = 0
         else:
-            status = "cancelled"
-        self._orders[client_order_id] = {
-            "id":               client_order_id,
-            "status":           status,
-            "filled_qty":       str(fill_qty),
-            "filled_avg_price": str(limit_price),
-        }
+            if fill_qty >= qty:
+                status = "filled"
+            elif fill_qty > 0:
+                status = "partially_filled"
+            else:
+                status = "cancelled"
+            self._orders[client_order_id] = {
+                "id":               client_order_id,
+                "status":           status,
+                "filled_qty":       str(fill_qty),
+                "filled_avg_price": str(limit_price),
+            }
         return {"id": client_order_id}
 
     def submit_market_order(
@@ -208,12 +226,20 @@ class MockBroker:
         return {"tp1_order_id": tp1_id, "stop_order_id": stop_id, "oca_group": f"OCA-{symbol}"}
 
     def get_order(self, order_id: str) -> dict:
-        order = dict(
-            self._orders.get(
-                order_id,
-                {"status": "not_found", "filled_qty": "0", "filled_avg_price": "0"},
-            )
+        raw = self._orders.get(
+            order_id,
+            {"status": "not_found", "filled_qty": "0", "filled_avg_price": "0"},
         )
+        # Advance async-fill state machine
+        if "_pending_polls_left" in raw:
+            polls_left = raw["_pending_polls_left"]
+            if polls_left > 0:
+                raw["_pending_polls_left"] -= 1
+            else:
+                raw["status"]           = "filled"
+                raw["filled_qty"]       = raw["_fill_qty"]
+                raw["filled_avg_price"] = raw["_fill_price"]
+        order = dict(raw)
         # OCA: auto-cancel the sibling when one leg is filled
         sibling_id = self._oca_siblings.get(order_id)
         if sibling_id and order.get("status") == "filled":

@@ -1340,3 +1340,92 @@ def test_ax_open_position_blocked_by_db_open_row(mock_broker, tmp_store):
     # Original row must survive intact
     row = tmp_store.get_open_position(SYMBOL)
     assert row is not None and row["status"] == "open"
+
+
+# ── ay–az: BUG 11 — async fill detection + EOD safety net ────────────────────
+
+def test_ay_async_fill_creates_position_and_bracket(mock_broker, tmp_store):
+    """Order fills asynchronously (after submission):
+    - open_position returns None (still pending)
+    - on_bar detects the fill, creates the position, and places the bracket
+    - DB row transitions from 'entering' to 'open'
+    """
+    mock_broker.set_pending_fill(n_polls=1)  # first get_order → 'new', second → 'filled'
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    result = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+
+    # Order is pending — not yet filled
+    assert result is None
+    assert SYMBOL in mgr._pending_entries
+    db_row = tmp_store.get_open_position(SYMBOL)
+    assert db_row is not None and db_row["status"] == "entering"
+
+    # on_bar polls the pending order; second get_order call → 'filled'
+    mgr.on_bar(SYMBOL, _bar(hi=101.0, lo=99.5), _ts())
+
+    pos = mgr._positions.get(SYMBOL)
+    assert pos is not None, "Position must be created after async fill detected"
+    assert pos.status == "open"
+    assert SYMBOL not in mgr._pending_entries
+
+    db_row = tmp_store.get_open_position(SYMBOL)
+    assert db_row is not None and db_row["status"] == "open"
+
+    # Bracket must be placed (stop or OCA)
+    assert pos.stop_order_id is not None or pos.tp1_order_id is not None
+
+
+def test_ay2_async_fill_blocked_re_entry(mock_broker, tmp_store):
+    """While an entry order is pending, a second open_position call is rejected."""
+    mock_broker.set_pending_fill(n_polls=2)
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    result1 = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert result1 is None
+    assert SYMBOL in mgr._pending_entries
+
+    # Second attempt on same symbol while first is still pending
+    result2 = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert result2 is None
+
+    # Only one pending entry
+    assert len(mgr._pending_entries) == 1
+
+
+def test_ay3_re_entry_blocked_by_broker_position(mock_broker, tmp_store):
+    """open_position returns None when the broker already holds a position (untracked fill)."""
+    mock_broker.set_broker_position(SYMBOL, 100)
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    result = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+
+    assert result is None
+    assert SYMBOL not in mgr._positions
+    assert SYMBOL not in mgr._pending_entries
+    assert tmp_store.get_open_position(SYMBOL) is None
+
+
+def test_az_flatten_all_closes_untracked_broker_position(mock_broker, tmp_store):
+    """flatten_all flattens broker positions not tracked in self._positions.
+
+    This is the EOD safety net for fills that were never detected by the runner
+    (e.g. SBIT/AMDL/BOIL from the 2026-06-30 incident).
+    """
+    from unittest.mock import patch
+
+    mock_broker.set_broker_position(SYMBOL, 100)   # untracked long position
+    mgr = _build_mgr(mock_broker, tmp_store)
+    mgr.set_universe([SYMBOL])
+
+    assert len(mgr._positions) == 0   # manager has no tracked positions
+
+    with patch.object(mock_broker, "submit_market_order",
+                      return_value={"id": "eod-flat"}) as mock_flat:
+        mgr.flatten_all("eod_sweep")
+
+    mock_flat.assert_called_once()
+    args = mock_flat.call_args.args
+    assert args[0] == SYMBOL
+    assert args[1] == "sell"    # long → sell to flatten
+    assert args[2] == 100

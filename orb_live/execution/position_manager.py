@@ -34,6 +34,8 @@ KEY DISTINCTION — TWO DIFFERENT EMAs:
 from __future__ import annotations
 
 import math
+import time as _time
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dtime, timezone
 from typing import Optional, TYPE_CHECKING
@@ -162,6 +164,13 @@ class LivePositionManager:
         # Persisted to state_store on every mutation.
         self._positions: dict[str, Position] = {}
 
+        # Pending entry orders (submitted but not yet filled/cancelled).
+        # Keyed by symbol; polled in on_bar until terminal status.
+        self._pending_entries: dict[str, dict] = {}
+
+        # Universe of watched symbols for EOD flatten safety net.
+        self._universe: list[str] = []
+
     # ── Entry ──────────────────────────────────────────────────────────────────
 
     def open_position(
@@ -174,27 +183,25 @@ class LivePositionManager:
         """
         Called when check_breakout fires on a post-ORB bar close.
 
-        entry — dict from compute_entry().  entry['shares'] is what we try to
-                fill; actual fill may be partial or zero (slippage / thin book).
+        Submits the entry order non-blocking (safe to call from inside an
+        ib_async event callback — no time.sleep, no ib.sleep).
 
-        Returns Position on open/partial fill.  Returns None if:
-          - Risk gate rejects the entry.
-          - Fill qty == 0 (unfilled).
-
-        Position sizing uses CURRENT ACCOUNT EQUITY from broker.get_account(),
-        not a per-symbol equity pool (intentional divergence from backtest).
+        If the broker fills immediately (MockBroker / already-filled order),
+        returns the open Position.  If the order is still pending, stores it
+        in _pending_entries, returns None, and on_bar will detect the fill on
+        the next bar and place the bracket then.
         """
         cfg = self._config
 
-        # Build open_positions notional for exposure check
+        # Build open_positions notional for exposure check (include 'entering')
         open_notional = {
             sym: (pos.actual_entry_price * pos.remaining)
             for sym, pos in self._positions.items()
-            if pos.status == "open"
+            if pos.status in ("open", "entering")
         }
 
         # Gate check
-        current_equity  = float(self._broker.get_account().get("equity", 0))
+        current_equity   = float(self._broker.get_account().get("equity", 0))
         intended_dollars = entry["entry_price"] * entry["shares"]
         ok, reason = self._gate.authorize_entry(
             symbol=symbol,
@@ -215,15 +222,13 @@ class LivePositionManager:
                                   symbol=symbol, reason=reason)
             return None
 
-        # Build position in 'entering' state and persist BEFORE order
-        override = entry.get("exit_override", {})
-        use_trail = (override.get("method") == "trail_after_tp1")
-        trail_mult = float(override.get("mult", 1.0)) if use_trail else 0.0
-        trail_dist = trail_mult * entry["orb_range"]
+        # Block if a pending entry or in-memory position already exists
+        if symbol in self._pending_entries or symbol in self._positions:
+            if self._log:
+                self._log.warning("entry_blocked_in_flight", symbol=symbol)
+            return None
 
-        # Block re-entry if a real 'open' position already exists in the DB but
-        # not in memory (happens when the process restarts with an open position
-        # that startup_reconcile didn't purge because the broker still holds it).
+        # Block if DB has a real 'open' row (restart with live broker position)
         existing_db = self._store.get_open_position(symbol)
         if existing_db and existing_db.get("status") == "open":
             if self._log:
@@ -234,12 +239,31 @@ class LivePositionManager:
                 )
             return None
 
+        # Fix 3: block re-entry if broker already carries a position
+        try:
+            broker_pos = self._broker.get_position(symbol)
+            if broker_pos and abs(float(broker_pos.get("qty", 0))) > 0:
+                if self._log:
+                    self._log.warning("entry_blocked_by_broker_position",
+                                      symbol=symbol, broker_qty=broker_pos.get("qty"))
+                return None
+        except Exception as exc:
+            if self._log:
+                self._log.warning("entry_broker_check_failed",
+                                  symbol=symbol, exc=str(exc))
+
+        # Build position in 'entering' state and persist BEFORE order
+        override  = entry.get("exit_override", {})
+        use_trail = (override.get("method") == "trail_after_tp1")
+        trail_mult = float(override.get("mult", 1.0)) if use_trail else 0.0
+        trail_dist = trail_mult * entry["orb_range"]
+
         pos = Position(
             symbol=symbol,
             session_date=session_date,
             direction=gap_direction,
             entry_price=entry["entry_price"],
-            actual_entry_price=entry["entry_price"],  # placeholder until fill
+            actual_entry_price=entry["entry_price"],
             entry_shares=entry["shares"],
             remaining=entry["shares"],
             orb_range=entry["orb_range"],
@@ -256,129 +280,69 @@ class LivePositionManager:
         )
         self._persist_new(pos, session_date)
 
-        # Submit entry order
+        # Submit entry order non-blocking (no polling / no sleep)
         side = "buy" if gap_direction == 1 else "sell"
+        submitted_at = datetime.now(UTC)
         try:
-            fill = self._policy.buy(symbol, entry["shares"], "entry",
-                                    reference_price=entry["entry_price"],
-                                    session_date=session_date) \
-                   if gap_direction == 1 else \
-                   self._policy.sell(symbol, entry["shares"], "entry",
-                                     reference_price=entry["entry_price"],
-                                     session_date=session_date)
+            limit_price = self._policy.compute_entry_limit(
+                side, symbol, entry["entry_price"]
+            )
+            client_id = str(uuid.uuid4())
+            order     = self._broker.submit_limit_order(
+                symbol, side, entry["shares"], limit_price, client_id
+            )
+            order_id = order.get("id", client_id)
         except Exception as exc:
             if self._log:
-                self._log.critical("entry_order_exception", symbol=symbol,
-                                   exc=str(exc))
-            # Delete the 'entering' row so it can't block re-entry on this symbol.
+                self._log.critical("entry_order_exception", symbol=symbol, exc=str(exc))
             self._store.close_position(symbol)
             return None
 
-        if fill.qty == 0:
-            # Delete the 'entering' row — no position opened at the broker.
+        # Check fill status immediately — no sleep; safe inside asyncio callbacks.
+        # For MockBroker / already-filled orders this resolves synchronously.
+        # For real IB at PendingSubmit this goes to the async path below.
+        try:
+            order_state  = self._broker.get_order(order_id)
+            broker_status = order_state.get("status", "new")
+            fill_qty     = int(float(order_state.get("filled_qty", 0) or 0))
+            fill_price   = float(order_state.get("filled_avg_price", 0) or 0)
+        except Exception:
+            broker_status = "new"
+            fill_qty      = 0
+            fill_price    = 0.0
+
+        if broker_status in ("filled", "partially_filled") and fill_qty > 0:
+            # Immediate fill (MockBroker or pre-filled order) — complete inline.
+            return self._complete_entry_fill(
+                symbol=symbol, fill_qty=fill_qty, fill_price=fill_price,
+                pos=pos, entry=entry, side=side, session_date=session_date,
+                attempt=1, order_id=order_id, submitted_at=submitted_at,
+            )
+
+        if broker_status in ("cancelled", "expired", "rejected", "inactive"):
+            # Immediate rejection — no position.
             self._store.close_position(symbol)
             return None
 
-        # Adjust share counts for partial fill
-        if fill.qty < entry["shares"]:
-            r_tp1 = override.get("exit_ratio_tp1", cfg.exit_ratio_tp1)
-            r_tp2 = override.get("exit_ratio_tp2", cfg.exit_ratio_tp2)
-            pos.tp1_shares = math.floor(fill.qty * r_tp1)
-            pos.tp2_shares = math.floor(fill.qty * r_tp2)
-            pos.tp3_shares = max(0, fill.qty - pos.tp1_shares - pos.tp2_shares)
-            if self._log:
-                self._log.warning(
-                    "partial_entry_fill",
-                    symbol=symbol,
-                    requested=entry["shares"],
-                    filled=fill.qty,
-                    tp1_shares=pos.tp1_shares,
-                    tp2_shares=pos.tp2_shares,
-                    tp3_shares=pos.tp3_shares,
-                )
-
-        pos.actual_entry_price = fill.avg_price
-        pos.entry_shares       = fill.qty
-        pos.remaining          = fill.qty
-        pos.status             = "open"
+        # Order is still pending (PendingSubmit / Submitted at IB).
+        # Store in memory and poll in on_bar; the event loop will update the
+        # order cache via _on_order_status before the next bar arrives.
         self._positions[symbol] = pos
-        self._update_pos(pos)
-
-        # ── Place exchange-resident stop (or OCA bracket for v1 TP1-only) ──────
-        # v1 TP1-only: all shares exit at TP1, so place TP1 limit + stop as
-        # an IB OCA group.  When TP1 fills, IB cancels the stop at the exchange
-        # with no client-side cancel race.  Multi-leg positions use the legacy
-        # stop-only path (stop gets modified after TP1 partial exit).
-        exit_side    = "sell" if pos.direction == 1 else "buy"
-        is_tp1_only  = (pos.tp1_shares == fill.qty)   # all shares allocated to TP1
-        place_failed = False
-        try:
-            if is_tp1_only and hasattr(self._broker, "submit_oca_pair"):
-                oca = self._broker.submit_oca_pair(
-                    symbol=symbol,
-                    side=exit_side,
-                    qty=fill.qty,
-                    tp1_limit_price=pos.tp1_price,
-                    stop_price=pos.stop_price,
-                    timeout=5.0,
-                )
-                pos.tp1_order_id  = oca.get("tp1_order_id")
-                pos.stop_order_id = oca.get("stop_order_id")
-                if self._log:
-                    self._log.info(
-                        "oca_bracket_placed",
-                        symbol=symbol,
-                        tp1_order_id=pos.tp1_order_id,
-                        stop_order_id=pos.stop_order_id,
-                        tp1_price=pos.tp1_price,
-                        stop_price=pos.stop_price,
-                        qty=fill.qty,
-                    )
-            else:
-                stop_order = self._broker.submit_stop_order(
-                    symbol=symbol,
-                    side=exit_side,
-                    qty=fill.qty,
-                    stop_price=pos.stop_price,
-                    client_order_id=f"stop-{symbol}-{pos.session_date.isoformat()}",
-                    timeout=5.0,
-                )
-                pos.stop_order_id = stop_order.get("id")
-                if self._log:
-                    self._log.info(
-                        "stop_placed",
-                        symbol=symbol,
-                        stop_order_id=pos.stop_order_id,
-                        stop_price=pos.stop_price,
-                        qty=fill.qty,
-                    )
-            self._update_pos(pos)
-        except Exception as exc:
-            place_failed = True
-            if self._log:
-                self._log.critical(
-                    "stop_placement_failed_flattening_position",
-                    symbol=symbol,
-                    stop_price=pos.stop_price,
-                    error=str(exc),
-                )
-        if place_failed:
-            # Position is live without protection — flatten immediately.
-            try:
-                self._broker.submit_market_order(symbol, exit_side, fill.qty)
-            except Exception as flatten_exc:
-                if self._log:
-                    self._log.critical(
-                        "emergency_flatten_failed",
-                        symbol=symbol,
-                        error=str(flatten_exc),
-                    )
-            pos.status      = "closed"
-            pos.exit_reason = "STOP_PLACEMENT_FAILED"
-            self._update_pos(pos)
-            return None
-
-        return pos
+        self._pending_entries[symbol] = {
+            "order_id":         order_id,
+            "entry":            entry,
+            "side":             side,
+            "direction":        gap_direction,
+            "session_date":     session_date,
+            "pos":              pos,
+            "attempt":          1,
+            "submit_time":      _time.monotonic(),
+            "first_submit_time": _time.monotonic(),
+            "submitted_at":     submitted_at,
+            "limit_price":      limit_price,
+            "original_qty":     entry["shares"],
+        }
+        return None
 
     # ── Per-bar processing ─────────────────────────────────────────────────────
 
@@ -396,6 +360,10 @@ class LivePositionManager:
         The runner MUST call indicators_store[symbol].on_bar(bar) BEFORE
         calling this method.
         """
+        # Poll any pending entry order first; may promote pos to 'open'.
+        if symbol in self._pending_entries:
+            self._check_pending_entry(symbol, ts)
+
         pos = self._positions.get(symbol)
         if pos is None or pos.status != "open":
             return
@@ -762,6 +730,232 @@ class LivePositionManager:
                 pos.tp3_hit = True
                 return
 
+    # ── Universe registration ──────────────────────────────────────────────────
+
+    def set_universe(self, symbols: list) -> None:
+        """Register the session's candidate symbols for EOD flatten safety net."""
+        self._universe = list(symbols)
+
+    # ── Async entry fill detection ─────────────────────────────────────────────
+
+    def _complete_entry_fill(
+        self,
+        symbol: str,
+        fill_qty: int,
+        fill_price: float,
+        pos: "Position",
+        entry: dict,
+        side: str,
+        session_date: date,
+        attempt: int,
+        order_id: str,
+        submitted_at: datetime,
+    ) -> Optional["Position"]:
+        """Finalise a detected entry fill: persist, place bracket, return Position."""
+        cfg = self._config
+
+        if fill_qty == 0:
+            self._store.close_position(symbol)
+            self._positions.pop(symbol, None)
+            self._pending_entries.pop(symbol, None)
+            return None
+
+        # Save fill record
+        try:
+            self._store.save_fill(
+                session_date=session_date,
+                symbol=symbol,
+                side=side,
+                qty=fill_qty,
+                avg_price=fill_price if fill_price > 0 else entry["entry_price"],
+                order_id=order_id,
+                leg="entry",
+                attempts=attempt,
+                reason="filled" if fill_qty >= entry["shares"] else "partial_unfilled",
+                submitted_at=submitted_at,
+                filled_at=datetime.now(UTC),
+                raw_response_json="{}",
+            )
+        except Exception as exc:
+            if self._log:
+                self._log.warning("entry_fill_record_failed", symbol=symbol, exc=str(exc))
+
+        # Rescale TP share allocations for a partial fill
+        override = entry.get("exit_override", {})
+        if fill_qty < pos.entry_shares:
+            r_tp1 = override.get("exit_ratio_tp1", cfg.exit_ratio_tp1)
+            r_tp2 = override.get("exit_ratio_tp2", cfg.exit_ratio_tp2)
+            pos.tp1_shares = math.floor(fill_qty * r_tp1)
+            pos.tp2_shares = math.floor(fill_qty * r_tp2)
+            pos.tp3_shares = max(0, fill_qty - pos.tp1_shares - pos.tp2_shares)
+            if self._log:
+                self._log.warning(
+                    "partial_entry_fill",
+                    symbol=symbol,
+                    requested=entry["shares"],
+                    filled=fill_qty,
+                    tp1_shares=pos.tp1_shares,
+                    tp2_shares=pos.tp2_shares,
+                    tp3_shares=pos.tp3_shares,
+                )
+
+        pos.actual_entry_price = fill_price if fill_price > 0 else entry["entry_price"]
+        pos.entry_shares       = fill_qty
+        pos.remaining          = fill_qty
+        pos.status             = "open"
+        self._positions[symbol] = pos
+        self._pending_entries.pop(symbol, None)
+        self._update_pos(pos)
+
+        # Place OCA bracket (v1 TP1-only) or stop-only (multi-leg)
+        exit_side   = "sell" if pos.direction == 1 else "buy"
+        is_tp1_only = (pos.tp1_shares == fill_qty)
+        place_failed = False
+        try:
+            if is_tp1_only and hasattr(self._broker, "submit_oca_pair"):
+                oca = self._broker.submit_oca_pair(
+                    symbol=symbol,
+                    side=exit_side,
+                    qty=fill_qty,
+                    tp1_limit_price=pos.tp1_price,
+                    stop_price=pos.stop_price,
+                    timeout=5.0,
+                )
+                pos.tp1_order_id  = oca.get("tp1_order_id")
+                pos.stop_order_id = oca.get("stop_order_id")
+                if self._log:
+                    self._log.info(
+                        "oca_bracket_placed",
+                        symbol=symbol,
+                        tp1_order_id=pos.tp1_order_id,
+                        stop_order_id=pos.stop_order_id,
+                        tp1_price=pos.tp1_price,
+                        stop_price=pos.stop_price,
+                        qty=fill_qty,
+                    )
+            else:
+                stop_order = self._broker.submit_stop_order(
+                    symbol=symbol,
+                    side=exit_side,
+                    qty=fill_qty,
+                    stop_price=pos.stop_price,
+                    client_order_id=f"stop-{symbol}-{pos.session_date.isoformat()}",
+                    timeout=5.0,
+                )
+                pos.stop_order_id = stop_order.get("id")
+                if self._log:
+                    self._log.info(
+                        "stop_placed",
+                        symbol=symbol,
+                        stop_order_id=pos.stop_order_id,
+                        stop_price=pos.stop_price,
+                        qty=fill_qty,
+                    )
+            self._update_pos(pos)
+        except Exception as exc:
+            place_failed = True
+            if self._log:
+                self._log.critical(
+                    "stop_placement_failed_flattening_position",
+                    symbol=symbol,
+                    stop_price=pos.stop_price,
+                    error=str(exc),
+                )
+
+        if place_failed:
+            try:
+                self._broker.submit_market_order(symbol, exit_side, fill_qty)
+            except Exception as flatten_exc:
+                if self._log:
+                    self._log.critical("emergency_flatten_failed",
+                                       symbol=symbol, error=str(flatten_exc))
+            pos.status      = "closed"
+            pos.exit_reason = "STOP_PLACEMENT_FAILED"
+            self._update_pos(pos)
+            return None
+
+        return pos
+
+    def _check_pending_entry(self, symbol: str, ts: datetime) -> None:
+        """Poll a pending entry order and act on fill / cancel / timeout."""
+        pending = self._pending_entries.get(symbol)
+        if not pending:
+            return
+
+        order_id = pending["order_id"]
+        try:
+            order_state   = self._broker.get_order(order_id)
+            broker_status = order_state.get("status", "new")
+            fill_qty      = int(float(order_state.get("filled_qty", 0) or 0))
+            fill_price    = float(order_state.get("filled_avg_price", 0) or 0)
+        except Exception as exc:
+            if self._log:
+                self._log.warning("pending_entry_poll_failed",
+                                  symbol=symbol, exc=str(exc))
+            return
+
+        if broker_status in ("filled", "partially_filled") and fill_qty > 0:
+            self._complete_entry_fill(
+                symbol=symbol, fill_qty=fill_qty, fill_price=fill_price,
+                pos=pending["pos"], entry=pending["entry"],
+                side=pending["side"], session_date=pending["session_date"],
+                attempt=pending["attempt"], order_id=order_id,
+                submitted_at=pending["submitted_at"],
+            )
+            return
+
+        if broker_status in ("cancelled", "expired", "rejected", "inactive"):
+            if pending["attempt"] < self._config.entry_repeg_max_attempts:
+                self._repeg_entry(symbol, pending)
+            else:
+                self._store.close_position(symbol)
+                self._positions.pop(symbol, None)
+                del self._pending_entries[symbol]
+            return
+
+        # Still working — check repeg timeout
+        elapsed = _time.monotonic() - pending["submit_time"]
+        if elapsed > self._config.entry_repeg_seconds:
+            try:
+                self._broker.cancel_order(order_id)
+            except Exception:
+                pass
+            if pending["attempt"] < self._config.entry_repeg_max_attempts:
+                self._repeg_entry(symbol, pending)
+            else:
+                self._store.close_position(symbol)
+                self._positions.pop(symbol, None)
+                del self._pending_entries[symbol]
+
+    def _repeg_entry(self, symbol: str, pending: dict) -> None:
+        """Cancel current entry order and resubmit at wider slippage BPS."""
+        cfg     = self._config
+        attempt = pending["attempt"] + 1
+        side    = pending["side"]
+        entry   = pending["entry"]
+
+        try:
+            limit_price = self._policy.compute_entry_limit(
+                side, symbol, entry["entry_price"], bps=cfg.entry_slippage_max_bps
+            )
+            client_id = str(uuid.uuid4())
+            order     = self._broker.submit_limit_order(
+                symbol, side, entry["original_qty"], limit_price, client_id
+            )
+            order_id = order.get("id", client_id)
+        except Exception as exc:
+            if self._log:
+                self._log.critical("entry_repeg_failed", symbol=symbol, exc=str(exc))
+            self._store.close_position(symbol)
+            self._positions.pop(symbol, None)
+            del self._pending_entries[symbol]
+            return
+
+        pending["order_id"]    = order_id
+        pending["attempt"]     = attempt
+        pending["submit_time"] = _time.monotonic()
+        pending["limit_price"] = limit_price
+
     # ── EOD sweep (runner calls this at 16:00:30 ET) ──────────────────────────
 
     def flatten_all(self, reason: str = "manual") -> None:
@@ -771,11 +965,12 @@ class LivePositionManager:
         Called by the runner at 16:00:30 ET (production EOD mechanism),
         on session_kill, on SIGTERM/SIGINT, or manually.
 
-        Uses exit_reason logic that mirrors the on_bar EOD branch so that
-        the trade record is consistent whether closed by on_bar or by this
-        method.
+        Also cancels pending entry orders and flattens any untracked broker
+        positions in the universe (Fix 4 — safety net for undetected fills).
         """
         eod_ts = datetime.now(UTC)
+
+        # 1. Exit tracked open positions
         for symbol in list(self._positions.keys()):
             pos = self._positions.get(symbol)
             if pos is None or pos.status != "open":
@@ -792,6 +987,47 @@ class LivePositionManager:
                     self._log.critical("flatten_all_exception",
                                        symbol=symbol, reason=reason,
                                        exc=str(exc))
+
+        # 2. Cancel any pending entry orders and clean up
+        for sym in list(self._pending_entries.keys()):
+            pending = self._pending_entries[sym]
+            try:
+                self._broker.cancel_order(pending["order_id"])
+            except Exception:
+                pass
+            try:
+                self._store.close_position(sym)
+            except Exception:
+                pass
+            self._positions.pop(sym, None)
+        self._pending_entries.clear()
+
+        # 3. Flatten untracked broker positions in the universe (Fill 4 safety net)
+        tracked = set(self._positions.keys())
+        for sym in self._universe:
+            if sym in tracked:
+                continue
+            try:
+                bp = self._broker.get_position(sym)
+                if not bp:
+                    continue
+                broker_qty = float(bp.get("qty", 0))
+                if abs(broker_qty) == 0:
+                    continue
+                flat_side = "sell" if broker_qty > 0 else "buy"
+                flat_qty  = int(abs(broker_qty))
+                self._broker.submit_market_order(sym, flat_side, flat_qty)
+                if self._log:
+                    self._log.critical(
+                        "flatten_untracked_broker_position",
+                        symbol=sym, qty=flat_qty, reason=reason,
+                    )
+            except Exception as exc:
+                if self._log:
+                    self._log.critical(
+                        "flatten_untracked_broker_error",
+                        symbol=sym, reason=reason, error=str(exc),
+                    )
 
     # ── Startup cleanup ────────────────────────────────────────────────────────
 

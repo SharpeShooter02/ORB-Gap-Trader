@@ -109,6 +109,17 @@ class MarketableLimitPolicy:
         """Submit a marketable-limit sell order and return Fill."""
         return self._submit("sell", symbol, qty, leg, reference_price, session_date)
 
+    def compute_entry_limit(
+        self,
+        side: str,
+        symbol: str,
+        reference_price: Optional[float] = None,
+        bps: Optional[int] = None,
+    ) -> float:
+        """Return the marketable limit price for an entry order (no submission)."""
+        _bps = bps if bps is not None else self._cfg.entry_slippage_bps
+        return self._compute_limit(side, symbol, _bps, reference_price)
+
     # ── Internal ───────────────────────────────────────────────────────────────
 
     def _submit(

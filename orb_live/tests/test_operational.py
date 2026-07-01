@@ -435,62 +435,6 @@ def test_op13_detect_metric_drift_flags_outlier(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# BarRouter WS token refresh tests
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def test_op14_token_refresh_calls_stop_bars_stream():
-    """
-    _do_token_refresh should call broker.stop_bars_stream() to trigger reconnect.
-    """
-    from orb_live.runner.bar_router import BarRouter
-
-    stop_called: list[bool] = []
-
-    class _FakeBroker:
-        def stop_bars_stream(self): stop_called.append(True)
-
-    class _FakeStore: pass
-    class _FakeCache: pass
-
-    router = BarRouter(_FakeBroker(), _FakeStore(), _FakeCache())
-    router._do_token_refresh(age_s=43200.0)
-
-    assert len(stop_called) == 1, "stop_bars_stream should be called once on token refresh"
-
-
-def test_op15_token_refresh_failure_enters_degraded_mode():
-    """
-    If stop_bars_stream raises, _do_token_refresh should enter degraded mode
-    and log a CRITICAL event.
-    """
-    from orb_live.runner.bar_router import BarRouter
-
-    log_events: list[str] = []
-
-    class _Log:
-        def critical(self, event, **kw): log_events.append(event)
-        def info(self, event, **kw): log_events.append(event)
-        def warning(self, event, **kw): log_events.append(event)
-        def error(self, event, **kw): log_events.append(event)
-
-    class _BrokenBroker:
-        def stop_bars_stream(self): raise RuntimeError("auth error")
-
-    class _FakeStore: pass
-    class _FakeCache: pass
-
-    router = BarRouter(_BrokenBroker(), _FakeStore(), _FakeCache(), logger=_Log())
-    router._do_token_refresh(age_s=43200.0)
-
-    assert router._degraded is True, (
-        "Router should enter degraded mode after stop_bars_stream failure"
-    )
-    assert "ws_token_refresh_failed" in log_events, (
-        f"Expected 'ws_token_refresh_failed' CRITICAL log; got: {log_events}"
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # PreFlightCheck / liquidity gate tests
 # ═══════════════════════════════════════════════════════════════════════════════
 

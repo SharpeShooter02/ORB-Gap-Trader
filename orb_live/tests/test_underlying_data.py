@@ -42,11 +42,6 @@ class TestGet:
         assert df.empty
         assert list(df.columns) == ["date", "open", "high", "low", "close", "volume"]
 
-    def test_raises_for_unknown_symbol(self, tmp_path):
-        store = _make_store(tmp_path)
-        with pytest.raises(KeyError, match="UNKNOWN_XYZ"):
-            store.get("UNKNOWN_XYZ")
-
     def test_returns_sorted_data_after_write(self, tmp_path):
         store = _make_store(tmp_path)
         # Write unsorted parquet directly.

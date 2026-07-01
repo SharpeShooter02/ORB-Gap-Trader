@@ -43,8 +43,6 @@ from orb_live.strategy.v1_strategy import (
     SessionPlan,
     GAP_THRESHOLD,
 )
-from orb_live.core.calendar import is_trading_day
-
 if TYPE_CHECKING:
     from orb_live.config.live_config import LiveConfig
     from orb_live.core.state_store import StateStore
@@ -475,11 +473,6 @@ class PreMarketJob:
             try:
                 df = self._ul.get(ul_sym)
                 if not df.empty:
-                    # Filter to NYSE trading days so crypto weekend/holiday bars
-                    # do not contaminate the PS-filter prior-two-closes window.
-                    # Aligns live behaviour with the backtester, which sources UL
-                    # data from equity-calendar feeds with no weekend rows.
-                    df = df[df["date"].dt.date.apply(is_trading_day)].copy()
                     data[ul_sym] = df
                 else:
                     warn = self._ul.warn_if_stale(ul_sym, trade_date)

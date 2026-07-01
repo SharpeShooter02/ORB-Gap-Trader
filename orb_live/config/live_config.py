@@ -23,7 +23,7 @@ import pandas as pd
 
 import orb_live  # noqa: F401 — triggers orb_live/__init__.py path setup
 
-from reference.orb_backtester import StrategyConfig, DEFAULT_CONFIG
+from orb_live.config.strategy_config import StrategyConfig, DEFAULT_CONFIG
 from orb_live.strategy.v1_strategy import (
     load_master,
     load_sigmas,

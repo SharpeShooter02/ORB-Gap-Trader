@@ -848,7 +848,12 @@ def test_ah_tp1_modify_and_replace_failure_flattens(mock_broker, tmp_store):
                       return_value={"id": "mkt-flat"}) as mock_flat:
         mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
 
-    mock_flat.assert_called_once()
+    # Two market orders: TP1 partial exit (35 shares) + recovery flatten (65 shares).
+    # _exit_partial now uses submit_market_order, so the TP1 sell also shows here.
+    assert mock_flat.call_count == 2
+    calls = [c.args for c in mock_flat.call_args_list]
+    assert any(c[1] == "sell" and c[2] == 35 for c in calls), "TP1 exit (35 shares) expected"
+    assert any(c[1] == "sell" and c[2] == 65 for c in calls), "recovery flatten (65 shares) expected"
     assert pos.status      == "closed"
     assert pos.exit_reason == "STOP_RECOVERY_FAILED"
     critical_events = [c.args[0] for c in logger.critical.call_args_list]

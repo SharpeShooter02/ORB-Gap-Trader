@@ -201,7 +201,9 @@ class LivePositionManager:
         }
 
         # Gate check
-        current_equity   = float(self._broker.get_account().get("equity", 0))
+        _account       = self._broker.get_account()
+        current_equity = float(_account.get("equity", 0))
+        buying_power   = float(_account.get("buying_power", current_equity))
         intended_dollars = entry["entry_price"] * entry["shares"]
         ok, reason = self._gate.authorize_entry(
             symbol=symbol,
@@ -220,6 +222,18 @@ class LivePositionManager:
             if self._log:
                 self._log.warning("entry_rejected_by_risk_gate",
                                   symbol=symbol, reason=reason)
+            return None
+
+        # Margin check: skip if buying power is insufficient (leveraged ETFs ~1:1 at IB)
+        intended_cost = entry["entry_price"] * entry["shares"]
+        if intended_cost > buying_power:
+            if self._log:
+                self._log.warning(
+                    "entry_rejected_insufficient_buying_power",
+                    symbol=symbol,
+                    intended_cost=round(intended_cost, 2),
+                    buying_power=round(buying_power, 2),
+                )
             return None
 
         # Block if a pending entry or in-memory position already exists
@@ -329,18 +343,14 @@ class LivePositionManager:
         # order cache via _on_order_status before the next bar arrives.
         self._positions[symbol] = pos
         self._pending_entries[symbol] = {
-            "order_id":         order_id,
-            "entry":            entry,
-            "side":             side,
-            "direction":        gap_direction,
-            "session_date":     session_date,
-            "pos":              pos,
-            "attempt":          1,
-            "submit_time":      _time.monotonic(),
-            "first_submit_time": _time.monotonic(),
-            "submitted_at":     submitted_at,
-            "limit_price":      limit_price,
-            "original_qty":     entry["shares"],
+            "order_id":     order_id,
+            "entry":        entry,
+            "side":         side,
+            "direction":    gap_direction,
+            "session_date": session_date,
+            "pos":          pos,
+            "submit_time":  _time.monotonic(),
+            "submitted_at": submitted_at,
         }
         return None
 
@@ -578,11 +588,12 @@ class LivePositionManager:
                     return
 
                 else:
-                    # ── Non-OCA path: submit marketable-limit exit now ────────
-                    fill = self._exit_partial(pos, symbol, leg="tp1", qty=pos.tp1_shares,
-                                              ref_price=pos.tp1_price,
-                                              session_date=pos.session_date)
-                    tp1_realized_price = fill.avg_price
+                    # ── Non-OCA path: submit market exit now ──────────────────
+                    tp1_realized_price = self._exit_partial(
+                        pos, symbol, leg="tp1", qty=pos.tp1_shares,
+                        ref_price=pos.tp1_price,
+                        session_date=pos.session_date,
+                    )
 
                     pos.remaining -= pos.tp1_shares
                     pos.tp1_hit   = True
@@ -899,62 +910,28 @@ class LivePositionManager:
                 symbol=symbol, fill_qty=fill_qty, fill_price=fill_price,
                 pos=pending["pos"], entry=pending["entry"],
                 side=pending["side"], session_date=pending["session_date"],
-                attempt=pending["attempt"], order_id=order_id,
+                attempt=1, order_id=order_id,
                 submitted_at=pending["submitted_at"],
             )
             return
 
         if broker_status in ("cancelled", "expired", "rejected", "inactive"):
-            if pending["attempt"] < self._config.entry_repeg_max_attempts:
-                self._repeg_entry(symbol, pending)
-            else:
-                self._store.close_position(symbol)
-                self._positions.pop(symbol, None)
-                del self._pending_entries[symbol]
+            # Single-attempt policy: give up on cancel/reject immediately.
+            self._store.close_position(symbol)
+            self._positions.pop(symbol, None)
+            del self._pending_entries[symbol]
             return
 
-        # Still working — check repeg timeout
+        # Still pending — cancel and give up after entry_repeg_seconds timeout.
         elapsed = _time.monotonic() - pending["submit_time"]
         if elapsed > self._config.entry_repeg_seconds:
             try:
                 self._broker.cancel_order(order_id)
             except Exception:
                 pass
-            if pending["attempt"] < self._config.entry_repeg_max_attempts:
-                self._repeg_entry(symbol, pending)
-            else:
-                self._store.close_position(symbol)
-                self._positions.pop(symbol, None)
-                del self._pending_entries[symbol]
-
-    def _repeg_entry(self, symbol: str, pending: dict) -> None:
-        """Cancel current entry order and resubmit at wider slippage BPS."""
-        cfg     = self._config
-        attempt = pending["attempt"] + 1
-        side    = pending["side"]
-        entry   = pending["entry"]
-
-        try:
-            limit_price = self._policy.compute_entry_limit(
-                side, symbol, entry["entry_price"], bps=cfg.entry_slippage_max_bps
-            )
-            client_id = str(uuid.uuid4())
-            order     = self._broker.submit_limit_order(
-                symbol, side, entry["original_qty"], limit_price, client_id
-            )
-            order_id = order.get("id", client_id)
-        except Exception as exc:
-            if self._log:
-                self._log.critical("entry_repeg_failed", symbol=symbol, exc=str(exc))
             self._store.close_position(symbol)
             self._positions.pop(symbol, None)
             del self._pending_entries[symbol]
-            return
-
-        pending["order_id"]    = order_id
-        pending["attempt"]     = attempt
-        pending["submit_time"] = _time.monotonic()
-        pending["limit_price"] = limit_price
 
     # ── EOD sweep (runner calls this at 16:00:30 ET) ──────────────────────────
 
@@ -1265,33 +1242,18 @@ class LivePositionManager:
         qty: int,
         ref_price: float,
         session_date: date,
-    ) -> "Fill":
-        """Submit exit order for a partial lot (TP1/TP2).  Log on failure."""
+    ) -> float:
+        """Submit market exit for a partial lot (TP1/TP2); return fill price estimate."""
         side = "sell" if pos.direction == 1 else "buy"
         try:
-            fill = self._policy.sell(symbol, qty, leg, ref_price, session_date) \
-                   if pos.direction == 1 else \
-                   self._policy.buy(symbol, qty, leg, ref_price, session_date)
-            pnl = (fill.avg_price - pos.actual_entry_price) * fill.qty * pos.direction
-            self._gate.record_realized_pnl(pnl)
-            return fill
+            self._broker.submit_market_order(symbol, side, qty)
         except Exception as exc:
             if self._log:
-                self._log.critical("exit_partial_failed_market_fallback",
+                self._log.critical("exit_partial_failed",
                                    symbol=symbol, leg=leg, exc=str(exc))
-            # Market fallback
-            fallback_side = "sell" if pos.direction == 1 else "buy"
-            order = self._broker.submit_market_order(symbol, fallback_side, qty)
-            order_id = order.get("id", "")
-            from orb_live.execution.order_policy import Fill
-            from datetime import timezone
-            f = Fill(symbol=symbol, side=fallback_side, qty=qty,
-                     avg_price=ref_price, order_id=order_id, leg=leg,
-                     attempts=99, reason="market_fallback",
-                     submitted_at=datetime.now(timezone.utc), filled_at=None)
-            pnl = (f.avg_price - pos.actual_entry_price) * f.qty * pos.direction
-            self._gate.record_realized_pnl(pnl)
-            return f
+        pnl = (ref_price - pos.actual_entry_price) * qty * pos.direction
+        self._gate.record_realized_pnl(pnl)
+        return ref_price
 
     def _exit_all(
         self,
@@ -1303,60 +1265,36 @@ class LivePositionManager:
         exit_time: datetime,
         session_date: date,
     ) -> None:
-        """Submit exit for all remaining shares and close the position."""
+        """Submit market exit for all remaining shares and close the position."""
         if pos.remaining <= 0:
             return
 
         side = "sell" if pos.direction == 1 else "buy"
         try:
-            if ref_price is None:
-                # Market order (no price reference)
-                order = self._broker.submit_market_order(
-                    symbol, side, pos.remaining
-                )
-                order_id = order.get("id", "")
-                from orb_live.execution.order_policy import Fill
-                fill = Fill(symbol=symbol, side=side, qty=pos.remaining,
-                            avg_price=0.0, order_id=order_id, leg=leg,
-                            attempts=1, reason="market",
-                            submitted_at=datetime.now(UTC), filled_at=None)
-            else:
-                fill = (self._policy.sell(symbol, pos.remaining, leg,
-                                          ref_price, session_date)
-                        if pos.direction == 1 else
-                        self._policy.buy(symbol, pos.remaining, leg,
-                                         ref_price, session_date))
+            self._broker.submit_market_order(symbol, side, pos.remaining)
         except Exception as exc:
             if self._log:
-                self._log.critical("exit_all_failed_market_fallback",
-                                   symbol=symbol, leg=leg, exc=str(exc))
-            order = self._broker.submit_market_order(symbol, side, pos.remaining)
-            from orb_live.execution.order_policy import Fill
-            fill = Fill(symbol=symbol, side=side, qty=pos.remaining,
-                        avg_price=ref_price or 0.0,
-                        order_id=order.get("id", ""), leg=leg,
-                        attempts=99, reason="market_fallback",
-                        submitted_at=datetime.now(UTC), filled_at=None)
+                self._log.critical("exit_all_failed", symbol=symbol, leg=leg, exc=str(exc))
 
-        pnl = (fill.avg_price - pos.actual_entry_price) * fill.qty * pos.direction
+        avg_price = ref_price or 0.0
+        pnl = (avg_price - pos.actual_entry_price) * pos.remaining * pos.direction
         self._gate.record_realized_pnl(pnl)
 
-        pos.remaining    = 0
-        pos.tp3_hit      = (leg == "tp3")
-        pos.exit_reason  = exit_reason
-        pos.exit_price   = fill.avg_price
-        pos.exit_time    = exit_time
-        pos.status       = "closed"
+        pos.remaining   = 0
+        pos.tp3_hit     = (leg == "tp3")
+        pos.exit_reason = exit_reason
+        pos.exit_price  = avg_price
+        pos.exit_time   = exit_time
+        pos.status      = "closed"
 
-        # Persist closed state then archive
         self._update_pos(pos)
         self._store.save_closed_trade(
             trade_date=session_date,
             symbol=symbol,
             direction=pos.direction,
             entry_price=pos.actual_entry_price,
-            exit_price=fill.avg_price,
-            realized_exit_price=fill.avg_price,
+            exit_price=avg_price,
+            realized_exit_price=avg_price,
             qty=pos.entry_shares,
             exit_reason=exit_reason,
             opened_at=datetime.now(UTC),

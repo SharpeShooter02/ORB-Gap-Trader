@@ -1,151 +1,97 @@
 """
-tests/test_order_policy.py — 8 cases for MarketableLimitPolicy.
+tests/test_order_policy.py — Tests for MarketableLimitPolicy price calculator and Fill.
 
-Each test uses MockBroker from conftest.py (injected via mock_broker fixture)
-and a minimal policy_cfg SimpleNamespace so tests stay fast.  _sleep is
-always injected as a no-op; MockBroker returns the final order status on the
-first get_order call, so poll loops exit immediately.
+Phase 3 rebuild: MarketableLimitPolicy no longer submits orders or sleeps.
+Tests cover compute_entry_limit() and the Fill dataclass.
 """
 
-from datetime import date
-from types import SimpleNamespace
+from datetime import datetime, timezone
 
 import pytest
 
-TRADE_DATE = date(2026, 1, 5)
+UTC = timezone.utc
 SYMBOL = "TQQQ"
 
-_NO_SLEEP = lambda _: None  # noqa: E731
 
+def test_fill_dataclass_fields():
+    """Fill can be constructed and has default raw_response_json."""
+    from orb_live.execution.order_policy import Fill
 
-# ── Fixtures ───────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def policy_cfg():
-    return SimpleNamespace(
-        entry_slippage_bps=10,
-        entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3,
-        entry_slippage_max_bps=30,
-        exit_slippage_bps=5,
-        stop_order_type="market",
+    f = Fill(
+        symbol="TQQQ", side="buy", qty=100, avg_price=100.5,
+        order_id="abc-123", leg="entry", attempts=1, reason="filled",
+        submitted_at=datetime.now(UTC), filled_at=datetime.now(UTC),
     )
+    assert f.symbol           == "TQQQ"
+    assert f.side             == "buy"
+    assert f.qty              == 100
+    assert f.avg_price        == pytest.approx(100.5)
+    assert f.leg              == "entry"
+    assert f.reason           == "filled"
+    assert f.raw_response_json == "{}"   # default
 
 
-@pytest.fixture
-def policy(mock_broker, policy_cfg, tmp_store):
+def test_compute_entry_limit_buy_adds_bps(mock_broker):
+    """Buy limit = reference * (1 + bps/10000)."""
     from orb_live.execution.order_policy import MarketableLimitPolicy
-    return MarketableLimitPolicy(
-        mock_broker, policy_cfg, tmp_store, _sleep=_NO_SLEEP,
-    )
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=10)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+    limit  = policy.compute_entry_limit("buy", SYMBOL, reference_price=100.0)
+
+    assert abs(limit - 100.10) < 1e-9   # 100.0 × 1.001
 
 
-# ── Test cases ─────────────────────────────────────────────────────────────────
-
-def test_a_entry_full_fill_first_attempt(policy, mock_broker):
-    """Entry fills on the first attempt: qty==requested, reason=='filled', attempts==1."""
-    fill = policy.buy(SYMBOL, 100, "entry",
-                      reference_price=100.0, session_date=TRADE_DATE)
-    assert fill.qty == 100
-    assert fill.reason == "filled"
-    assert fill.attempts == 1
-    # avg_price == limit price (entry_slippage_bps=10 → 100 * 1.001 = 100.10)
-    assert abs(fill.avg_price - 100.10) < 1e-9
-
-
-def test_b_entry_partial_first_repeg_full(policy, mock_broker):
-    """Entry partially fills on attempt 1, full fill on repeg attempt 2."""
-    # First submit: 50/100 (partial). Second submit: 50/50 (full).
-    mock_broker.set_fill_sequence(0.5, 1.0)
-    fill = policy.buy(SYMBOL, 100, "entry",
-                      reference_price=100.0, session_date=TRADE_DATE)
-    assert fill.qty == 100
-    assert fill.reason == "filled"
-    assert fill.attempts == 2
-    # Weighted avg: (50*100.10 + 50*100.30) / 100 = 100.20
-    assert abs(fill.avg_price - 100.20) < 1e-6
-
-
-def test_c_entry_partial_after_max_repegs(policy, mock_broker):
-    """
-    Entry fills half on attempt 1, zero on attempts 2 and 3.
-    Result: 50 shares filled, reason='partial_unfilled'.
-    """
-    mock_broker.set_fill_sequence(0.5, 0.0, 0.0)
-    fill = policy.buy(SYMBOL, 100, "entry",
-                      reference_price=100.0, session_date=TRADE_DATE)
-    assert fill.qty == 50
-    assert fill.reason == "partial_unfilled"
-    assert fill.attempts == 3
-
-
-def test_d_entry_all_repegs_unfilled(policy, mock_broker):
-    """All 3 attempts produce zero fills → qty==0, reason=='unfilled'."""
-    mock_broker.set_fill_fraction(0.0)
-    fill = policy.buy(SYMBOL, 100, "entry",
-                      reference_price=100.0, session_date=TRADE_DATE)
-    assert fill.qty == 0
-    assert fill.reason == "unfilled"
-    assert fill.attempts == 3
-
-
-def test_e_exit_leg_full_fill(policy, mock_broker):
-    """TP exit (tp1 leg) fills on first attempt."""
-    fill = policy.sell(SYMBOL, 50, "tp1",
-                       reference_price=101.0, session_date=TRADE_DATE)
-    assert fill.qty == 50
-    assert fill.reason == "filled"
-    assert fill.attempts == 1
-    # exit_slippage_bps=5 → 101.0 * (1 - 0.0005) = 100.9495
-    assert abs(fill.avg_price - 100.9495) < 1e-6
-
-
-def test_f_exit_leg_raises_after_three_attempts(policy, mock_broker):
-    """_submit_exit raises RuntimeError when all 3 repeg attempts produce zero fills."""
-    mock_broker.set_fill_fraction(0.0)
-    with pytest.raises(RuntimeError, match="failed after 3 attempts"):
-        policy.sell(SYMBOL, 50, "tp1",
-                    reference_price=101.0, session_date=TRADE_DATE)
-
-
-def test_g_stop_market_order_type(policy, mock_broker, policy_cfg):
-    """stop_order_type='market' submits a market order (not a limit order)."""
-    # Default policy_cfg already has stop_order_type='market'
-    assert policy_cfg.stop_order_type == "market"
-    fill = policy.sell(SYMBOL, 100, "stop",
-                       reference_price=99.0, session_date=TRADE_DATE)
-    # Market order fills at bid (99.90)
-    assert fill.qty == 100
-    assert abs(fill.avg_price - 99.90) < 1e-9
-    # Verify a market order was stored (no limit price in the order record)
-    order_ids = list(mock_broker._orders.keys())
-    assert len(order_ids) == 1
-    # Market orders use the quote price, not a computed limit
-    stored = mock_broker._orders[order_ids[0]]
-    assert float(stored["filled_avg_price"]) == 99.90
-
-
-def test_h_stop_limit_falls_back_to_market(mock_broker, tmp_store):
-    """
-    stop_order_type='stop_limit': if limit exits fail after repegs, falls back
-    to a market order and returns a filled Fill.
-    """
-    cfg = SimpleNamespace(
-        entry_slippage_bps=10,
-        entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3,
-        entry_slippage_max_bps=30,
-        exit_slippage_bps=5,
-        stop_order_type="stop_limit",  # limit-first mode
-    )
+def test_compute_entry_limit_sell_subtracts_bps(mock_broker):
+    """Sell limit = reference * (1 - bps/10000)."""
     from orb_live.execution.order_policy import MarketableLimitPolicy
-    policy = MarketableLimitPolicy(
-        mock_broker, cfg, tmp_store, _sleep=_NO_SLEEP,
-    )
-    mock_broker.set_fill_fraction(0.0)   # all limit orders fail
-    fill = policy.sell(SYMBOL, 100, "stop",
-                       reference_price=99.0, session_date=TRADE_DATE)
-    # Despite limit failures, market fallback succeeds
-    assert fill.qty == 100
-    # Market fill uses bid price (99.90)
-    assert abs(fill.avg_price - 99.90) < 1e-9
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=5)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+    limit  = policy.compute_entry_limit("sell", SYMBOL, reference_price=100.0)
+
+    assert abs(limit - 99.95) < 1e-9    # 100.0 × 0.9995
+
+
+def test_compute_entry_limit_uses_nbbo_when_no_reference(mock_broker):
+    """Without reference_price, falls back to NBBO ask (buy) or bid (sell)."""
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=0)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+
+    # mock ask = 100.10, bps=0 → limit = ask exactly
+    limit_buy  = policy.compute_entry_limit("buy",  SYMBOL)
+    limit_sell = policy.compute_entry_limit("sell", SYMBOL)
+
+    assert abs(limit_buy  - 100.10) < 1e-9
+    assert abs(limit_sell -  99.90) < 1e-9
+
+
+def test_compute_entry_limit_bps_override(mock_broker):
+    """bps keyword overrides the config value."""
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=10)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+    limit  = policy.compute_entry_limit("buy", SYMBOL, reference_price=100.0, bps=30)
+
+    assert abs(limit - 100.30) < 1e-9   # bps override (30) takes precedence over cfg (10)
+
+
+def test_legacy_kwargs_accepted_without_error(mock_broker, tmp_store):
+    """Extra legacy kwargs (_sleep, state_store) are accepted without raising."""
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from types import SimpleNamespace
+
+    cfg       = SimpleNamespace(entry_slippage_bps=10)
+    _NO_SLEEP = lambda _: None  # noqa: E731
+
+    policy = MarketableLimitPolicy(mock_broker, cfg,
+                                   state_store=tmp_store, _sleep=_NO_SLEEP)
+    assert policy is not None
+    assert abs(policy.compute_entry_limit("buy", SYMBOL, reference_price=50.0) - 50.05) < 1e-9

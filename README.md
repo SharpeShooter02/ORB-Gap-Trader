@@ -45,7 +45,7 @@ pip install -e .
 # 2. Start IB Gateway / TWS in paper-trading mode
 
 # 3. Run tests
-python -m pytest orb_live/tests/ -q   # 150 tests, ~3s
+python -m pytest orb_live/tests/ -q   # 381 tests, ~3s
 
 # 4. Start session
 python -m orb_live.runner.main --paper
@@ -75,15 +75,31 @@ This invariant is enforced by `test_i_indicator_updated_before_position_manager`
 All strategy parameters live in `orb_live/config/live_config.py`.  Production
 config is locked at:
 
+### Backtest results (2017–2024, locked 2026-06-20)
+
+| Metric | Value |
+|--------|-------|
+| Sharpe | 1.922 |
+| Sortino | 4.39 |
+| Max Drawdown | -12.96% |
+| Calmar | 3.77 |
+| Flat P&L | $26,671 |
+| Compounded P&L | $127,842 |
+
+### Strategy configuration
+
 | Parameter | Value |
 |-----------|-------|
-| Sharpe (backtest 2017–2024) | 2.717 |
-| Max Drawdown | -8.0% |
-| Calmar | 11.259 |
-| Universe | 10 instruments (TQQQ/SQQQ/UPRO/SPXS/URTY/TZA/UDOW/SDOW/FNGU+FNGD, LABD/LABU, BITX, BOIL/KOLD, UVXY, KORU, ETHU/ETHD) |
-| TP weights | 0.35 / 0.05 / 0.60 |
+| Universe | 58 symbols (C1 crypto, C2 international/miners/single-stock, C3 broad leveraged ETFs) |
+| ORB window | 30 min |
+| Gap filter | 2% move on underlying (GAP_THRESHOLD) |
+| PS filter k | 1.00σ (K_SIGMA) |
+| TP structure | TP1-only: 100% of position at 1× ORB range |
+| RTG scaling | Disabled |
+| Base notional | $1,000 per trade (v1_base_notional) |
+| Units cap | 20.0× (CAP_UNITS) |
 | EMA period | 30 |
-| RTG exclusion | Class A only (KOLD excepted) |
+| Regime system | quiet (< 5 active underlyings), active (5–7), flood (≥ 8) |
 
 ## Market Data Subscription Required
 
@@ -163,7 +179,7 @@ python -m orb_live.scripts.backfill_underlyings
 python -m pytest orb_live/tests/ -v
 ```
 
-150 tests in ~3 seconds.  All synchronous — no broker credentials required.
+381 tests in ~3 seconds.  All synchronous — no broker credentials required.
 
 Key test files:
 - `test_session_runner.py` — bar dispatch order invariant, state machine

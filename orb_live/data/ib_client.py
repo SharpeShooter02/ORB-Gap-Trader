@@ -33,7 +33,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ib_async import IB, LimitOrder, MarketOrder, StopOrder, Stock
+from ib_async import IB, LimitOrder, MarketOrder, Order, StopOrder, Stock
 from orb_live.data.broker_client import BrokerClient
 
 _ET = ZoneInfo("America/New_York")
@@ -165,6 +165,7 @@ class IBClient(BrokerClient):
         self._market_data_degraded = False
         self._last_event_time: Optional[float] = None
         self._heartbeat_timeout    = float(os.getenv("IB_HEARTBEAT_TIMEOUT", "60"))
+        self._fill_watchers: dict[int, object] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -545,6 +546,44 @@ class IBClient(BrokerClient):
         self._ib.cancelOrder(trade.order)
         return True  # _on_order_status will confirm when IB acks the cancel
 
+    def submit_stop_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        stop_price: float,
+        limit_price: float,
+        client_order_id: Optional[str] = None,
+        tif: str = "day",
+    ) -> dict:
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            raise ValueError(f"{symbol} is not tradable on IB")
+
+        contract    = self._contract_cache[symbol]
+        action      = "BUY" if side.lower() == "buy" else "SELL"
+        min_tick    = self._get_min_tick(symbol)
+        stop_price  = self._round_to_tick(stop_price, min_tick, side.lower())
+        limit_price = self._round_to_tick(limit_price, min_tick, side.lower())
+
+        order               = Order()
+        order.action        = action
+        order.orderType     = "STP LMT"
+        order.totalQuantity = qty
+        order.auxPrice      = stop_price
+        order.lmtPrice      = limit_price
+        order.tif           = tif.upper()
+        if client_order_id:
+            order.orderRef  = client_order_id
+
+        trade     = self._ib.placeOrder(contract, order)
+        order_int = trade.order.orderId
+        self._order_cache[order_int] = self._trade_to_dict(trade)
+        return self._order_cache[order_int]
+
     def submit_stop_order(
         self,
         symbol: str,
@@ -685,17 +724,127 @@ class IBClient(BrokerClient):
             "oca_group":     oca_tag,
         }
 
+    def submit_bracket_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        entry_price: float,
+        tp1_limit_price: float,
+        stop_price: float,
+        tp1_qty: Optional[float] = None,
+        tif: str = "day",
+        timeout: float = 5.0,
+        **kwargs,
+    ) -> dict:
+        """Place an IB native bracket: parent entry limit + OCA TP1 limit + OCA stop.
+
+        Children are held by IB (parentId linkage) until the parent fills.
+        Returns {"entry_order_id", "tp1_order_id", "stop_order_id"} — all str.
+        """
+        if not self.is_connected():
+            raise ConnectionError("IBClient is not connected")
+
+        asset = self.get_asset(symbol)
+        if not asset["tradable"]:
+            raise ValueError(f"{symbol} is not tradable on IB")
+
+        contract     = self._contract_cache[symbol]
+        tick         = self._get_min_tick(symbol)
+        entry_action = "BUY"  if side.lower() == "buy"  else "SELL"
+        exit_action  = "SELL" if side.lower() == "buy"  else "BUY"
+        exit_side    = "sell" if side.lower() == "buy"  else "buy"
+
+        if tp1_qty is None:
+            tp1_qty = qty
+
+        entry_price     = self._round_to_tick(entry_price,     tick, side.lower())
+        tp1_limit_price = self._round_to_tick(tp1_limit_price, tick, exit_side)
+        stop_price      = self._round_to_tick(stop_price,      tick, exit_side)
+
+        oca_tag = f"BKT-{symbol}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+
+        # Parent: transmit=False — IB holds it until children are placed
+        parent_order          = LimitOrder(entry_action, qty, entry_price)
+        parent_order.tif      = tif.upper()
+        parent_order.transmit = False
+
+        parent_trade = self._ib.placeOrder(contract, parent_order)
+        parent_id    = parent_trade.order.orderId
+
+        # TP1 limit child
+        tp1_order          = LimitOrder(exit_action, tp1_qty, tp1_limit_price)
+        tp1_order.parentId = parent_id
+        tp1_order.tif      = tif.upper()
+        tp1_order.ocaGroup = oca_tag
+        tp1_order.ocaType  = 1  # cancel remaining with block
+        tp1_order.transmit = False
+
+        # Stop child: transmit=True triggers atomic transmission of all three
+        stop_order          = StopOrder(exit_action, qty, stop_price)
+        stop_order.parentId = parent_id
+        stop_order.tif      = tif.upper()
+        stop_order.ocaGroup = oca_tag
+        stop_order.ocaType  = 1
+        stop_order.transmit = True
+
+        tp1_trade  = self._ib.placeOrder(contract, tp1_order)
+        stop_trade = self._ib.placeOrder(contract, stop_order)
+
+        parent_int = parent_trade.order.orderId
+        tp1_int    = tp1_trade.order.orderId
+        stop_int   = stop_trade.order.orderId
+
+        self._order_cache[parent_int] = self._trade_to_dict(parent_trade)
+        self._order_cache[tp1_int]    = self._trade_to_dict(tp1_trade)
+        self._order_cache[stop_int]   = self._trade_to_dict(stop_trade)
+
+        return {
+            "entry_order_id": str(parent_int),
+            "tp1_order_id":   str(tp1_int),
+            "stop_order_id":  str(stop_int),
+        }
+
     def cancel_all_orders(self) -> int:
-        raise NotImplementedError("IBClient.cancel_all_orders — Part 4")
+        count = 0
+        for trade in self._ib.openTrades():
+            try:
+                self._ib.cancelOrder(trade.order)
+                count += 1
+            except Exception as exc:
+                if self._log:
+                    self._log.warning("cancel_all_orders_single_failed", exc=str(exc))
+        return count
 
     def close_position(self, symbol: str) -> Optional[dict]:
-        raise NotImplementedError("IBClient.close_position — Part 4")
+        pos = self.get_position(symbol)
+        if pos is None or pos["qty"] == 0:
+            return None
+        qty  = abs(pos["qty"])
+        side = "sell" if pos["qty"] > 0 else "buy"
+        return self.submit_market_order(symbol, side, qty)
 
     def close_all_positions(self) -> None:
-        raise NotImplementedError("IBClient.close_all_positions — Part 4")
+        for pos in self.get_positions():
+            qty  = abs(pos["qty"])
+            side = "sell" if pos["qty"] > 0 else "buy"
+            try:
+                self.submit_market_order(pos["symbol"], side, qty)
+            except Exception as exc:
+                if self._log:
+                    self._log.critical(
+                        "close_all_positions_failed", symbol=pos["symbol"], exc=str(exc)
+                    )
 
     def list_orders(self, status: str = "open") -> list[dict]:
-        raise NotImplementedError("IBClient.list_orders — Part 4")
+        if status == "open":
+            trades = self._ib.openTrades()
+        else:
+            trades = [
+                t for t in self._ib.trades()
+                if self._normalize_status(t.orderStatus.status) == status.lower()
+            ]
+        return [self._trade_to_dict(t) for t in trades]
 
     # ── Order event handlers (private) ────────────────────────────────────────
 
@@ -716,6 +865,30 @@ class IBClient(BrokerClient):
                     filled=trade.orderStatus.filled,
                 )
 
+    def register_fill_watcher(self, order_id: str, callback) -> None:
+        self._fill_watchers[int(order_id)] = callback
+
+    def unregister_fill_watcher(self, order_id: str) -> None:
+        self._fill_watchers.pop(int(order_id), None)
+
+    def get_executions(self, trade_date=None) -> list:
+        result = []
+        for fill in self._ib.fills():
+            exec_time = getattr(fill, "time", None) or getattr(fill.execution, "time", "")
+            if trade_date is not None:
+                if not str(exec_time).startswith(str(trade_date)):
+                    continue
+            result.append({
+                "order_id":   str(fill.execution.orderId),
+                "symbol":     fill.contract.symbol,
+                "side":       "buy" if fill.execution.side.upper() == "BOT" else "sell",
+                "qty":        float(fill.execution.cumQty),
+                "price":      float(fill.execution.avgPrice),
+                "commission": float(getattr(fill.commissionReport, "commission", 0) or 0),
+                "exec_time":  str(exec_time),
+            })
+        return result
+
     def _on_exec_details(self, trade, fill) -> None:
         """Capture fill price/qty from each execution report."""
         self._last_event_time = time.time()
@@ -723,6 +896,13 @@ class IBClient(BrokerClient):
         if order_id in self._order_cache:
             self._order_cache[order_id]["last_fill_price"] = fill.execution.price
             self._order_cache[order_id]["last_fill_qty"]   = fill.execution.shares
+        watcher = self._fill_watchers.get(order_id)
+        if watcher:
+            try:
+                watcher(str(order_id), trade, fill)
+            except Exception as exc:
+                if self._log:
+                    self._log.error("fill_watcher_error", order_id=order_id, exc=str(exc))
 
     # IB codes that are not actionable errors for our purposes.
     # 162 = "HMDS query returned no data" — expected for delisted / illiquid symbols;

@@ -62,8 +62,8 @@ tail -f data/logs/session.log
 
 ### Key status fields
 - `session_state`: `pre_market` → `orb_window` → `trade_active` → `eod_exit`
-- `ws_token_age_minutes`: auto-refresh fires at 720 min (12h)
 - `last_bar_received_ts`: should update every minute during RTH
+- `last_reconnect_ts`: timestamp of last IB Gateway reconnect (null if none)
 - `session_kill_active`: True means kill-switch triggered; review logs
 - `open_positions`: should decrease to 0 by 16:00 ET (13:00 on half-days)
 
@@ -92,28 +92,26 @@ Expected on half-day:
 
 ---
 
-## 5. WebSocket Reconnect Procedures
+## 5. IB Gateway Connection
 
-### Automatic reconnect (normal)
-The WebSocket reconnects automatically with exponential backoff (1s → 30s).
-After 5 minutes of continuous failures, the system enters **degraded mode**
-and switches to 1-minute REST polling, logging a CRITICAL alert.
+### Normal operation
+The IB Gateway connection is managed by `ib_async`.  If the connection drops,
+`BarRouter` automatically reconnects with exponential backoff.
+`last_reconnect_ts` in `/status` tracks the last successful reconnect.
 
-### Manual reconnect (if needed)
-```bash
-python -m orb_live.scripts.force_ws_reconnect --reconnect
+### Verify connection health
 ```
-This writes a sentinel file that triggers reconnect within 60 seconds.
-
-### Verify reconnect succeeded
+curl http://localhost:8080/status | python -m json.tool | grep -E "last_bar|reconnect"
 ```
-curl http://localhost:8080/status | python -m json.tool | grep ws_token
-```
-`ws_token_age_minutes` resets to near 0 after a successful reconnect.
+`last_bar_received_ts` should be within 90 seconds during RTH.
+A stale value combined with a recent `last_reconnect_ts` indicates bars stopped
+flowing after a reconnect — restart the session runner.
 
-### Token refresh (automatic, every 12h)
-The `BarRouter._token_refresh_watcher` forces a reconnect every 12 hours.
-No operator action needed unless `CRITICAL: ws_token_refresh_failed` appears.
+### IB Gateway / TWS restart required
+If the IB Gateway process itself needs restarting (e.g. weekly maintenance):
+1. Flatten all open positions first (see Emergency Procedures below)
+2. Restart TWS/IB Gateway
+3. `systemctl restart orb-live`
 
 ---
 

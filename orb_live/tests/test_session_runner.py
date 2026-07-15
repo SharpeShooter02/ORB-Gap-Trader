@@ -140,9 +140,7 @@ def _build_engine(mock_broker, tmp_store):
     scfg = cfg.strategy_config
 
     exc = SimpleNamespace(
-        entry_slippage_bps=10, entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3, entry_slippage_max_bps=30,
-        exit_slippage_bps=5, stop_order_type="market",
+        entry_slippage_bps=10, stop_order_type="market",
         session_kill_loss_pct=0.03,
         max_concurrent_positions=0,
         max_gross_exposure_pct=2.0,
@@ -205,7 +203,7 @@ def test_e_valid_p2_transitions_to_orb_complete(mock_broker, tmp_store):
 def test_f_breakout_bar_transitions_to_in_position(mock_broker, tmp_store):
     """
     A bar that passes check_breakout on an ORB_COMPLETE symbol → IN_POSITION.
-    ORB: high=101, low=99.  Breakout long: close > 101 AND close > ema(100).
+    ORB: high=101, low=99.  Breakout long: close > 101.
     """
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
     engine, _, indicators_store, cfg = _build_engine(mock_broker, tmp_store)
@@ -312,9 +310,7 @@ def test_i_indicator_updated_before_position_manager(mock_broker, tmp_store):
     scfg = cfg.strategy_config
 
     exc = SimpleNamespace(
-        entry_slippage_bps=10, entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3, entry_slippage_max_bps=30,
-        exit_slippage_bps=5, stop_order_type="market",
+        entry_slippage_bps=10, stop_order_type="market",
         session_kill_loss_pct=0.03, max_concurrent_positions=0,
         max_gross_exposure_pct=2.0, max_position_pct=0.50,
     )
@@ -387,9 +383,7 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_broker, tmp_store):
 
     cfg  = load_live_config()
     exc = SimpleNamespace(
-        entry_slippage_bps=10, entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3, entry_slippage_max_bps=30,
-        exit_slippage_bps=5, stop_order_type="market",
+        entry_slippage_bps=10, stop_order_type="market",
         session_kill_loss_pct=0.03, max_concurrent_positions=0,
         max_gross_exposure_pct=2.0, max_position_pct=0.50,
     )
@@ -447,9 +441,7 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
     scfg = cfg.strategy_config
 
     exc = SimpleNamespace(
-        entry_slippage_bps=10, entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3, entry_slippage_max_bps=30,
-        exit_slippage_bps=5, stop_order_type="market",
+        entry_slippage_bps=10, stop_order_type="market",
         session_kill_loss_pct=0.03, max_concurrent_positions=0,
         max_gross_exposure_pct=2.0, max_position_pct=0.50,
     )
@@ -550,9 +542,7 @@ def test_l_broker_sleep_pumps_loop_for_bar_delivery(tmp_store):
     cfg    = load_live_config()
     scfg   = cfg.strategy_config
     exc    = SimpleNamespace(
-        entry_slippage_bps=10, entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3, entry_slippage_max_bps=30,
-        exit_slippage_bps=5, stop_order_type="market",
+        entry_slippage_bps=10, stop_order_type="market",
         session_kill_loss_pct=0.03, max_concurrent_positions=0,
         max_gross_exposure_pct=2.0, max_position_pct=0.50,
     )

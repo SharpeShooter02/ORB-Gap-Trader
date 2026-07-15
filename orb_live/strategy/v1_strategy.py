@@ -58,7 +58,7 @@ GAP_THRESHOLD = 0.02   # 2% on the underlying
 # (class, regime) -> weight multiplier
 WEIGHTS: dict[tuple[str, str], float] = {
     ("C1", "quiet"): 3.0, ("C1", "active"): 3.0, ("C1", "flood"): 3.0,
-    ("C2", "quiet"): 0.5, ("C2", "active"): 3.0, ("C2", "flood"): 0.0,
+    ("C2", "quiet"): 0.5, ("C2", "active"): 3.0, ("C2", "flood"): 0.5,
     ("C3", "quiet"): 3.0, ("C3", "active"): 3.0, ("C3", "flood"): 3.0,
 }
 

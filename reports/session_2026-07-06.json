@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-06",
+  "generated_at": "2026-07-06",
+  "date": "2026-07-06",
+  "n_trades": 3,
+  "n_wins": 0,
+  "win_rate": 0.0,
+  "total_pnl": 0.0,
+  "avg_pnl": NaN,
+  "best_trade": {
+    "symbol": "N/A",
+    "pnl": 0.0
+  },
+  "worst_trade": {
+    "symbol": "N/A",
+    "pnl": 0.0
+  }
+}

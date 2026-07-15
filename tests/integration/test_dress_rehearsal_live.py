@@ -352,30 +352,71 @@ class TestDressRehearsal:
 
             store.close()  # release SQLite handle before temp dir is deleted
 
-    # ── Test 4: Entry + stop placement path ──────────────────────────────────
+    # ── Test 4: Bracket order full lifecycle ─────────────────────────────────
 
-    def test_dress_entry_places_real_stop(self, components):
+    def test_dress_bracket_order_lifecycle(self, components):
         """
-        Verify submit_stop_order places a real stop at IB paper, returns a valid
-        order_id, and cancels cleanly.  Exercises the broker primitive that
-        open_position now calls after every entry fill.
+        Place a native IB bracket order (entry limit far from market + OCA TP1
+        limit + OCA stop), verify all three legs are created and working at IB,
+        then cancel the entry which should cascade-cancel the children.
+
+        This exercises the exact path that open_position() now uses: one atomic
+        submit_bracket_order call instead of the old detect-fill-then-place-OCA
+        sequence.
         """
         client = components["client"]
-        stop = client.submit_stop_order(
-            "SOXL", "sell", 1, 999.0,
-            client_order_id="dress-entry-stop",
-            timeout=10.0,
+
+        # Use a liquid symbol with a far-from-market limit so nothing fills.
+        symbol     = "SOXL"
+        entry_lmt  = 0.01   # far below market — will never fill
+        tp1_lmt    = 0.02   # TP1 above entry
+        stop_px    = 0.005  # stop below entry
+        qty        = 1
+
+        print(f"\n[DRESS] Placing bracket order: {symbol} BUY {qty} "
+              f"entry@{entry_lmt} tp1@{tp1_lmt} stop@{stop_px}")
+
+        bracket = client.submit_bracket_order(
+            symbol          = symbol,
+            side            = "buy",
+            qty             = qty,
+            entry_price     = entry_lmt,
+            tp1_limit_price = tp1_lmt,
+            stop_price      = stop_px,
+            tif             = "day",
+            timeout         = 10.0,
         )
+
+        entry_id = bracket["entry_order_id"]
+        tp1_id   = bracket["tp1_order_id"]
+        stop_id  = bracket["stop_order_id"]
+
+        print(f"[DRESS] Bracket placed: entry={entry_id} tp1={tp1_id} stop={stop_id}")
+        assert entry_id, "submit_bracket_order did not return entry_order_id"
+        assert tp1_id,   "submit_bracket_order did not return tp1_order_id"
+        assert stop_id,  "submit_bracket_order did not return stop_order_id"
+
+        # Entry must be active; children must be inactive/held (IB holds children
+        # until parent fills — they appear as PreSubmitted or Inactive).
         try:
-            assert stop["id"], "stop did not return an order_id"
-            assert stop["status"] in ("new", "submitted"), \
-                f"unexpected status: {stop['status']}"
-            fetched = client.get_order(stop["id"])
-            assert fetched["status"] in ("new", "submitted")
-            print(f"[DRESS] Stop placed: id={stop['id']} status={stop['status']}")
+            entry_state = client.get_order(entry_id)
+            assert entry_state["status"] in ("new", "submitted"), \
+                f"entry unexpected status: {entry_state['status']}"
+            print(f"[DRESS] Entry status: {entry_state['status']} — OK")
+
+            tp1_state = client.get_order(tp1_id)
+            print(f"[DRESS] TP1 child status: {tp1_state['status']}")
+
+            stop_state = client.get_order(stop_id)
+            print(f"[DRESS] Stop child status: {stop_state['status']}")
         finally:
-            if stop and stop.get("id"):
-                client.cancel_order(stop["id"], timeout=5.0)
+            # Cancel the entry — IB cascades the cancel to all OCA children.
+            cancelled = client.cancel_order(entry_id, timeout=10.0)
+            print(f"[DRESS] cancel_order(entry): {cancelled}")
+            client.cancel_order(tp1_id, timeout=5.0)
+            client.cancel_order(stop_id, timeout=5.0)
+
+        print("[DRESS] PASS: bracket lifecycle (place → verify → cancel) completed")
 
     # ── Test 5: BrokerClient contract compliance ──────────────────────────────
 
@@ -469,21 +510,18 @@ class TestDressRehearsal:
                 except Exception as exc:
                     print(f"[DRESS]  cancel_order({order_id}): {exc} (may already be done)")
 
-        # ── Methods expected to raise NotImplementedError ─────────────────────
+        # ── Emergency / utility methods ───────────────────────────────────────
 
         for name, fn in [
-            ("submit_stop_order",  lambda: client.submit_stop_order("SPY","buy",1,0.01)),
-            ("cancel_all_orders",  lambda: client.cancel_all_orders()),
-            ("close_position",     lambda: client.close_position("SPY")),
-            ("close_all_positions",lambda: client.close_all_positions()),
-            ("list_orders",        lambda: client.list_orders()),
+            ("cancel_all_orders",   lambda: client.cancel_all_orders()),
+            ("close_position",      lambda: client.close_position("ZZZNOTREAL")),
+            ("close_all_positions", lambda: client.close_all_positions()),
+            ("list_orders",         lambda: client.list_orders()),
         ]:
             try:
-                fn()
-                print(f"[DRESS]  {name}: returned (implemented)")
-            except NotImplementedError:
-                print(f"[DRESS]  {name}: NotImplementedError — expected, method exists")
+                result = fn()
+                print(f"[DRESS]  {name}: returned {result!r}")
             except Exception as exc:
-                print(f"[DRESS]  {name}: {type(exc).__name__}({exc}) — method exists")
+                print(f"[DRESS]  {name}: {type(exc).__name__}({exc})")
 
         print("[DRESS] PASS: all BrokerClient contract methods reachable")

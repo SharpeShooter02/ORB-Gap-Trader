@@ -33,6 +33,13 @@ def daily_summary(store: StateStore, trade_date: date) -> dict:
 
     df = pd.DataFrame([dict(r) for r in rows])
     wins = df[df["dollar_pnl"] > 0]
+    pnl = df["dollar_pnl"].dropna()
+    if pnl.empty:
+        best_trade  = {"symbol": "N/A", "pnl": 0.0}
+        worst_trade = {"symbol": "N/A", "pnl": 0.0}
+    else:
+        best_trade  = {"symbol": df.loc[pnl.idxmax(), "symbol"], "pnl": float(pnl.max())}
+        worst_trade = {"symbol": df.loc[pnl.idxmin(), "symbol"], "pnl": float(pnl.min())}
     return {
         "date":        trade_date,
         "n_trades":    len(df),
@@ -40,10 +47,8 @@ def daily_summary(store: StateStore, trade_date: date) -> dict:
         "win_rate":    len(wins) / len(df),
         "total_pnl":   float(df["dollar_pnl"].sum()),
         "avg_pnl":     float(df["dollar_pnl"].mean()),
-        "best_trade":  {"symbol": df.loc[df["dollar_pnl"].idxmax(), "symbol"],
-                        "pnl": float(df["dollar_pnl"].max())},
-        "worst_trade": {"symbol": df.loc[df["dollar_pnl"].idxmin(), "symbol"],
-                        "pnl": float(df["dollar_pnl"].min())},
+        "best_trade":  best_trade,
+        "worst_trade": worst_trade,
     }
 
 

@@ -39,10 +39,6 @@ def _exe_cfg(**overrides):
         max_gross_exposure_pct=2.0,
         max_position_pct=0.50,
         entry_slippage_bps=10,
-        entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3,
-        entry_slippage_max_bps=30,
-        exit_slippage_bps=5,
         stop_order_type="market",
     )
     for k, v in overrides.items():
@@ -214,8 +210,11 @@ def test_e_tp1_fires_stop_moves_to_breakeven(mock_broker, tmp_store):
     pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos is not None
 
-    # lo=100.2 stays above breakeven (actual_entry_price≈100.10) so stop doesn't fire.
-    # hi clears tp1_price=101.0; hi < tp2_price=102.0 so only TP1 fires.
+    # Simulate IB filling the OCA TP1 bracket child (tp1_shares=35 shares).
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status": "filled", "filled_qty": "35", "filled_avg_price": "101.0",
+    })
+    # lo=100.2 stays above breakeven so fresh stop doesn't immediately fire.
     tp1_bar = _bar(hi=101.5, lo=100.2)
     mgr.on_bar(SYMBOL, tp1_bar, _ts())
 
@@ -233,6 +232,10 @@ def test_f_tp1_fires_with_no_tp2_shares_sets_tp2_hit(mock_broker, tmp_store):
     pos   = mgr.open_position(entry, SYMBOL, +1, TRADE_DATE)
     assert pos is not None
 
+    # Simulate IB filling the OCA TP1 bracket child (tp1_shares=40 shares).
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status": "filled", "filled_qty": "40", "filled_avg_price": "101.0",
+    })
     tp1_bar = _bar(hi=101.5, lo=100.0)
     # TP3 check will reach indicator lookup; provide a seeded indicator
     ind = _seeded_indicator(ema_value=200.0)   # ema >> entry, crossback always True
@@ -255,6 +258,10 @@ def test_g_tp1_and_tp2_fire_same_bar(mock_broker, tmp_store):
     pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos is not None
 
+    # Simulate IB filling the OCA TP1 bracket child (tp1_shares=35 shares).
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status": "filled", "filled_qty": "35", "filled_avg_price": "102.0",
+    })
     both_bar = _bar(hi=102.5, lo=100.2, cl=102.0)
     ind.on_bar({"high": 102.5, "low": 100.2, "close": 102.0})
     mgr.on_bar(SYMBOL, both_bar, _ts())
@@ -274,8 +281,11 @@ def test_h_tp3_ema_crossback_fires(mock_broker, tmp_store):
     pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos is not None
 
-    # Bar 1: hits TP1 and TP2. lo=100.2 > breakeven (100.10) so stop doesn't fire.
-    # close=102.0 > ema≈101.0 so no TP3 crossback yet.
+    # Bar 1: TP1 fires via OCA; TP2 fires via bar price.
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status": "filled", "filled_qty": "35", "filled_avg_price": "101.0",
+    })
+    # lo=100.2 > breakeven so fresh stop doesn't immediately fire.
     ind.on_bar({"high": 102.5, "low": 100.2, "close": 102.0})
     mgr.on_bar(SYMBOL, _bar(hi=102.5, lo=100.2, cl=102.0), _ts(10, 31))
     assert pos.tp2_hit is True
@@ -303,7 +313,10 @@ def test_i_tp3_no_fire_when_ema_below_entry(mock_broker, tmp_store):
     pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos is not None
 
-    # Bar 1: hit TP1 + TP2. lo=100.2 > breakeven (100.10) so stop doesn't fire.
+    # Bar 1: TP1 fires via OCA; TP2 fires via bar price.
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status": "filled", "filled_qty": "35", "filled_avg_price": "101.0",
+    })
     ind.on_bar({"high": 102.5, "low": 100.2, "close": 102.0})
     mgr.on_bar(SYMBOL, _bar(hi=102.5, lo=100.2, cl=102.0), _ts())
     assert pos.tp2_hit is True
@@ -341,20 +354,23 @@ def test_j_stop_fires_closes_position(mock_broker, tmp_store):
 # ── k. Stop after TP1 → exit_reason='TP1_ONLY' ───────────────────────────────
 
 def test_k_stop_after_tp1_exit_reason_tp1_only(mock_broker, tmp_store):
-    """TP1 fires on bar 1 (existing logic); polling detects stop fill on bar 2
+    """TP1 fires on bar 1 (OCA); fresh stop placed; polling detects stop fill on bar 2
     → exit_reason='TP1_ONLY' because pos.tp1_hit=True and use_trail_atp1=False."""
     mgr = _build_mgr(mock_broker, tmp_store)
     pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos is not None
 
-    # Bar 1: TP1 fires normally (stop still "new" → polling continues, TP1 runs).
+    # Bar 1: TP1 fires via OCA (simulate IB fill); fresh stop placed for remaining 65.
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status": "filled", "filled_qty": "35", "filled_avg_price": "101.0",
+    })
     mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
     assert pos.tp1_hit is True
 
-    # Before bar 2: IB reports the stop (now at breakeven) has fired.
-    mock_broker._orders[pos.stop_order_id] = {
+    # Before bar 2: IB reports the fresh stop (pos.stop_order_id updated by on_bar) has fired.
+    mock_broker._orders[pos.stop_order_id].update({
         "status": "filled", "filled_qty": str(pos.remaining), "filled_avg_price": "100.10",
-    }
+    })
     mgr.on_bar(SYMBOL, _bar(hi=100.1, lo=99.5), _ts(10, 31))
 
     assert pos.status      == "closed"
@@ -373,7 +389,10 @@ def test_l_stop_with_trail_exit_reason_trail(mock_broker, tmp_store):
     assert pos is not None
     assert pos.use_trail_atp1 is True
 
-    # Bar 1: TP1 fires; trail peak and current_stop set (stop still "new").
+    # Bar 1: TP1 fires via OCA; fresh stop placed for remaining 65 shares.
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status": "filled", "filled_qty": "35", "filled_avg_price": "101.0",
+    })
     mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.6), _ts())
     assert pos.tp1_hit is True
 
@@ -382,10 +401,10 @@ def test_l_stop_with_trail_exit_reason_trail(mock_broker, tmp_store):
     assert abs(pos.trail_atp1_peak - 103.0) < 1e-9
     assert abs(pos.current_stop - 102.0) < 1e-9
 
-    # Before bar 3: IB reports the stop has fired at the trail level.
-    mock_broker._orders[pos.stop_order_id] = {
+    # Before bar 3: IB reports the fresh stop (pos.stop_order_id updated after TP1) fired.
+    mock_broker._orders[pos.stop_order_id].update({
         "status": "filled", "filled_qty": str(pos.remaining), "filled_avg_price": "102.0",
-    }
+    })
     mgr.on_bar(SYMBOL, _bar(hi=102.5, lo=101.5), _ts(10, 32))
 
     assert pos.status      == "closed"
@@ -539,48 +558,80 @@ def test_r_eod_branch_never_fires_for_rth_bars(mock_broker, tmp_store):
 
 # ── s–x: Exchange-resident stop placement ─────────────────────────────────────
 
-def test_s_open_position_places_stop_after_entry(mock_broker, tmp_store):
-    """After a successful entry fill, submit_stop_order is called with correct args."""
-    from unittest.mock import patch, MagicMock
+def test_s_open_position_places_bracket_with_stop(mock_broker, tmp_store):
+    """After a successful entry fill, submit_bracket_order places stop at correct price."""
+    from unittest.mock import patch
     mgr = _build_mgr(mock_broker, tmp_store)
 
-    stop_return = {"id": "stop-123", "status": "new"}
-    with patch.object(mock_broker, "submit_stop_order",
-                      return_value=stop_return) as mock_stop:
+    bracket_return = {
+        "entry_order_id": "entry-123",
+        "tp1_order_id":   "tp1-123",
+        "stop_order_id":  "stop-123",
+    }
+    mock_broker._orders["entry-123"] = {
+        "id": "entry-123", "status": "filled",
+        "filled_qty": "100", "filled_avg_price": "100.10",
+    }
+    mock_broker._orders["tp1-123"] = {
+        "id": "tp1-123", "status": "new", "filled_qty": "0", "filled_avg_price": "0",
+    }
+    mock_broker._orders["stop-123"] = {
+        "id": "stop-123", "status": "new", "filled_qty": "0", "filled_avg_price": "0",
+    }
+    mock_broker._oca_siblings["tp1-123"]  = "stop-123"
+    mock_broker._oca_siblings["stop-123"] = "tp1-123"
+
+    with patch.object(mock_broker, "submit_bracket_order",
+                      return_value=bracket_return) as mock_bracket:
         pos = mgr.open_position(_make_entry(stop_price=95.0), SYMBOL, +1, TRADE_DATE)
 
     assert pos is not None
-    mock_stop.assert_called_once()
-    call_kw = mock_stop.call_args.kwargs
-    assert call_kw["symbol"]     == SYMBOL
-    assert call_kw["side"]       == "sell"    # long position → sell to stop out
-    assert call_kw["qty"]        == 100
-    assert call_kw["stop_price"] == pytest.approx(95.0)
-    assert pos.stop_order_id     == "stop-123"
+    mock_bracket.assert_called_once()
+    kw = mock_bracket.call_args.kwargs
+    assert kw["symbol"]     == SYMBOL
+    assert kw["side"]       == "buy"
+    assert kw["stop_price"] == pytest.approx(95.0)
+    assert pos.stop_order_id == "stop-123"
 
 
-def test_t_open_position_places_stop_for_short(mock_broker, tmp_store):
-    """Short entry: stop side must be 'buy' (covering the short)."""
+def test_t_open_position_places_bracket_for_short(mock_broker, tmp_store):
+    """Short entry: bracket side must be 'sell'."""
     from unittest.mock import patch
     mgr = _build_mgr(mock_broker, tmp_store)
 
-    with patch.object(mock_broker, "submit_stop_order",
-                      return_value={"id": "stop-456", "status": "new"}) as mock_stop:
+    bracket_return = {
+        "entry_order_id": "entry-456",
+        "tp1_order_id":   "tp1-456",
+        "stop_order_id":  "stop-456",
+    }
+    mock_broker._orders["entry-456"] = {
+        "id": "entry-456", "status": "filled",
+        "filled_qty": "100", "filled_avg_price": "99.90",
+    }
+    mock_broker._orders["tp1-456"] = {
+        "id": "tp1-456", "status": "new", "filled_qty": "0", "filled_avg_price": "0",
+    }
+    mock_broker._orders["stop-456"] = {
+        "id": "stop-456", "status": "new", "filled_qty": "0", "filled_avg_price": "0",
+    }
+
+    with patch.object(mock_broker, "submit_bracket_order",
+                      return_value=bracket_return) as mock_bracket:
         pos = mgr.open_position(_make_entry(stop_price=105.0), SYMBOL, -1, TRADE_DATE)
 
     assert pos is not None
-    call_kw = mock_stop.call_args.kwargs
-    assert call_kw["side"] == "buy"
+    kw = mock_bracket.call_args.kwargs
+    assert kw["side"] == "sell"
 
 
-def test_u_open_position_stop_uses_partial_fill_qty(mock_broker, tmp_store):
-    """Partial fill: stop qty must match actual filled shares, not requested shares.
+def test_u_open_position_partial_fill_stop_uses_fill_qty(mock_broker, tmp_store):
+    """Partial fill: fresh stop qty must match actual filled shares, not requested shares.
 
-    fill_sequence=(0.60, 0, 0) gives 60 shares on the first attempt and then
-    zero on the two remaining repeg attempts, so the total fill stays at 60.
+    submit_bracket_order fills 60/100 shares; _complete_entry_fill cancels the
+    bracket children and places a fresh stop for the 60 actual filled shares.
     """
     from unittest.mock import patch
-    mock_broker.set_fill_sequence(0.60, 0.0, 0.0)
+    mock_broker.set_fill_sequence(0.60)
     mgr = _build_mgr(mock_broker, tmp_store)
 
     with patch.object(mock_broker, "submit_stop_order",
@@ -592,9 +643,10 @@ def test_u_open_position_stop_uses_partial_fill_qty(mock_broker, tmp_store):
     assert call_kw["qty"] == 60
 
 
-def test_v_open_position_stop_failure_flattens_position(mock_broker, tmp_store):
-    """Stop placement failure: position must be flattened via market order, status=closed."""
+def test_v_partial_fill_stop_failure_flattens_position(mock_broker, tmp_store):
+    """Partial fill + stop failure: position must be flattened via market order, status=closed."""
     from unittest.mock import patch
+    mock_broker.set_fill_sequence(0.60)
     mgr = _build_mgr(mock_broker, tmp_store)
 
     with patch.object(mock_broker, "submit_stop_order",
@@ -605,16 +657,16 @@ def test_v_open_position_stop_failure_flattens_position(mock_broker, tmp_store):
 
     assert result is None
     mock_flat.assert_called_once()
-    # Position row in DB should show closed / STOP_PLACEMENT_FAILED
     db_row = tmp_store.get_open_position(SYMBOL)
     assert db_row["status"]      == "closed"
     assert db_row["exit_reason"] == "STOP_PLACEMENT_FAILED"
 
 
-def test_w_open_position_stop_failure_logs_critical(mock_broker, tmp_store):
-    """Stop placement failure must emit a 'stop_placement_failed_flattening_position' critical log."""
+def test_w_partial_fill_stop_failure_logs_critical(mock_broker, tmp_store):
+    """Partial fill + stop failure must emit a 'stop_placement_failed_flattening_position' critical log."""
     from unittest.mock import patch, MagicMock
     logger = MagicMock()
+    mock_broker.set_fill_sequence(0.60)
     mgr = _build_mgr(mock_broker, tmp_store)
     mgr._log = logger
 
@@ -630,7 +682,7 @@ def test_w_open_position_stop_failure_logs_critical(mock_broker, tmp_store):
 
 
 def test_x_open_position_no_stop_on_unfilled_entry(mock_broker, tmp_store):
-    """Zero fill: submit_stop_order must NOT be called."""
+    """Zero fill: bracket children are cancelled by IB; submit_stop_order NOT called."""
     from unittest.mock import patch
     mock_broker.set_fill_fraction(0.0)
     mgr = _build_mgr(mock_broker, tmp_store)
@@ -644,14 +696,12 @@ def test_x_open_position_no_stop_on_unfilled_entry(mock_broker, tmp_store):
 
 # ── y–ad: Exchange-resident stop polling ──────────────────────────────────────
 
-def _open_pos_with_stop_id(mock_broker, tmp_store, stop_order_id="ib-stop-1"):
-    """Open a position and manually set stop_order_id (avoids submit_stop_order)."""
-    from unittest.mock import patch
+def _open_pos_with_stop_id(mock_broker, tmp_store):
+    """Open a position via bracket; returns (mgr, pos) with stop_order_id set."""
     mgr = _build_mgr(mock_broker, tmp_store)
-    with patch.object(mock_broker, "submit_stop_order",
-                      return_value={"id": stop_order_id, "status": "new"}):
-        pos = mgr.open_position(_make_entry(stop_price=99.0), SYMBOL, +1, TRADE_DATE)
-    assert pos is not None and pos.stop_order_id == stop_order_id
+    pos = mgr.open_position(_make_entry(stop_price=99.0), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    assert pos.stop_order_id is not None
     return mgr, pos
 
 
@@ -661,7 +711,7 @@ def test_y_on_bar_polling_detects_filled_stop(mock_broker, tmp_store):
     mgr, pos = _open_pos_with_stop_id(mock_broker, tmp_store)
 
     stop_state = {"status": "filled", "filled_qty": "100", "filled_avg_price": "99.0"}
-    mock_broker._orders["ib-stop-1"] = stop_state
+    mock_broker._orders[pos.stop_order_id] = stop_state
 
     # Bar that WOULD trigger TP1 — must not run because position is already closed
     tp1_trigger = _bar(hi=102.0, lo=100.5)
@@ -683,7 +733,7 @@ def test_z_on_bar_polling_detects_partially_filled_stop(mock_broker, tmp_store):
     original_remaining = pos.remaining   # 100
     stop_state = {"status": "partially_filled", "filled_qty": "60",
                   "filled_avg_price": "98.5"}
-    mock_broker._orders["ib-stop-1"] = stop_state
+    mock_broker._orders[pos.stop_order_id] = stop_state
 
     with patch.object(mock_broker, "submit_limit_order"):
         mgr.on_bar(SYMBOL, _bar(hi=102.0, lo=100.5), _ts(10, 30))
@@ -695,11 +745,11 @@ def test_z_on_bar_polling_detects_partially_filled_stop(mock_broker, tmp_store):
 
 def test_aa_on_bar_polling_continues_when_stop_still_active(mock_broker, tmp_store):
     """Stop still active → position stays open, normal bar processing runs."""
-    from unittest.mock import patch
     mgr, pos = _open_pos_with_stop_id(mock_broker, tmp_store)
 
-    mock_broker._orders["ib-stop-1"] = {"status": "new", "filled_qty": "0",
-                                         "filled_avg_price": "0"}
+    mock_broker._orders[pos.stop_order_id] = {
+        "status": "new", "filled_qty": "0", "filled_avg_price": "0",
+    }
 
     # Safe bar — above stop, below TP1 — just updates max_fav
     safe_bar = _bar(hi=100.5, lo=100.0)
@@ -724,15 +774,16 @@ def test_ab_on_bar_polling_exception_logs_warning_continues(mock_broker, tmp_sto
     assert pos.status == "open"
 
 
-def test_ac_on_bar_no_stop_order_id_skips_polling(mock_broker, tmp_store):
-    """No stop_order_id set → get_order never called, normal bar processing runs."""
+def test_ac_on_bar_no_stop_order_id_skips_stop_polling(mock_broker, tmp_store):
+    """No stop_order_id or tp1_order_id → get_order never called, normal bar processing runs."""
     from unittest.mock import patch
     mgr = _build_mgr(mock_broker, tmp_store)
-    # Open without a live stop (patch submit_stop_order to return no id)
-    with patch.object(mock_broker, "submit_stop_order", return_value={"id": None}):
-        pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos is not None
-    assert pos.stop_order_id is None
+
+    # Force both polling IDs to None to disable stop and TP1 get_order calls.
+    pos.stop_order_id = None
+    pos.tp1_order_id  = None
 
     with patch.object(mock_broker, "get_order") as mock_get:
         mgr.on_bar(SYMBOL, _bar(hi=100.3, lo=99.8), _ts(10, 30))
@@ -758,38 +809,41 @@ def test_ad_handle_stop_fired_persists_position(mock_broker, tmp_store):
 # ── ae–aj: TP1 → modify IB stop ───────────────────────────────────────────────
 
 def _open_with_stop(mock_broker, tmp_store, entry_kw=None, strategy_kw=None):
-    """Open a position that has a stop_order_id set (from submit_stop_order)."""
-    from unittest.mock import patch
+    """Open a bracket position and pre-fill TP1 so on_bar sees the OCA fill."""
     entry_kw    = entry_kw    or {}
     strategy_kw = strategy_kw or {}
     mgr = _build_mgr(mock_broker, tmp_store,
                      strategy_cfg=_strategy_cfg(**strategy_kw))
-    with patch.object(mock_broker, "submit_stop_order",
-                      return_value={"id": "ib-stop-99", "status": "new"}):
-        pos = mgr.open_position(_make_entry(**entry_kw), SYMBOL, +1, TRADE_DATE)
-    assert pos is not None and pos.stop_order_id == "ib-stop-99"
+    pos = mgr.open_position(_make_entry(**entry_kw), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None and pos.tp1_order_id is not None
+    # Simulate IB OCA TP1 fill so on_bar enters the OCA post-TP1 path.
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status":           "filled",
+        "filled_qty":       str(pos.tp1_shares),
+        "filled_avg_price": str(pos.tp1_price),
+    })
     return mgr, pos
 
 
-def test_ae_tp1_modifies_stop_at_ib(mock_broker, tmp_store):
-    """After TP1: modify_stop_order called with remaining qty and breakeven price."""
-    from unittest.mock import patch, MagicMock
+def test_ae_tp1_oca_places_fresh_stop(mock_broker, tmp_store):
+    """After OCA TP1 fill with remaining > 0: submit_stop_order called with remaining qty and breakeven."""
+    from unittest.mock import patch
     mgr, pos = _open_with_stop(mock_broker, tmp_store)
 
-    with patch.object(mock_broker, "modify_stop_order",
-                      return_value={"id": "ib-stop-99", "status": "new"}) as mock_mod:
+    with patch.object(mock_broker, "submit_stop_order",
+                      return_value={"id": "fresh-stop-1"}) as mock_fresh:
         mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
 
     assert pos.tp1_hit is True
-    mock_mod.assert_called_once()
-    kw = mock_mod.call_args.kwargs
-    assert kw["order_id"]       == pos.stop_order_id
-    assert kw["new_qty"]        == pos.remaining         # post-TP1 remaining
-    assert kw["new_stop_price"] == pytest.approx(pos.actual_entry_price)  # breakeven
+    mock_fresh.assert_called_once()
+    kw = mock_fresh.call_args.kwargs
+    assert kw["qty"]        == pos.remaining                           # post-TP1 remaining (65)
+    assert kw["stop_price"] == pytest.approx(pos.actual_entry_price)  # breakeven
+    assert pos.stop_order_id == "fresh-stop-1"
 
 
-def test_af_tp1_modifies_stop_with_trail_after_tp1(mock_broker, tmp_store):
-    """Trail mode: modify_stop_order uses trail-adjusted stop, not plain breakeven."""
+def test_af_tp1_oca_fresh_stop_trail_price(mock_broker, tmp_store):
+    """Trail mode: fresh stop after OCA TP1 uses trail-adjusted stop price."""
     from unittest.mock import patch
     exit_override = {"method": "trail_after_tp1", "mult": 0.5}
     mgr, pos = _open_with_stop(
@@ -798,100 +852,93 @@ def test_af_tp1_modifies_stop_with_trail_after_tp1(mock_broker, tmp_store):
     )
     expected_trail_stop = pos.tp1_price - pos.trail_atp1_dist  # tp1=101 - 1.0=100.0
 
-    with patch.object(mock_broker, "modify_stop_order",
-                      return_value={"id": "ib-stop-99"}) as mock_mod:
+    with patch.object(mock_broker, "submit_stop_order",
+                      return_value={"id": "fresh-stop-trail"}) as mock_fresh:
         mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.6), _ts())
 
-    kw = mock_mod.call_args.kwargs
-    assert kw["new_stop_price"] == pytest.approx(expected_trail_stop)
-    assert kw["new_qty"]        == pos.remaining
-
-
-def test_ag_tp1_modify_failure_triggers_recovery(mock_broker, tmp_store):
-    """modify failure → cancel old stop, place fresh stop, pos.stop_order_id updated."""
-    from unittest.mock import patch, MagicMock
-    logger = MagicMock()
-    mgr, pos = _open_with_stop(mock_broker, tmp_store)
-    mgr._log = logger
-    old_stop_id = pos.stop_order_id
-
-    with patch.object(mock_broker, "modify_stop_order",
-                      side_effect=Exception("IB timeout")), \
-         patch.object(mock_broker, "cancel_order",
-                      return_value=True) as mock_cancel, \
-         patch.object(mock_broker, "submit_stop_order",
-                      return_value={"id": "ib-stop-recovered"}) as mock_fresh:
-        mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
-
-    mock_cancel.assert_called_once()
-    assert mock_cancel.call_args.args[0] == old_stop_id
     mock_fresh.assert_called_once()
-    assert pos.stop_order_id == "ib-stop-recovered"
-    warning_events = [c.args[0] for c in logger.warning.call_args_list]
-    assert "stop_replaced_after_modify_failure" in warning_events
+    kw = mock_fresh.call_args.kwargs
+    assert kw["stop_price"] == pytest.approx(expected_trail_stop)
+    assert kw["qty"]        == pos.remaining
 
 
-def test_ah_tp1_modify_and_replace_failure_flattens(mock_broker, tmp_store):
-    """All three of modify/cancel/submit fail → market exit, position closed."""
+def test_ag_fresh_stop_failure_triggers_recovery(mock_broker, tmp_store):
+    """OCA TP1 fills; submit_stop_order raises → market flatten for remaining, pos closed."""
     from unittest.mock import patch, MagicMock
     logger = MagicMock()
     mgr, pos = _open_with_stop(mock_broker, tmp_store)
     mgr._log = logger
 
-    with patch.object(mock_broker, "modify_stop_order",
-                      side_effect=Exception("modify failed")), \
-         patch.object(mock_broker, "cancel_order",
-                      side_effect=Exception("cancel failed")), \
-         patch.object(mock_broker, "submit_stop_order",
-                      side_effect=Exception("replace failed")), \
+    with patch.object(mock_broker, "submit_stop_order",
+                      side_effect=Exception("IB timeout")), \
          patch.object(mock_broker, "submit_market_order",
                       return_value={"id": "mkt-flat"}) as mock_flat:
         mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
 
-    # Two market orders: TP1 partial exit (35 shares) + recovery flatten (65 shares).
-    # _exit_partial now uses submit_market_order, so the TP1 sell also shows here.
-    assert mock_flat.call_count == 2
-    calls = [c.args for c in mock_flat.call_args_list]
-    assert any(c[1] == "sell" and c[2] == 35 for c in calls), "TP1 exit (35 shares) expected"
-    assert any(c[1] == "sell" and c[2] == 65 for c in calls), "recovery flatten (65 shares) expected"
+    mock_flat.assert_called_once()
+    call_args = mock_flat.call_args.args
+    assert call_args[1] == "sell"
+    assert call_args[2] == 65  # remaining after TP1 (100 - 35)
     assert pos.status      == "closed"
     assert pos.exit_reason == "STOP_RECOVERY_FAILED"
     critical_events = [c.args[0] for c in logger.critical.call_args_list]
-    assert any("flatten" in e for e in critical_events)
+    assert any("fresh_stop_failed" in e for e in critical_events)
 
 
-def test_ai_tp1_modify_succeeds_no_recovery_needed(mock_broker, tmp_store):
-    """Happy path: modify succeeds, no cancel or fresh submit called."""
+def test_ah_fresh_stop_and_flatten_both_fail(mock_broker, tmp_store):
+    """submit_stop_order fails + submit_market_order also fails → pos still closed."""
+    from unittest.mock import patch, MagicMock
+    logger = MagicMock()
+    mgr, pos = _open_with_stop(mock_broker, tmp_store)
+    mgr._log = logger
+
+    with patch.object(mock_broker, "submit_stop_order",
+                      side_effect=Exception("replace failed")), \
+         patch.object(mock_broker, "submit_market_order",
+                      side_effect=Exception("flatten failed")) as mock_flat:
+        mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
+
+    mock_flat.assert_called_once()
+    assert pos.status      == "closed"
+    assert pos.exit_reason == "STOP_RECOVERY_FAILED"
+    critical_events = [c.args[0] for c in logger.critical.call_args_list]
+    assert any("failed" in e or "flatten" in e for e in critical_events)
+
+
+def test_ai_tp1_oca_fresh_stop_success(mock_broker, tmp_store):
+    """Happy path: submit_stop_order succeeds after OCA TP1; pos remains open, stop_order_id updated."""
     from unittest.mock import patch
     mgr, pos = _open_with_stop(mock_broker, tmp_store)
 
-    with patch.object(mock_broker, "modify_stop_order",
-                      return_value={"id": "ib-stop-99"}) as mock_mod, \
-         patch.object(mock_broker, "cancel_order") as mock_cancel, \
-         patch.object(mock_broker, "submit_stop_order") as mock_submit:
+    with patch.object(mock_broker, "submit_stop_order",
+                      return_value={"id": "fresh-stop-ok"}) as mock_sub, \
+         patch.object(mock_broker, "submit_market_order") as mock_mkt:
         mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
 
-    mock_mod.assert_called_once()
-    mock_cancel.assert_not_called()
-    mock_submit.assert_not_called()
-    assert pos.status == "open"
-    assert pos.remaining == 65   # 100 - tp1_shares(35)
+    mock_sub.assert_called_once()
+    mock_mkt.assert_not_called()
+    assert pos.status        == "open"
+    assert pos.remaining     == 65   # 100 - tp1_shares(35)
+    assert pos.stop_order_id == "fresh-stop-ok"
 
 
-def test_aj_tp1_no_stop_order_id_skips_modify(mock_broker, tmp_store):
-    """stop_order_id=None: modify_stop_order not called, TP1 logic still runs."""
+def test_aj_no_tp1_order_id_uses_bar_price_tp1_and_modify(mock_broker, tmp_store):
+    """tp1_order_id=None (partial-fill path): bar-price TP1 fires and uses modify_stop_order."""
     from unittest.mock import patch
     mgr = _build_mgr(mock_broker, tmp_store)
-    # Open with a stop that returns id=None
-    with patch.object(mock_broker, "submit_stop_order", return_value={"id": None}):
-        pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
-    assert pos is not None and pos.stop_order_id is None
+    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    # Force partial-fill scenario: no tp1_order_id, stop still set from bracket.
+    pos.tp1_order_id = None
 
-    with patch.object(mock_broker, "modify_stop_order") as mock_mod:
+    with patch.object(mock_broker, "modify_stop_order",
+                      return_value={"id": pos.stop_order_id}) as mock_mod, \
+         patch.object(mock_broker, "submit_stop_order") as mock_sub:
         mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
 
-    mock_mod.assert_not_called()
     assert pos.tp1_hit is True
+    mock_mod.assert_called_once()
+    mock_sub.assert_not_called()
 
 
 # ── ak–an: OCA bracket hardening (Items 1, 2, 3) ─────────────────────────────
@@ -918,30 +965,31 @@ def _make_v1_entry(
     }
 
 
-def test_ak_v1_tp1_only_places_oca_bracket(mock_broker, tmp_store):
-    """v1 TP1-only (tp1_shares==entry_shares): submit_oca_pair must be called;
-    submit_stop_order must NOT be called; pos.tp1_order_id must be set."""
-    from unittest.mock import patch, MagicMock
+def test_ak_open_position_uses_bracket_order(mock_broker, tmp_store):
+    """open_position calls submit_bracket_order with correct prices; submit_oca_pair and
+    submit_stop_order must NOT be called; pos tp1_order_id and stop_order_id set at open."""
+    from unittest.mock import patch
     mgr = _build_mgr(mock_broker, tmp_store)
 
-    oca_return = {"tp1_order_id": "oca-tp1-1", "stop_order_id": "oca-stop-1"}
-    with patch.object(mock_broker, "submit_oca_pair",
-                      return_value=oca_return) as mock_oca, \
+    with patch.object(mock_broker, "submit_bracket_order",
+                      wraps=mock_broker.submit_bracket_order) as mock_bkt, \
+         patch.object(mock_broker, "submit_oca_pair") as mock_oca, \
          patch.object(mock_broker, "submit_stop_order") as mock_stop:
-        pos = mgr.open_position(_make_v1_entry(), SYMBOL, +1, TRADE_DATE)
+        pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
 
     assert pos is not None
-    mock_oca.assert_called_once()
+    mock_bkt.assert_called_once()
+    mock_oca.assert_not_called()
     mock_stop.assert_not_called()
-    assert pos.tp1_order_id  == "oca-tp1-1"
-    assert pos.stop_order_id == "oca-stop-1"
 
-    # OCA kwargs include correct prices
-    kw = mock_oca.call_args.kwargs
+    kw = mock_bkt.call_args.kwargs
     assert kw["symbol"]          == SYMBOL
     assert kw["tp1_limit_price"] == pytest.approx(pos.tp1_price)
     assert kw["stop_price"]      == pytest.approx(pos.stop_price)
+    assert kw["tp1_qty"]         == pos.tp1_shares
     assert kw["qty"]             == 100
+    assert pos.tp1_order_id  is not None
+    assert pos.stop_order_id is not None
 
 
 def test_al_oca_tp1_fill_cancels_stop_and_closes_position(mock_broker, tmp_store):
@@ -1210,7 +1258,7 @@ def test_as_failed_entry_exception_leaves_no_db_row(mock_broker, tmp_store):
 
     mgr = _build_mgr(mock_broker, tmp_store)
 
-    with patch.object(mock_broker, "submit_limit_order",
+    with patch.object(mock_broker, "submit_bracket_order",
                       side_effect=RuntimeError("IB connection lost")):
         pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
 
@@ -1229,7 +1277,7 @@ def test_at_second_breakout_after_failed_entry_succeeds(mock_broker, tmp_store):
     mgr = _build_mgr(mock_broker, tmp_store)
 
     # First attempt: submission fails
-    with patch.object(mock_broker, "submit_limit_order",
+    with patch.object(mock_broker, "submit_bracket_order",
                       side_effect=RuntimeError("timeout")):
         pos1 = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos1 is None
@@ -1296,8 +1344,11 @@ def test_av_startup_reconcile_purges_broker_orphan(mock_broker, tmp_store):
         "startup_reconcile must purge 'open' rows with no matching broker position"
 
 
-def test_aw_startup_reconcile_keeps_live_broker_position(mock_broker, tmp_store):
-    """startup_reconcile must NOT delete an 'open' row that the broker still holds."""
+def test_aw_startup_reconcile_flattens_live_broker_position(mock_broker, tmp_store):
+    """startup_reconcile must flatten (not preserve) an 'open' row where the broker
+    still holds shares — guarantees a clean slate before a new session starts."""
+    from unittest.mock import patch
+
     tmp_store.save_open_position(
         symbol=SYMBOL, trade_date=TRADE_DATE,
         direction=1, status="open",
@@ -1313,10 +1364,16 @@ def test_aw_startup_reconcile_keeps_live_broker_position(mock_broker, tmp_store)
     mock_broker.set_broker_position(SYMBOL, 100)
 
     mgr = _build_mgr(mock_broker, tmp_store)
-    mgr.startup_reconcile()
 
-    assert tmp_store.get_open_position(SYMBOL) is not None, \
-        "startup_reconcile must keep rows where the broker still holds the position"
+    with patch.object(mock_broker, "submit_market_order",
+                      return_value={"id": "startup-aw"}) as mock_flat:
+        mgr.startup_reconcile()
+
+    # Row must be closed (flattened), not left as 'open'.
+    assert tmp_store.get_open_position(SYMBOL) is None, \
+        "startup_reconcile must close the DB row after flattening the live position"
+    mock_flat.assert_called_once()
+    assert mock_flat.call_args.args[0] == SYMBOL
 
 
 def test_ax_open_position_blocked_by_db_open_row(mock_broker, tmp_store):
@@ -1434,3 +1491,207 @@ def test_az_flatten_all_closes_untracked_broker_position(mock_broker, tmp_store)
     assert args[0] == SYMBOL
     assert args[1] == "sell"    # long → sell to flatten
     assert args[2] == 100
+
+
+# ── ba–bb: Fix 2 — cancel bracket orders before flatten ──────────────────────
+
+def test_ba_exit_all_cancels_bracket_before_market_order(mock_broker, tmp_store):
+    """_exit_all must cancel tp1_order_id and stop_order_id BEFORE submit_market_order.
+
+    Without the pre-cancel, an OCA exit and the emergency flatten can both
+    execute on the same position, leaving an unintended net-short (or net-long)
+    residual.
+    """
+    from unittest.mock import patch, call
+    mgr = _build_mgr(mock_broker, tmp_store)
+    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    tp1_id  = pos.tp1_order_id
+    stop_id = pos.stop_order_id
+    assert tp1_id  is not None
+    assert stop_id is not None
+
+    cancel_calls = []
+    market_calls = []
+
+    def _tracking_cancel(oid):
+        cancel_calls.append(oid)
+        return mock_broker.cancel_order.__wrapped__(mock_broker, oid) \
+               if hasattr(mock_broker.cancel_order, "__wrapped__") else True
+
+    with patch.object(mock_broker, "cancel_order", side_effect=lambda oid: cancel_calls.append(oid) or True) as mock_cancel, \
+         patch.object(mock_broker, "submit_market_order", return_value={"id": "flat-1"}) as mock_flat:
+        mgr.flatten_all("session_end")
+
+    # Both bracket order IDs must have been cancelled before the market exit.
+    assert tp1_id  in cancel_calls, "tp1_order_id not cancelled before flatten"
+    assert stop_id in cancel_calls, "stop_order_id not cancelled before flatten"
+
+    # The market flatten must have been called exactly once.
+    mock_flat.assert_called_once()
+
+    # Cancels must precede the market order (cancel_calls populated before mock_flat).
+    assert len(cancel_calls) >= 2
+    assert pos.status == "closed"
+
+
+def test_bb_exit_all_cancel_failure_still_flattens(mock_broker, tmp_store):
+    """If cancel_order raises, _exit_all must still send the market flatten."""
+    from unittest.mock import patch
+    mgr = _build_mgr(mock_broker, tmp_store)
+    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+
+    with patch.object(mock_broker, "cancel_order", side_effect=Exception("IB cancel timeout")), \
+         patch.object(mock_broker, "submit_market_order",
+                      return_value={"id": "flat-2"}) as mock_flat:
+        mgr.flatten_all("session_end")
+
+    mock_flat.assert_called_once()
+    assert pos.status == "closed"
+
+
+# ── bc–bf: broker-truth flatten + fill-driven remaining ───────────────────────
+
+def test_bc_flatten_all_uses_broker_qty_not_stale_remaining(mock_broker, tmp_store):
+    """Stale pos.remaining (100) > broker-held qty (60): flatten submits 60, not 100.
+
+    Reproduces the SOLT EOD scenario: OCA TP1 fills server-side between bars,
+    pos.remaining is not yet updated, but _exit_all caps at broker's actual qty.
+    """
+    from unittest.mock import patch
+    mgr = _build_mgr(mock_broker, tmp_store)
+    pos = mgr.open_position(_make_entry(shares=100), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+
+    # Broker only holds 60 (OCA TP1 filled 40 server-side; pos.remaining still stale at 100).
+    mock_broker.set_broker_position(SYMBOL, 60)
+    assert pos.remaining == 100  # stale — no on_bar ran to detect the fill
+
+    with patch.object(mock_broker, "submit_market_order",
+                      return_value={"id": "flat-bc"}) as mock_flat:
+        mgr.flatten_all("eod_sweep")
+
+    # First call must be for the tracked position; assert it uses broker qty.
+    first_call = mock_flat.call_args_list[0].args
+    assert first_call[0] == SYMBOL
+    assert first_call[1] == "sell"
+    assert first_call[2] == 60   # broker qty, not stale remaining (100)
+
+
+def test_bd_flatten_all_catches_memory_closed_but_broker_open(mock_broker, tmp_store):
+    """Position marked 'closed' in memory (failed EOD flatten) but broker still holds it.
+    The safety net must catch and market-exit the broker position."""
+    from unittest.mock import patch
+    mgr = _build_mgr(mock_broker, tmp_store)
+    pos = mgr.open_position(_make_entry(shares=100), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+
+    # Simulate failed EOD flatten: position is "closed" in memory, broker still holds 100.
+    pos.status    = "closed"
+    pos.remaining = 0
+    mock_broker.set_broker_position(SYMBOL, 100)
+    mgr.set_universe([SYMBOL])
+
+    with patch.object(mock_broker, "submit_market_order",
+                      return_value={"id": "flat-bd"}) as mock_flat:
+        mgr.flatten_all("eod_sweep")
+
+    # Safety net must have submitted a market sell for the 100 broker-held shares.
+    sell_calls = [
+        c for c in mock_flat.call_args_list
+        if c.args[0] == SYMBOL and c.args[1] == "sell"
+    ]
+    assert sell_calls, "Safety net must submit a sell for SYMBOL when broker holds shares"
+    assert sell_calls[0].args[2] == 100
+
+
+def test_be_startup_reconcile_flattens_live_position(mock_broker, tmp_store):
+    """startup_reconcile: 'open' DB row + broker still holds position → cancel orders + flatten."""
+    from unittest.mock import patch
+
+    tmp_store.save_open_position(
+        symbol=SYMBOL, trade_date=TRADE_DATE,
+        direction=1, status="open",
+        entry_price=100.0, actual_entry_price=100.1,
+        qty=100, entry_shares=100, remaining=100,
+        orb_range=1.0, stop_price=99.0, current_stop=99.0,
+        tp1_price=101.0, tp2_price=102.0,
+        tp1_shares=35, tp2_shares=5, tp3_shares=60,
+        tp1_hit=False, tp2_hit=False, tp3_hit=False,
+        use_trail_atp1=False, trail_atp1_dist=0.0,
+        max_fav=0.0, post_tp2_mfe=0.0, decision_reason="",
+    )
+    mock_broker.set_broker_position(SYMBOL, 100)
+
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    with patch.object(mock_broker, "submit_market_order",
+                      return_value={"id": "startup-flat"}) as mock_flat:
+        mgr.startup_reconcile()
+
+    mock_flat.assert_called_once()
+    args = mock_flat.call_args.args
+    assert args[0] == SYMBOL
+    assert args[1] == "sell"   # direction=1 long → sell to flatten
+    assert args[2] == 100
+    assert tmp_store.get_open_position(SYMBOL) is None
+
+
+def test_bf_pos_remaining_driven_by_oca_fill(mock_broker, tmp_store):
+    """pos.remaining decrements by confirmed OCA fill qty, not optimistically.
+
+    Crypto 0.4/0.2/0.4 split: 100 shares, TP1=40. OCA fills 40 server-side.
+    on_bar detects the fill via get_order; remaining must drop to 60.
+    """
+    mgr = _build_mgr(mock_broker, tmp_store)
+    pos = mgr.open_position(
+        _make_entry(shares=100, tp1_shares=40, tp2_shares=20, tp3_shares=40),
+        SYMBOL, +1, TRADE_DATE,
+    )
+    assert pos is not None
+    assert pos.remaining == 100
+    assert pos.tp1_order_id is not None
+
+    # Simulate IB OCA-filling the TP1 child for exactly 40 shares.
+    mock_broker._orders[pos.tp1_order_id].update({
+        "status":           "filled",
+        "filled_qty":       "40",
+        "filled_avg_price": "101.0",
+    })
+
+    # on_bar polls get_order → newly_filled=40 → remaining -= 40.
+    mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.2), _ts())
+
+    assert pos.remaining == 60          # entry_qty(100) − oca_filled(40)
+    assert pos.tp1_filled_qty_booked == 40
+    assert pos.tp1_hit is True          # full TP1 fill → flag set
+
+
+def test_bg_pending_entry_timeout_with_real_strategy_config(mock_broker, tmp_store):
+    """_check_pending_entry must not raise AttributeError when LivePositionManager
+    is wired with the real StrategyConfig (not a SimpleNamespace mock).
+
+    Regression for: 'StrategyConfig' object has no attribute 'entry_repeg_seconds'
+    The timeout check now uses the module constant _PENDING_ENTRY_TIMEOUT instead.
+    """
+    from orb_live.config.live_config import load_live_config
+
+    cfg  = load_live_config(use_rolling=False)
+    scfg = cfg.strategy_config   # real StrategyConfig, not SimpleNamespace
+
+    mgr = _build_mgr(mock_broker, tmp_store, strategy_cfg=scfg)
+
+    # Bracket entry sits in _pending_entries (n_polls=100 → never auto-fills).
+    mock_broker.set_pending_fill(n_polls=100)
+    mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
+    assert SYMBOL in mgr._pending_entries
+
+    # Backdate submit_time so elapsed > _PENDING_ENTRY_TIMEOUT.
+    mgr._pending_entries[SYMBOL]["submit_time"] -= 120.0
+
+    # on_bar calls _check_pending_entry; must not raise AttributeError.
+    mgr.on_bar(SYMBOL, _bar(hi=100.5, lo=99.5), _ts())
+
+    # Timed-out pending entry must be cleaned up.
+    assert SYMBOL not in mgr._pending_entries

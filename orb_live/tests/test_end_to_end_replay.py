@@ -90,10 +90,6 @@ def _build_live_stack(tmp_store, mock_broker, tp3_ema_value=100.0):
 
     exc_cfg = SimpleNamespace(
         entry_slippage_bps=10,
-        entry_repeg_seconds=60.0,
-        entry_repeg_max_attempts=3,
-        entry_slippage_max_bps=30,
-        exit_slippage_bps=5,
         stop_order_type="market",
         session_kill_loss_pct=0.03,
         max_concurrent_positions=0,

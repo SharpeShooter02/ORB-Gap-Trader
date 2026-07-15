@@ -125,6 +125,11 @@ class RiskGate:
         if open_positions and symbol in open_positions:
             return False, "already_in_position"
 
+        # 1b. Max concurrent positions?
+        max_conc = getattr(cfg, "max_concurrent_positions", 0)
+        if max_conc > 0 and open_positions is not None and len(open_positions) >= max_conc:
+            return False, "max_concurrent_positions"
+
         # 2. Session kill active?
         # Also check against current PnL in case record_realized_pnl wasn't called.
         if self._kill_triggered:

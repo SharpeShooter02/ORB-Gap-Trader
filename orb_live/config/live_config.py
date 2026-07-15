@@ -159,7 +159,8 @@ def _make_v1_strategy_config(
         exit_ratio_tp1=1.0,          # v1: TP1-only (full position)
         exit_ratio_tp2=0.0,
         exit_ratio_tp3=0.0,
-        tp1_target_multiple=1.0,     # 1× ORB range
+        tp1_target_multiple=2.0,     # 2× ORB range
+        instrument_exit_overrides={},
         use_rtg_scaling=False,
         rtg_gap_exclusion=False,
         rtg_pair_routing=False,
@@ -199,10 +200,6 @@ class LiveConfig:
     stop_order_type:         str   = "market"
 
     entry_slippage_bps:      int   = 10
-    entry_repeg_seconds:     float = 30.0
-    entry_repeg_max_attempts: int  = 3
-    entry_slippage_max_bps:  int   = 30
-    exit_slippage_bps:       int   = 5
 
     max_gross_exposure_pct:  float = 2.0
     max_position_pct:        float = 0.50

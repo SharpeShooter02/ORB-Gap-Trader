@@ -128,6 +128,13 @@ class PreFlightCheck:
         cfg      = self._cfg
         decision = CandidateDecision(symbol=symbol, passed=False)
 
+        if (cfg.min_dollar_volume_floor <= 0.0
+                and cfg.max_pct_of_adv >= 1.0
+                and cfg.min_yesterday_dv_ratio <= 0.0):
+            decision.passed = True
+            decision.reason = "gate_c_disabled"
+            return None, decision
+
         try:
             bars = self._client.get_daily_bars(
                 symbol, lookback_days=cfg.adv_lookback_days + 5

@@ -881,6 +881,163 @@ class TestCancelOrder:
         assert result["ask_size"] == 0
 
 
+class TestEmergencyMethods:
+    """cancel_all_orders, close_position, close_all_positions, list_orders."""
+
+    def _client(self) -> IBClient:
+        with patch("orb_live.data.ib_client.IB"):
+            return IBClient(paper=True)
+
+    # ── cancel_all_orders ────────────────────────────────────────────────────
+
+    def test_cancel_all_orders_cancels_each_open_trade(self):
+        client = self._client()
+        t1 = _make_trade(order_id=1, status="Submitted")
+        t2 = _make_trade(order_id=2, status="Submitted")
+        client._ib.openTrades.return_value = [t1, t2]
+
+        count = client.cancel_all_orders()
+
+        assert count == 2
+        assert client._ib.cancelOrder.call_count == 2
+
+    def test_cancel_all_orders_returns_zero_when_no_open_orders(self):
+        client = self._client()
+        client._ib.openTrades.return_value = []
+        assert client.cancel_all_orders() == 0
+
+    def test_cancel_all_orders_skips_failed_cancel(self):
+        client = self._client()
+        mock_log = MagicMock()
+        client._log = mock_log
+        t1 = _make_trade(order_id=1, status="Submitted")
+        t2 = _make_trade(order_id=2, status="Submitted")
+        client._ib.openTrades.return_value = [t1, t2]
+        client._ib.cancelOrder.side_effect = [Exception("timeout"), None]
+
+        count = client.cancel_all_orders()
+
+        assert count == 1   # t2 succeeded; t1 failed
+        mock_log.warning.assert_called_once()
+
+    # ── close_position ───────────────────────────────────────────────────────
+
+    def test_close_position_submits_sell_for_long(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        item = SimpleNamespace(
+            contract=SimpleNamespace(symbol="TQQQ"),
+            position=50.0,
+            marketValue=5000.0,
+            averageCost=100.0,
+            unrealizedPNL=0.0,
+        )
+        client._ib.portfolio.return_value = [item]
+
+        result = client.close_position("TQQQ")
+
+        assert result is not None
+        placed = client._ib.placeOrder.call_args
+        assert placed.args[1].action == "SELL"
+        assert placed.args[1].totalQuantity == 50.0
+
+    def test_close_position_submits_buy_for_short(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        item = SimpleNamespace(
+            contract=SimpleNamespace(symbol="TQQQ"),
+            position=-30.0,
+            marketValue=-3000.0,
+            averageCost=100.0,
+            unrealizedPNL=0.0,
+        )
+        client._ib.portfolio.return_value = [item]
+
+        result = client.close_position("TQQQ")
+
+        assert result is not None
+        placed = client._ib.placeOrder.call_args
+        assert placed.args[1].action == "BUY"
+        assert placed.args[1].totalQuantity == 30.0
+
+    def test_close_position_returns_none_when_flat(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.portfolio.return_value = []
+
+        result = client.close_position("TQQQ")
+        assert result is None
+        client._ib.placeOrder.assert_not_called()
+
+    # ── close_all_positions ──────────────────────────────────────────────────
+
+    def test_close_all_positions_closes_each(self):
+        client = _client_with_asset("TQQQ")
+        client._ib.isConnected.return_value = True
+        item = SimpleNamespace(
+            contract=SimpleNamespace(symbol="TQQQ"),
+            position=100.0,
+            marketValue=10000.0,
+            averageCost=100.0,
+            unrealizedPNL=0.0,
+        )
+        client._ib.portfolio.return_value = [item]
+
+        client.close_all_positions()
+
+        client._ib.placeOrder.assert_called_once()
+        placed = client._ib.placeOrder.call_args
+        assert placed.args[1].action == "SELL"
+
+    def test_close_all_positions_logs_failure(self):
+        client = _client_with_asset("TQQQ")
+        mock_log = MagicMock()
+        client._log = mock_log
+        client._ib.isConnected.return_value = True
+        item = SimpleNamespace(
+            contract=SimpleNamespace(symbol="TQQQ"),
+            position=10.0,
+            marketValue=1000.0,
+            averageCost=100.0,
+            unrealizedPNL=0.0,
+        )
+        client._ib.portfolio.return_value = [item]
+        client._ib.placeOrder.side_effect = Exception("IB disconnect")
+
+        client.close_all_positions()   # must not raise
+
+        mock_log.critical.assert_called_once()
+
+    # ── list_orders ──────────────────────────────────────────────────────────
+
+    def test_list_orders_open_returns_open_trades(self):
+        client = self._client()
+        t1 = _make_trade(order_id=1, status="Submitted")
+        t2 = _make_trade(order_id=2, status="Submitted")
+        client._ib.openTrades.return_value = [t1, t2]
+
+        orders = client.list_orders(status="open")
+
+        assert len(orders) == 2
+        assert all(o["status"] == "new" for o in orders)
+
+    def test_list_orders_filled_filters_trades(self):
+        client = self._client()
+        submitted = _make_trade(order_id=1, status="Submitted")
+        filled    = _make_trade(order_id=2, status="Filled", filled=100.0, remaining=0.0)
+        client._ib.trades.return_value = [submitted, filled]
+        client._ib.openTrades.return_value = [submitted]
+
+        orders = client.list_orders(status="filled")
+
+        assert len(orders) == 1
+        assert orders[0]["id"] == "2"
+
+    def test_list_orders_empty_when_none(self):
+        client = self._client()
+        client._ib.openTrades.return_value = []
+        assert client.list_orders() == []
+
+
 class TestRoundToTick:
     """BUG 7 — price rounding to minTick."""
 
@@ -1672,3 +1829,39 @@ class TestHeartbeat:
         result = client.check_heartbeat()
         assert result["ok"] is True
         assert result["seconds_since_event"] is None
+
+
+# ── Interface parity ──────────────────────────────────────────────────────────
+
+def test_broker_interface_parity():
+    """IBClient must implement every BrokerClient abstractmethod.
+    Every non-helper public method on MockBroker must also exist on IBClient —
+    catches the case where a method is added to the mock for tests but never
+    implemented on the real client (e.g. submit_bracket_order was the motivating
+    bug for this test)."""
+    from orb_live.tests.conftest import MockBroker
+
+    # IBClient subclasses BrokerClient: Python populates __abstractmethods__ with
+    # any unimplemented methods at class-definition time — no instantiation needed.
+    missing_ib = IBClient.__abstractmethods__
+    assert not missing_ib, f"IBClient missing BrokerClient abstractmethods: {missing_ib}"
+
+    # MockBroker is a duck-type test double; it doesn't subclass BrokerClient.
+    # Check that every broker-operation method on MockBroker is also on IBClient.
+    # Exclude test-only helpers that have no real-client counterpart.
+    _MOCK_HELPERS = frozenset({
+        "set_fill_fraction", "set_fill_sequence", "set_pending_fill",
+        "set_equity", "set_quote", "set_broker_position", "fire_fill_watcher",
+    })
+    mock_broker_methods = {
+        name for name in vars(MockBroker)   # vars() → only class-defined; skips object builtins
+        if not name.startswith("_")
+        and callable(getattr(MockBroker, name))
+        and name not in _MOCK_HELPERS
+    }
+    missing_from_ib = mock_broker_methods - set(dir(IBClient))
+    assert not missing_from_ib, (
+        f"IBClient missing broker methods present on MockBroker: {missing_from_ib}\n"
+        "Add them to BrokerClient ABC and implement in IBClient."
+    )
+

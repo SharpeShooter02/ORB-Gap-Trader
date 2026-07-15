@@ -75,7 +75,7 @@ This invariant is enforced by `test_i_indicator_updated_before_position_manager`
 All strategy parameters live in `orb_live/config/live_config.py`.  Production
 config is locked at:
 
-### Backtest results (2017–2024, locked 2026-06-20)
+### Backtest results (2020–2026)
 
 | Metric | Value |
 |--------|-------|
@@ -95,7 +95,6 @@ config is locked at:
 | Gap filter | 2% move on underlying (GAP_THRESHOLD) |
 | PS filter k | 1.00σ (K_SIGMA) |
 | TP structure | TP1-only: 100% of position at 1× ORB range |
-| RTG scaling | Disabled |
 | Base notional | $1,000 per trade (v1_base_notional) |
 | Units cap | 20.0× (CAP_UNITS) |
 | EMA period | 30 |

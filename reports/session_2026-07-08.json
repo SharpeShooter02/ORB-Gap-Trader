@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-08",
+  "generated_at": "2026-07-08",
+  "date": "2026-07-08",
+  "n_trades": 5,
+  "n_wins": 1,
+  "win_rate": 0.2,
+  "total_pnl": -154.45,
+  "avg_pnl": -30.889999999999997,
+  "best_trade": {
+    "symbol": "SOLT",
+    "pnl": 46.74
+  },
+  "worst_trade": {
+    "symbol": "ETHD",
+    "pnl": -63.46
+  }
+}

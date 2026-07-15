@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-07",
+  "generated_at": "2026-07-07",
+  "date": "2026-07-07",
+  "n_trades": 4,
+  "n_wins": 0,
+  "win_rate": 0.0,
+  "total_pnl": -383.1,
+  "avg_pnl": -191.55,
+  "best_trade": {
+    "symbol": "AMDL",
+    "pnl": -142.56
+  },
+  "worst_trade": {
+    "symbol": "SOXL",
+    "pnl": -240.54
+  }
+}

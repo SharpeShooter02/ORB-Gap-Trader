@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-09",
+  "generated_at": "2026-07-09",
+  "date": "2026-07-09",
+  "n_trades": 3,
+  "n_wins": 1,
+  "win_rate": 0.3333333333333333,
+  "total_pnl": 91.2,
+  "avg_pnl": 91.2,
+  "best_trade": {
+    "symbol": "BOIL",
+    "pnl": 91.2
+  },
+  "worst_trade": {
+    "symbol": "BOIL",
+    "pnl": 91.2
+  }
+}

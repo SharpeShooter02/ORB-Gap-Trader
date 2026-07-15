@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-14",
+  "generated_at": "2026-07-14",
+  "date": "2026-07-14",
+  "n_trades": 6,
+  "n_wins": 3,
+  "win_rate": 0.5,
+  "total_pnl": -16.700000000000003,
+  "avg_pnl": -2.7833333333333337,
+  "best_trade": {
+    "symbol": "XRPT",
+    "pnl": 33.6
+  },
+  "worst_trade": {
+    "symbol": "ETHD",
+    "pnl": -49.2
+  }
+}

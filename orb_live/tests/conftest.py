@@ -258,11 +258,151 @@ class MockBroker:
             return False
         return True   # not found → idempotent success
 
+    def cancel_all_orders(self) -> int:
+        cancelled = 0
+        for o in self._orders.values():
+            if o.get("status") not in ("filled", "cancelled"):
+                o["status"] = "cancelled"
+                cancelled += 1
+        return cancelled
+
+    def get_positions(self) -> list:
+        return [{"symbol": sym, **p} for sym, p in self._positions.items()]
+
     def get_min_tick(self, symbol: str) -> float:
         return 0.01
 
+    def submit_bracket_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: int,
+        entry_price: float,
+        tp1_limit_price: float,
+        tp1_qty: int,
+        stop_price: float,
+        **kwargs,
+    ) -> dict:
+        fraction = (
+            self._fill_sequence.pop(0)
+            if self._fill_sequence
+            else self._default_fill_fraction
+        )
+        fill_qty = int(qty * fraction)
+        if fill_qty >= qty:
+            entry_status = "filled"
+        elif fill_qty > 0:
+            entry_status = "partially_filled"
+        else:
+            entry_status = "cancelled"
+
+        entry_id = str(uuid.uuid4())
+        tp1_id   = str(uuid.uuid4())
+        stop_id  = str(uuid.uuid4())
+
+        if self._pending_fill_polls > 0:
+            self._orders[entry_id] = {
+                "id": entry_id, "status": "new",
+                "filled_qty": "0", "filled_avg_price": "0",
+                "_pending_polls_left": self._pending_fill_polls,
+                "_fill_qty": str(fill_qty),
+                "_fill_price": str(entry_price),
+            }
+            self._pending_fill_polls = 0
+        else:
+            self._orders[entry_id] = {
+                "id": entry_id, "status": entry_status,
+                "filled_qty": str(fill_qty), "filled_avg_price": str(entry_price),
+            }
+        self._orders[tp1_id] = {
+            "id": tp1_id, "status": "new",
+            "filled_qty": "0", "filled_avg_price": "0",
+        }
+        self._orders[stop_id] = {
+            "id": stop_id, "status": "new",
+            "filled_qty": "0", "filled_avg_price": "0",
+            "stop_price": str(stop_price),
+        }
+        self._oca_siblings[tp1_id]  = stop_id
+        self._oca_siblings[stop_id] = tp1_id
+        return {"entry_order_id": entry_id, "tp1_order_id": tp1_id, "stop_order_id": stop_id}
+
     def get_position(self, symbol: str) -> Optional[dict]:
         return self._positions.get(symbol)
+
+    def register_fill_watcher(self, order_id: str, callback) -> None:
+        if not hasattr(self, "_fill_watchers"):
+            self._fill_watchers = {}
+        self._fill_watchers[order_id] = callback
+
+    def unregister_fill_watcher(self, order_id: str) -> None:
+        if hasattr(self, "_fill_watchers"):
+            self._fill_watchers.pop(order_id, None)
+
+    def get_executions(self, trade_date=None) -> list:
+        return [
+            {
+                "order_id": oid,
+                "symbol": o.get("symbol", "?"),
+                "qty": float(o.get("filled_qty", 0)),
+                "price": float(o.get("filled_avg_price", 0)),
+                "commission": 0.0,
+            }
+            for oid, o in self._orders.items()
+            if o.get("status") == "filled" and float(o.get("filled_qty", 0)) > 0
+        ]
+
+    def submit_stop_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: int,
+        stop_price: float,
+        limit_price: float,
+        client_order_id: Optional[str] = None,
+    ) -> dict:
+        if client_order_id is None:
+            client_order_id = str(uuid.uuid4())
+        self._orders[client_order_id] = {
+            "id":               client_order_id,
+            "status":           "new",
+            "filled_qty":       "0",
+            "filled_avg_price": "0",
+            "stop_price":       str(stop_price),
+            "limit_price":      str(limit_price),
+            "qty":              str(qty),
+        }
+        return {"id": client_order_id}
+
+    def fire_fill_watcher(
+        self,
+        order_id: str,
+        qty: float,
+        price: float,
+        total_qty: Optional[float] = None,
+    ) -> None:
+        """Test helper: simulate IB firing execDetailsEvent for order_id.
+
+        total_qty — the order's totalQuantity; defaults to qty (full fill).
+        Pass total_qty > qty to simulate a partial fill without triggering
+        the watcher's cumQty < total guard.
+        """
+        if not hasattr(self, "_fill_watchers"):
+            return
+        watcher = self._fill_watchers.get(order_id)
+        if not watcher:
+            return
+        from types import SimpleNamespace
+        execution = SimpleNamespace(
+            orderId=0,
+            price=price, shares=qty, cumQty=qty, avgPrice=price,
+            side="BOT", time="", execId="test-exec",
+        )
+        commission_report = SimpleNamespace(commission=0.0)
+        fill  = SimpleNamespace(execution=execution, commissionReport=commission_report)
+        order = SimpleNamespace(orderId=0, totalQuantity=total_qty if total_qty is not None else qty)
+        trade = SimpleNamespace(order=order)
+        watcher(order_id, trade, fill)
 
 
 @pytest.fixture

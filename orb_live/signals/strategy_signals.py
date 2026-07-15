@@ -218,9 +218,9 @@ def check_breakout(
             return False
 
     if gap_direction == 1:
-        return close > orb["high"] and close > orb["ema"]
+        return close > orb["high"]
     else:
-        return close < orb["low"] and close < orb["ema"]
+        return close < orb["low"]
 
 
 # ── compute_entry ─────────────────────────────────────────────────────────────

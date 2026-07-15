@@ -161,9 +161,6 @@ class HealthServer:
         eff_close     = self._clock.effective_close()
         last_bar_ts   = self._get_last_bar_ts()
 
-        ws_age_min: Optional[float] = getattr(
-            self._router, "ws_token_age_minutes", None
-        )
         last_reconnect_ts  = getattr(self._router, "_last_reconnect_ts", None)
         last_reconnect_dur = getattr(self._router, "_last_reconnect_duration_s", None)
 
@@ -184,7 +181,6 @@ class HealthServer:
             "last_reconnect_duration_seconds": last_reconnect_dur,
             "sigma_calibration_age_days": self._sigma_age_days(),
             "underlying_data_freshness":  self._underlying_freshness(),
-            "ws_token_age_minutes": int(ws_age_min) if ws_age_min is not None else None,
         }
 
     def get_positions_response(self) -> list:

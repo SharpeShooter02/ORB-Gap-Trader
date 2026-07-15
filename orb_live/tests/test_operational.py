@@ -504,7 +504,12 @@ def test_lq02_partial_current_day_bar_excluded_from_adv():
         "volume": volumes,
     })
 
-    pfc = _make_liquidity_check(bars_df=bars)
+    import dataclasses
+    from orb_live.config.live_config import LiveConfig
+
+    # Use non-zero floor so Gate C actually runs (default thresholds short-circuit it).
+    cfg = dataclasses.replace(LiveConfig(), min_dollar_volume_floor=1.0)
+    pfc = _make_liquidity_check(bars_df=bars, cfg=cfg)
     decision = pfc.check("TQQQ", session_date, +1, 100_000.0, persist=False)
 
     # yesterday_dv must be from the last completed day ($5M), not the current-day bar ($10B)

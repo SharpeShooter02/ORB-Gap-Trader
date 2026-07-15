@@ -111,6 +111,17 @@ class BrokerClient(ABC):
     ): ...
 
     @abstractmethod
+    def submit_stop_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        stop_price: float,
+        limit_price: float,
+        client_order_id: Optional[str] = None,
+    ): ...
+
+    @abstractmethod
     def submit_stop_order(
         self,
         symbol: str,
@@ -119,6 +130,27 @@ class BrokerClient(ABC):
         stop_price: float,
         client_order_id: Optional[str] = None,
     ): ...
+
+    @abstractmethod
+    def submit_bracket_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        entry_price: float,
+        tp1_limit_price: float,
+        stop_price: float,
+        tp1_qty: Optional[float] = None,
+        **kwargs,
+    ) -> dict: ...
+
+    @abstractmethod
+    def modify_stop_order(
+        self,
+        order_id: str,
+        new_qty: Optional[float] = None,
+        new_stop_price: Optional[float] = None,
+    ) -> dict: ...
 
     @abstractmethod
     def cancel_order(self, order_id: str) -> bool: ...
@@ -136,6 +168,9 @@ class BrokerClient(ABC):
     def list_orders(self, status: str = "open") -> list[dict]: ...
 
     # ── Streaming ─────────────────────────────────────────────────────────────
+
+    @abstractmethod
+    def register_fill_watcher(self, order_id: str, callback) -> None: ...
 
     @abstractmethod
     def subscribe_bars(self, symbols: list[str], callback: Callable) -> None: ...

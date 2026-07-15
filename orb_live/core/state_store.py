@@ -184,6 +184,7 @@ closed_trades = Table("closed_trades", _metadata,
     Column("qty",                 Float),
     Column("pnl_pct",             Float),
     Column("dollar_pnl",          Float),
+    Column("commission",          Float),
     Column("exit_reason",         String(32)),  # tp1/tp2/tp3/eod/stop/kill
     Column("opened_at",           DateTime),
     Column("closed_at",           DateTime),
@@ -549,6 +550,13 @@ class StateStore:
                 closed_at=datetime.now(UTC), **kwargs,
             ))
             c.commit()
+
+    def get_closed_trades(self, trade_date) -> list:
+        with self.conn() as c:
+            rows = c.execute(
+                closed_trades.select().where(closed_trades.c.trade_date == trade_date)
+            ).fetchall()
+        return [dict(r._mapping) for r in rows]
 
     # ── equity_curve ──────────────────────────────────────────────────────────
 

@@ -680,3 +680,162 @@ class TestEodExitHour16Contract:
 
         assert len(hits) == 1, "Exactly one 14:55 bar per regular session"
         assert hits[0].time() < dtime(16, 0), "14:55 is a regular-session bar (< 16:00)"
+
+
+# ── boundary-fill / no-EMA variant (locked v1) ────────────────────────────────
+
+class TestBoundaryFillMode:
+    """Pin behavior for the locked v1 config: entry_at_boundary=True + require_ema_confirmation=False.
+
+    This is what the live system runs in production. Regressions here mean the
+    live strategy has silently reverted to close-triggered / EMA-gated entries.
+    """
+
+    def _make_orb(self):
+        return {
+            "high":     111.0,
+            "low":      100.0,
+            "midpoint": 105.5,
+            "size_pct": (111.0 - 100.0) / 105.5,
+            "n_bars":   30,
+            "ema":      109.0,
+        }
+
+    def _boundary_cfg(self, ref_cfg):
+        return replace(ref_cfg, entry_at_boundary=True, require_ema_confirmation=False)
+
+    # check_breakout ----------------------------------------------------------
+
+    def test_intrabar_wick_triggers_long(self, ref_cfg):
+        """Bar wicks up through orb.high but closes below → still fires (stop order semantics)."""
+        from orb_live.signals.strategy_signals import check_breakout as live_fn
+
+        orb = self._make_orb()
+        cfg = self._boundary_cfg(ref_cfg)
+        bar = pd.Series(
+            {"open": 110.0, "high": 111.5, "low": 109.8, "close": 110.2},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        assert bar["close"] < orb["high"], "sanity: this is the wick-only case"
+        assert live_fn(bar, orb, 1, cfg) is True
+
+    def test_intrabar_wick_triggers_short(self, ref_cfg):
+        from orb_live.signals.strategy_signals import check_breakout as live_fn
+
+        orb = self._make_orb()
+        cfg = self._boundary_cfg(ref_cfg)
+        bar = pd.Series(
+            {"open": 100.5, "high": 100.7, "low": 99.5, "close": 100.3},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        assert bar["close"] > orb["low"]
+        assert live_fn(bar, orb, -1, cfg) is True
+
+    def test_no_touch_no_trigger_long(self, ref_cfg):
+        from orb_live.signals.strategy_signals import check_breakout as live_fn
+
+        orb = self._make_orb()
+        cfg = self._boundary_cfg(ref_cfg)
+        bar = pd.Series(
+            {"open": 108.0, "high": 110.5, "low": 107.5, "close": 109.0},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        assert live_fn(bar, orb, 1, cfg) is False
+
+    def test_ema_gate_bypassed_long(self, ref_cfg):
+        """close below EMA must NOT block a boundary trigger when require_ema_confirmation=False."""
+        from orb_live.signals.strategy_signals import check_breakout as live_fn
+
+        orb = self._make_orb()  # ema = 109.0
+        cfg = self._boundary_cfg(ref_cfg)
+        bar = pd.Series(
+            {"open": 110.0, "high": 111.5, "low": 108.5, "close": 108.8},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        assert bar["close"] < orb["ema"], "sanity: this bar would fail the EMA gate"
+        assert live_fn(bar, orb, 1, cfg) is True
+
+    def test_ema_gate_still_enforced_when_flag_on(self, ref_cfg):
+        """Regression guard: entry_at_boundary=True + require_ema_confirmation=True still gates on EMA."""
+        from orb_live.signals.strategy_signals import check_breakout as live_fn
+
+        orb = self._make_orb()
+        cfg = replace(ref_cfg, entry_at_boundary=True, require_ema_confirmation=True)
+        bar = pd.Series(
+            {"open": 110.0, "high": 111.5, "low": 108.5, "close": 108.8},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        assert bar["close"] < orb["ema"]
+        assert live_fn(bar, orb, 1, cfg) is False
+
+    # compute_entry -----------------------------------------------------------
+
+    def test_long_entry_price_is_orb_high(self, ref_cfg):
+        """Entry price MUST be orb.high, not bar.close — the whole point of the change."""
+        from orb_live.signals.strategy_signals import compute_entry as live_fn
+
+        orb = self._make_orb()
+        cfg = self._boundary_cfg(ref_cfg)
+        bar = pd.Series(
+            {"open": 110.0, "high": 111.5, "low": 109.8, "close": 110.2},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        result = live_fn(bar=bar, orb=orb, gap_direction=1, config=cfg,
+                         current_equity=100_000.0)
+        assert result["entry_price"] == orb["high"] == 111.0
+        assert result["entry_price"] != bar["close"]
+
+    def test_short_entry_price_is_orb_low(self, ref_cfg):
+        from orb_live.signals.strategy_signals import compute_entry as live_fn
+
+        orb = self._make_orb()
+        cfg = self._boundary_cfg(ref_cfg)
+        bar = pd.Series(
+            {"open": 100.5, "high": 100.7, "low": 99.5, "close": 100.3},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        result = live_fn(bar=bar, orb=orb, gap_direction=-1, config=cfg,
+                         current_equity=100_000.0)
+        assert result["entry_price"] == orb["low"] == 100.0
+        assert result["entry_price"] != bar["close"]
+
+    def test_targets_computed_from_boundary(self, ref_cfg):
+        """TP and stop are computed from entry_price=orb.high, not bar.close."""
+        from orb_live.signals.strategy_signals import compute_entry as live_fn
+
+        orb = self._make_orb()
+        cfg = replace(self._boundary_cfg(ref_cfg),
+                      tp1_target_multiple=2.0, tp2_target_multiple=3.0)
+        bar = pd.Series(
+            {"open": 110.0, "high": 111.5, "low": 109.8, "close": 110.2},
+            name=datetime(2022, 1, 7, 10, 5),
+        )
+        result = live_fn(bar=bar, orb=orb, gap_direction=1, config=cfg,
+                         current_equity=100_000.0)
+        orb_range = orb["high"] - orb["low"]
+        assert pytest.approx(result["tp1_price"]) == orb["high"] + 2.0 * orb_range
+        assert pytest.approx(result["tp2_price"]) == orb["high"] + 3.0 * orb_range
+        assert pytest.approx(result["stop_price"]) == (orb["midpoint"] + orb["low"]) / 2.0
+
+    def test_default_flags_preserve_close_fill(self, ref_cfg):
+        """Regression guard: with default flags off, entry_price stays at bar.close."""
+        from orb_live.signals.strategy_signals import compute_entry as live_fn
+
+        orb = self._make_orb()
+        bar = pd.Series({"close": 112.5}, name=datetime(2022, 1, 7, 10, 5))
+        result = live_fn(bar=bar, orb=orb, gap_direction=1, config=ref_cfg,
+                         current_equity=100_000.0)
+        assert result["entry_price"] == 112.5
+
+    # live-config wiring ------------------------------------------------------
+
+    def test_live_config_actually_enables_boundary_mode(self):
+        """The v1 StrategyConfig built by live_config MUST have both flags flipped.
+
+        This guards against a silent revert of _make_v1_strategy_config.
+        """
+        from orb_live.config.live_config import _make_v1_strategy_config
+        cfg = _make_v1_strategy_config(universe=["TQQQ"], ps_filters={})
+        assert cfg.entry_at_boundary is True, "live must trade with boundary fills"
+        assert cfg.require_ema_confirmation is False, "live must NOT gate on EMA"
+        assert cfg.tp1_target_multiple == 2.0, "v1 lock: TP1 = 2x ORB range"

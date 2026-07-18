@@ -160,6 +160,8 @@ def _make_v1_strategy_config(
         exit_ratio_tp2=0.0,
         exit_ratio_tp3=0.0,
         tp1_target_multiple=2.0,     # 2× ORB range
+        require_ema_confirmation=False,   # v1 boundary-fill variant
+        entry_at_boundary=True,           # v1 boundary-fill variant
         instrument_exit_overrides={},
         use_rtg_scaling=False,
         rtg_gap_exclusion=False,

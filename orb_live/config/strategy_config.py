@@ -46,6 +46,8 @@ class StrategyConfig:
 
     # ── EMA filter ────────────────────────────────────────────────────────────
     ema_length: int = 30
+    require_ema_confirmation: bool = True
+    entry_at_boundary: bool = False
 
     # ── Minimum trade quality filters ─────────────────────────────────────────
     min_profit_pct: float = 0.005

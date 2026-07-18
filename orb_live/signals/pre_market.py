@@ -299,8 +299,9 @@ class PreMarketJob:
         # plan_session() re-runs gap + PS + direction + skip-cheap-top-2 using
         # the UL-level inputs we just assembled.  Its candidate set == what we
         # expect (modulo the ETF-gap approximation of UL gap).
+        qualified_symbols = [r.symbol for r in preliminary_p1]
         self._session_plan = plan_session(
-            universe=cfg.symbols,
+            universe=qualified_symbols,
             instruments=instruments,
             sigmas=cfg.sigmas,
             overnight_gaps=overnight_gaps,

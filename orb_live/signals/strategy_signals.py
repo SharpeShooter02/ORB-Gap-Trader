@@ -217,9 +217,29 @@ def check_breakout(
         if excess < config.min_entry_excess:
             return False
 
+    if getattr(config, "entry_at_boundary", False):
+        bar_high = float(bar["high"]) if "high" in bar.index else close
+        bar_low  = float(bar["low"])  if "low"  in bar.index else close
+        if gap_direction == 1:
+            price_touched = bar_high >= orb["high"]
+        else:
+            price_touched = bar_low  <= orb["low"]
+        if not price_touched:
+            return False
+        if getattr(config, "require_ema_confirmation", True):
+            if gap_direction == 1 and not (close > orb["ema"]):
+                return False
+            if gap_direction == -1 and not (close < orb["ema"]):
+                return False
+        return True
+
     if gap_direction == 1:
+        if getattr(config, "require_ema_confirmation", True) and not (close > orb["ema"]):
+            return False
         return close > orb["high"]
     else:
+        if getattr(config, "require_ema_confirmation", True) and not (close < orb["ema"]):
+            return False
         return close < orb["low"]
 
 
@@ -242,7 +262,10 @@ def compute_entry(
 
     Identical to backtester lines 1160-1236.
     """
-    entry_price = float(bar["close"])
+    if getattr(config, "entry_at_boundary", False):
+        entry_price = float(orb["high"]) if gap_direction == 1 else float(orb["low"])
+    else:
+        entry_price = float(bar["close"])
     orb_range   = orb["high"] - orb["low"]
     tp1_mult    = tp1_mult_override if tp1_mult_override is not None \
                   else config.tp1_target_multiple

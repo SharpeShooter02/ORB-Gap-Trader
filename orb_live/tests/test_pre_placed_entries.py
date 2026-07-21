@@ -388,3 +388,34 @@ def test_pp_i_session_kill_blocks_resting_entry_fills(mock_broker, tmp_store):
     assert "TQQQ" not in mgr._positions, "kill session must not open new positions"
     assert len(reversals) == 1
     assert reversals[0][1] == "sell"
+
+
+# ── pp-j: EOD flatten closes orphaned broker position from missed fill event ──
+
+def test_pp_j_flatten_closes_orphaned_broker_position(mock_broker, tmp_store):
+    """flatten_all must close positions that exist at the broker but were never
+    registered in _positions (e.g. fill event lost during a connectivity blip).
+
+    Regression: prior implementation iterated self._universe (empty when universe
+    kwarg not passed to LivePositionManager), so get_positions() was never called
+    and the orphaned position was left open overnight.
+    """
+    # No universe kwarg — reproduces production wiring in main.py
+    mgr = _build_mgr(mock_broker, tmp_store)
+
+    # Simulate IB holding 100 shares of XRPT that our code never heard about
+    mock_broker.set_broker_position("XRPT", 100)
+
+    market_orders: list[tuple] = []
+    original = mock_broker.submit_market_order
+    def track(sym, side, qty, **kw):
+        market_orders.append((sym, side, qty))
+        return original(sym, side, qty, **kw)
+
+    mock_broker.submit_market_order = track
+    mgr.flatten_all("eod_sweep")
+
+    assert any(sym == "XRPT" and side == "sell" and qty == 100
+               for sym, side, qty in market_orders), (
+        "flatten_all must close orphaned XRPT position via get_positions()"
+    )

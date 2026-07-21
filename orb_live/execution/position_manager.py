@@ -1334,23 +1334,28 @@ class LivePositionManager:
             self._positions.pop(sym, None)
         self._pending_entries.clear()
 
-        # 3. Flatten any residual broker positions in the universe.
-        # Use only *open* in-memory positions as "tracked" — symbols whose
-        # _exit_all marked them "closed" in memory but whose market order was
-        # rejected by IB (e.g. stale qty / post-market) are NOT skipped here.
+        # 3. Flatten any residual broker positions not already handled above.
+        # Pull all IB positions in one call rather than probing per-symbol —
+        # this catches orphaned positions regardless of whether _universe was set
+        # (e.g. missed fill events during a connectivity blip).
         tracked = {sym for sym, p in self._positions.items() if p.status == "open"}
-        for sym in self._universe:
-            if sym in tracked:
+        try:
+            broker_positions = self._broker.get_positions()
+        except Exception as exc:
+            broker_positions = []
+            if self._log:
+                self._log.critical("flatten_get_positions_failed",
+                                   reason=reason, error=str(exc))
+        for bp in broker_positions:
+            sym = bp.get("symbol", "")
+            if not sym or sym in tracked:
                 continue
+            broker_qty = float(bp.get("qty", 0))
+            if abs(broker_qty) == 0:
+                continue
+            flat_side = "sell" if broker_qty > 0 else "buy"
+            flat_qty  = int(abs(broker_qty))
             try:
-                bp = self._broker.get_position(sym)
-                if not bp:
-                    continue
-                broker_qty = float(bp.get("qty", 0))
-                if abs(broker_qty) == 0:
-                    continue
-                flat_side = "sell" if broker_qty > 0 else "buy"
-                flat_qty  = int(abs(broker_qty))
                 self._broker.submit_market_order(sym, flat_side, flat_qty)
                 if self._log:
                     self._log.critical(

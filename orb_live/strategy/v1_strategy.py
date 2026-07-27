@@ -294,16 +294,14 @@ def compute_candidates(
             etf_dir=etf_dir, prior_close=prior_etf_close.get(sym, 0.0),
         ))
 
-    # Step 3: skip-cheap-top-2 per UL group
-    # Backtest rule (skip_cheap_by_class.py :: skip_cheap_then_top2_when_3plus):
-    #   N==1 → keep 1; N==2 → drop cheaper, keep 1; N>=3 → keep top-2 by prior close
+    # Step 3: skip-cheap per UL group — always keep exactly 1 (most expensive by prior close)
     final: list[Candidate] = []
     for ul, group in cands_by_ul.items():
         if len(group) <= 1:
             final.extend(group)
             continue
         group_sorted = sorted(group, key=lambda c: -c.prior_close)
-        keep_n = 1 if len(group) == 2 else 2
+        keep_n = 1
         final.extend(group_sorted[:keep_n])
     return final
 

@@ -55,10 +55,10 @@ def test_no_instrument_gap_filters(live_cfg):
 
 
 class TestSkipCheapParity:
-    """Parity test for the skip-cheap-top-2 pruning rule.
+    """Parity test for the skip-cheap pruning rule.
 
-    Backtest rule (skip_cheap_by_class.py :: skip_cheap_then_top2_when_3plus):
-      N==1 → keep 1; N==2 → drop cheaper, keep 1; N>=3 → keep top-2 by prior close
+    Current rule: always keep exactly 1 per UL group (the most expensive by
+    prior close). Capped at 1 ticker per underlying regardless of N.
     """
 
     def _run(self, syms_with_prices: list[tuple[str, float]]) -> list[str]:
@@ -91,12 +91,10 @@ class TestSkipCheapParity:
         assert len(kept) == 1
         assert kept[0] == "PRICEY"
 
-    def test_n3_keeps_2_most_expensive(self):
+    def test_n3_keeps_1_most_expensive(self):
         kept = self._run([("A", 30.0), ("B", 100.0), ("C", 200.0)])
-        assert len(kept) == 2
-        assert set(kept) == {"B", "C"}
+        assert kept == ["C"]
 
-    def test_n4_keeps_2_most_expensive(self):
+    def test_n4_keeps_1_most_expensive(self):
         kept = self._run([("A", 10.0), ("B", 50.0), ("C", 100.0), ("D", 200.0)])
-        assert len(kept) == 2
-        assert set(kept) == {"C", "D"}
+        assert kept == ["D"]

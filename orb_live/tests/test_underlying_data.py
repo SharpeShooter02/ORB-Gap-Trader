@@ -106,9 +106,35 @@ class TestUpdateOne:
 
     def test_returns_zero_on_empty_yf_response(self, tmp_path):
         store = _make_store(tmp_path)
-        with patch("yfinance.download", return_value=pd.DataFrame()):
+        # Empty every attempt → exhausts retries → 0 rows (no crash).
+        with patch("orb_live.data.underlying_data.time.sleep"), \
+             patch("yfinance.download", return_value=pd.DataFrame()) as mock_dl:
             n = store.update_one("QQQ")
         assert n == 0
+        assert mock_dl.call_count == 4          # _YF_MAX_ATTEMPTS
+
+    def test_retries_then_succeeds_on_transient_empty(self, tmp_path):
+        """A transient empty response is retried and the later good data is kept."""
+        store = _make_store(tmp_path)
+        good = _make_yf_df(["2022-01-03", "2022-01-04"], [380.0, 382.0])
+        seq  = [pd.DataFrame(), pd.DataFrame(), good]  # fail, fail, succeed
+        with patch("orb_live.data.underlying_data.time.sleep") as mock_sleep, \
+             patch("yfinance.download", side_effect=seq) as mock_dl:
+            n = store.update_one("QQQ")
+        assert n == 2
+        assert mock_dl.call_count == 3
+        assert mock_sleep.call_count == 2       # slept before each retry
+
+    def test_retries_on_exception_then_succeeds(self, tmp_path):
+        """An exception (e.g. rate-limit) is treated as transient and retried."""
+        store = _make_store(tmp_path)
+        good = _make_yf_df(["2022-01-03"], [380.0])
+        seq  = [RuntimeError("YFRateLimitError"), good]
+        with patch("orb_live.data.underlying_data.time.sleep"), \
+             patch("yfinance.download", side_effect=seq) as mock_dl:
+            n = store.update_one("QQQ")
+        assert n == 1
+        assert mock_dl.call_count == 2
 
     def test_crypto_ticker_resolved(self, tmp_path):
         store = _make_store(tmp_path)

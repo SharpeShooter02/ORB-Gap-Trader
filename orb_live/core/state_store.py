@@ -562,7 +562,12 @@ class StateStore:
 
     def record_equity(self, trade_date: date, start_equity: float,
                       end_equity: float, session_pnl: float) -> None:
+        # Idempotent: replace any existing row for this trade_date so a repeated
+        # EOD (recovery, manual re-run) updates rather than hitting the UNIQUE
+        # constraint on trade_date.
         with self.conn() as c:
+            c.execute(equity_curve.delete().where(
+                equity_curve.c.trade_date == trade_date))
             c.execute(equity_curve.insert().values(
                 trade_date=trade_date,
                 start_equity=start_equity,

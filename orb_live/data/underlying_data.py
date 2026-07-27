@@ -32,6 +32,7 @@ sufficient buffer to absorb these minor data-source differences.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,12 @@ from typing import Optional
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# yfinance is prone to transient failures (rate-limits, empty responses) at
+# pre-market. Retry with exponential backoff so a single hiccup doesn't leave
+# an underlying stale and abort the whole session. Delays: 2s, 4s, 8s.
+_YF_MAX_ATTEMPTS   = 4
+_YF_BACKOFF_BASE_S = 2.0
 
 # ── Ticker mapping ────────────────────────────────────────────────────────────
 # Key = underlying symbol as used in SIGMA / PS_FILTERS.
@@ -202,10 +209,49 @@ class UnderlyingDataStore:
         issues = self.check_freshness(today, underlyings)
         if issues:
             msg = "STALE UNDERLYING DATA — session aborted:\n  " + "\n  ".join(issues)
-            self._log.critical("stale_underlying_data", issues=issues)
+            # f-string (not kwargs) so this is safe on a stdlib logger too.
+            self._log.critical(f"stale_underlying_data: {issues}")
             raise RuntimeError(msg)
 
     # ── Write ─────────────────────────────────────────────────────────────────
+
+    def _yf_download_retry(self, ul_sym: str, yf_sym: str,
+                           start: "pd.Timestamp", end: "pd.Timestamp"):
+        """Fetch daily bars from yfinance with exponential-backoff retry.
+
+        Treats BOTH exceptions and empty results as transient (yfinance signals
+        rate-limiting either way). Returns the raw DataFrame, or None if every
+        attempt failed — the caller logs and returns 0 new rows.
+        """
+        import yfinance as yf
+
+        for attempt in range(1, _YF_MAX_ATTEMPTS + 1):
+            try:
+                raw = yf.download(
+                    yf_sym,
+                    start=start.strftime("%Y-%m-%d"),
+                    end=(end + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                    progress=False, auto_adjust=True,
+                )
+                if raw is not None and not raw.empty:
+                    return raw
+                reason = "empty response"
+            except Exception as exc:
+                reason = f"{type(exc).__name__}: {exc}"
+
+            if attempt < _YF_MAX_ATTEMPTS:
+                delay = _YF_BACKOFF_BASE_S * (2 ** (attempt - 1))
+                self._log.warning(
+                    f"yf_download_retry {ul_sym} ({yf_sym}) attempt "
+                    f"{attempt}/{_YF_MAX_ATTEMPTS}: {reason} — retry in {delay:.0f}s"
+                )
+                time.sleep(delay)
+            else:
+                self._log.error(
+                    f"yf_download_exhausted {ul_sym} ({yf_sym}) after "
+                    f"{_YF_MAX_ATTEMPTS} attempts: {reason}"
+                )
+        return None
 
     def update_one(self, ul_sym: str, lookback_days: int = 10) -> int:
         """
@@ -214,19 +260,12 @@ class UnderlyingDataStore:
 
         Returns the number of NEW rows written.
         """
-        import yfinance as yf
-
         yf_sym = _yf_ticker(ul_sym)
         end    = pd.Timestamp.today().normalize()
         start  = end - pd.Timedelta(days=max(lookback_days * 2, 30))
 
-        raw = yf.download(
-            yf_sym,
-            start=start.strftime("%Y-%m-%d"),
-            end=(end + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
-            progress=False, auto_adjust=True,
-        )
-        if raw.empty:
+        raw = self._yf_download_retry(ul_sym, yf_sym, start, end)
+        if raw is None or raw.empty:
             self._log.warning(f"yfinance returned no data for {ul_sym} ({yf_sym})")
             return 0
 

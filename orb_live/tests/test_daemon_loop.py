@@ -123,6 +123,35 @@ def test_daemon_sleeps_until_premarket_then_runs():
     assert sessions_run == [date(2026, 5, 18)]
 
 
+def test_daemon_does_not_rerun_completed_session():
+    """Started mid-day AFTER a session completes: next_market_day() still returns
+    today (now < 16:00), but the daemon must NOT re-run the same session — doing
+    so would re-run pre-market and re-enter trades."""
+    from orb_live.runner.main import _run_daemon
+
+    fixed_now = datetime(2026, 5, 18, 15, 59, 0, tzinfo=ET)  # Monday 15:59, pre-close
+    clock = _FakeClock(fixed_now)
+
+    sessions_run = []
+    shutdown = [False]
+
+    class _FakeRunner:
+        def run_session(self, d):
+            sessions_run.append(d)   # note: does NOT set shutdown
+
+    def _fake_sleep(_s):
+        # The only sleep that fires is the guard's idle sleep after the 1st run.
+        shutdown[0] = True
+
+    _run_daemon(
+        _FakeRunner(), clock,
+        _sleep=_fake_sleep, _shutdown=shutdown,
+        _sleep_interval=60.0,
+    )
+
+    assert sessions_run == [date(2026, 5, 18)]  # ran exactly once, not twice
+
+
 def test_daemon_skips_weekend_to_monday():
     """
     Started at Friday 16:30 ET: daemon sleeps ~64 hours to Monday 08:30,

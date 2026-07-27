@@ -145,7 +145,7 @@ def _build_components(args: argparse.Namespace, _log=None):
     # Supporting components
     bar_cache    = BarCache()
     clock        = MarketClock(broker_client=real_client)
-    ul_store     = UnderlyingDataStore(cfg.data_dir)
+    ul_store     = UnderlyingDataStore(cfg.data_dir, logger_=logger)
 
     # Execution layer
     policy = MarketableLimitPolicy(broker, cfg, store)
@@ -225,6 +225,8 @@ def _run_daemon(
         _signal.signal(_signal.SIGTERM, _on_signal)
         _signal.signal(_signal.SIGINT,  _on_signal)
 
+    last_run_date = None
+
     while not shutdown[0]:
         next_pm = clock.next_premarket_start()
         now     = clock.now_et()
@@ -236,6 +238,16 @@ def _run_daemon(
             next_premarket=next_pm.isoformat(),
             wait_seconds=round(secs, 1),
         )
+
+        # Guard: never re-run a session date we already completed. The EOD
+        # flatten now finishes the session ~1 min BEFORE the close, but
+        # next_market_day() keeps returning today until 16:00 ET — so without
+        # this the daemon would immediately restart the same session, re-run
+        # pre-market and re-enter trades. Idle until the clock rolls forward.
+        if next_pm.date() == last_run_date:
+            _log.info("daemon_session_already_ran", session_date=str(last_run_date))
+            _sleep_fn(min(_sleep_interval, 60.0))
+            continue
 
         if secs > 1:
             remaining = secs
@@ -258,6 +270,7 @@ def _run_daemon(
                 recover = False
             else:
                 runner.run_session(session_date)
+            last_run_date = session_date
         except SystemExit:
             break
 

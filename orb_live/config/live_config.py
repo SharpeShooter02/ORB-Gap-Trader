@@ -229,6 +229,12 @@ class LiveConfig:
     eod_exit_hour:   int = 16
     eod_exit_minute: int = 0
 
+    # Flatten this many seconds BEFORE the close so exit market orders fill in
+    # liquid regular-hours trading. Leveraged ETFs have thin/no after-hours
+    # books, and IB rejects market orders outside RTH — flattening after 16:00
+    # would leave positions unfilled overnight. 60s → flatten at ~15:59 ET.
+    eod_flatten_lead_secs: int = 60
+
     # ── Storage ───────────────────────────────────────────────────────────────
     data_dir:            Path = field(default_factory=lambda: _DEFAULT_DATA_DIR)
     sigma_override_path: Path = field(default_factory=lambda: _SIGMA_OVERRIDE_FILE)

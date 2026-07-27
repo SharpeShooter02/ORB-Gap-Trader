@@ -37,6 +37,18 @@ class BrokerClient(ABC):
     @abstractmethod
     def get_equity(self) -> float: ...
 
+    @abstractmethod
+    def check_margin(self, symbol: str, side: str, qty: float, price: float) -> dict:
+        """Pre-trade initial-margin preview. Returns
+        {"ok": bool, "init_margin": float, "maint_margin": float}."""
+        ...
+
+    def register_order_error_handler(self, callback) -> None:
+        """Optional hook: register callback(order_id, code, message, symbol)
+        for order-level broker errors (e.g. insufficient margin). No-op by
+        default so brokers that don't surface order errors need not implement."""
+        return None
+
     # ── Clock ─────────────────────────────────────────────────────────────────
 
     @abstractmethod

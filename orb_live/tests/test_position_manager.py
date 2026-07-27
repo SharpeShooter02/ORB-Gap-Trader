@@ -478,6 +478,53 @@ def test_n_flatten_all_closes_all_positions(mock_broker, tmp_store):
     assert pos2.status == "closed"
 
 
+# ── n2. flatten_all must not double-exit a still-settling position ────────────
+
+def test_n2_flatten_no_double_exit_on_settling_position(mock_broker, tmp_store):
+    """Step 1 submits the EOD exit and deletes the position from _positions, but
+    the broker still reports it (the market order has not filled/propagated yet).
+    Step 3 must recognise it as already-handled and NOT send a second exit — a
+    double-sell would flip a long into a short held overnight."""
+    mgr = _build_mgr(mock_broker, tmp_store)
+    mock_broker.set_quote(bid=100.0, ask=100.0)
+
+    pos = mgr.open_position(_make_entry(shares=10), SYMBOL, +1, TRADE_DATE)
+    assert pos is not None and mgr._positions[SYMBOL].status == "open"
+
+    # Simulate the still-settling broker position after Step 1's exit submit.
+    mock_broker.set_broker_position(SYMBOL, 10)
+
+    market_orders: list[tuple] = []
+    original = mock_broker.submit_market_order
+    def track(sym, side, qty, **kw):
+        market_orders.append((sym, side, qty))
+        return original(sym, side, qty, **kw)
+    mock_broker.submit_market_order = track
+
+    mgr.flatten_all("eod_sweep")
+
+    sells = [o for o in market_orders if o[0] == SYMBOL]
+    assert len(sells) == 1, f"expected exactly one exit for {SYMBOL}, got {sells}"
+
+
+def test_n3_flatten_still_closes_untracked_orphan(mock_broker, tmp_store):
+    """Step 3 must still flatten a genuine orphan (a broker position that was
+    never tracked, e.g. a fill event missed during a connectivity blip)."""
+    mgr = _build_mgr(mock_broker, tmp_store)
+    mock_broker.set_broker_position("XRPT", 100)  # never registered in _positions
+
+    market_orders: list[tuple] = []
+    original = mock_broker.submit_market_order
+    def track(sym, side, qty, **kw):
+        market_orders.append((sym, side, qty))
+        return original(sym, side, qty, **kw)
+    mock_broker.submit_market_order = track
+
+    mgr.flatten_all("eod_sweep")
+
+    assert ("XRPT", "sell", 100) in market_orders
+
+
 # ── o. on_bar ignores unknown symbol ─────────────────────────────────────────
 
 def test_o_on_bar_ignores_unknown_symbol(mock_broker, tmp_store):

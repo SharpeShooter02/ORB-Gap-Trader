@@ -100,7 +100,26 @@ class MockBroker:
     # ── Broker API ────────────────────────────────────────────────────────────
 
     def get_account(self) -> dict:
-        return {"equity": self._equity}
+        return {
+            "equity": self._equity,
+            "buying_power": self._equity * 4,
+            "available_funds": self._equity,
+        }
+
+    def check_margin(self, symbol: str, side: str, qty: float, price: float) -> dict:
+        # Default mock: 50% initial margin (2x leveraged-ETF-like). Tests can
+        # override self._margin_rate to simulate elevated (e.g. 3x) requirements.
+        rate     = getattr(self, "_margin_rate", 0.5)
+        notional = abs(qty) * price
+        return {"ok": True, "init_margin": rate * notional, "maint_margin": rate * notional}
+
+    def register_order_error_handler(self, callback) -> None:
+        self._order_error_handlers = getattr(self, "_order_error_handlers", [])
+        self._order_error_handlers.append(callback)
+
+    def fire_order_error(self, order_id, code=201, message="insufficient margin", symbol=None):
+        for cb in getattr(self, "_order_error_handlers", []):
+            cb(str(order_id), code, message, symbol)
 
     def get_latest_quote(self, symbol: str) -> dict:
         return dict(self._quote)

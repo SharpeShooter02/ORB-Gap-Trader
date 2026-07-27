@@ -588,3 +588,59 @@ def test_l_broker_sleep_pumps_loop_for_bar_delivery(tmp_store):
         "_on_bar_dispatch; failure means the runner is using time.sleep() which "
         "starves the ib_insync event loop (BUG 0b)"
     )
+
+
+# ── m. EOD flatten runs BEFORE the close (RTH liquidity) ──────────────────────
+
+class _ClockAt:
+    def __init__(self, now):
+        self._now = now
+    def now_et(self): return self._now
+    def orb_end_et(self, orb_minutes=30): return _et(10, 0)
+    def is_half_day(self): return False
+    def effective_close(self): return dtime(16, 0)
+
+
+def _build_runner_for_eod(mock_broker, tmp_store, now, lead):
+    from orb_live.runner.session_runner import SessionRunner
+
+    engine, mgr, ind_store, cfg = _build_engine(mock_broker, tmp_store)
+    cfg.eod_flatten_lead_secs = lead
+
+    sleeps: list[float] = []
+    runner = SessionRunner(
+        config=cfg, broker=mock_broker, state_store=tmp_store,
+        bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
+        pre_market_job=_StubPreMarket(), strategy_engine=engine,
+        position_manager=mgr, risk_gate=SimpleNamespace(),
+        indicators_store=ind_store, underlying_store=SimpleNamespace(),
+        clock=_ClockAt(now), _sleep=lambda s: sleeps.append(s),
+    )
+    return runner, mgr, sleeps
+
+
+def test_m_wait_until_eod_wakes_before_close(mock_broker, tmp_store):
+    """_wait_until_eod must wake `eod_flatten_lead_secs` BEFORE the close so the
+    flatten runs during liquid RTH (market exits after 16:00 don't fill)."""
+    runner, _mgr, sleeps = _build_runner_for_eod(
+        mock_broker, tmp_store, now=_et(15, 50), lead=120)
+
+    runner._wait_until_eod(TDATE)
+
+    # 15:50 → 16:00 is 600s; wake 120s early → sleep ~480s.
+    assert len(sleeps) == 1
+    assert abs(sleeps[0] - 480.0) < 1.0
+
+
+def test_m_run_eod_flattens_without_post_close_sleep(mock_broker, tmp_store):
+    """_run_eod must flatten immediately (no sleep past the boundary)."""
+    runner, mgr, sleeps = _build_runner_for_eod(
+        mock_broker, tmp_store, now=_et(15, 58), lead=120)
+
+    flattened: list[str] = []
+    mgr.flatten_all = lambda reason: flattened.append(reason)
+
+    runner._run_eod(TDATE)
+
+    assert flattened == ["eod_sweep"]
+    assert sleeps == []          # no 30s post-close sleep anymore

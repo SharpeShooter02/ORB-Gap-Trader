@@ -103,7 +103,24 @@ class DryRunBroker:
     # ── Account ────────────────────────────────────────────────────────────────
 
     def get_account(self) -> dict:
-        return {"equity": self._equity}
+        return {
+            "equity": self._equity,
+            "buying_power": self._equity * 4,
+            "available_funds": self._equity,
+        }
+
+    def check_margin(self, symbol: str, side: str, qty: float, price: float) -> dict:
+        real = getattr(self._real, "check_margin", None)
+        if real is not None:
+            try:
+                return real(symbol, side, qty, price)
+            except Exception:
+                pass
+        notional = abs(qty) * price
+        return {"ok": True, "init_margin": notional, "maint_margin": notional}
+
+    def register_order_error_handler(self, callback) -> None:
+        return None
 
     def get_position(self, symbol: str) -> Optional[dict]:
         return self._positions.get(symbol)

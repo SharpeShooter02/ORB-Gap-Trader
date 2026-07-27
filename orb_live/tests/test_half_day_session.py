@@ -58,13 +58,14 @@ def test_1_half_day_sleeps_to_1300_not_1600(mock_broker, tmp_store):
     """
     _wait_until_eod on a half-day should sleep until 13:00 ET, not 16:00.
 
-    now_et() returns 10:05 ET.  Sleep seconds = (13:00 - 10:05) = 2h55m = 10500s.
-    A full-day would produce (16:00 - 10:05) = 5h55m = 21300s.
+    now_et() returns 10:05 ET.  Sleep seconds = (13:00 - 10:05) - lead.
+    A full-day would produce (16:00 - 10:05) - lead.
     """
     from orb_live.runner.session_runner import SessionRunner
     from orb_live.config.live_config import load_live_config
 
     cfg = load_live_config()
+    lead = cfg.eod_flatten_lead_secs
     slept: list[float] = []
 
     runner = SessionRunner(
@@ -86,9 +87,11 @@ def test_1_half_day_sleeps_to_1300_not_1600(mock_broker, tmp_store):
 
     assert len(slept) == 1
     slept_s = slept[0]
-    # 13:00 - 10:05 = 2h55m = 10500 seconds
-    assert 10490 < slept_s < 10510, (
-        f"Expected ~10500s sleep for half-day (13:00 close), got {slept_s:.1f}s"
+    # 13:00 - 10:05 = 2h55m = 10500 seconds, minus the pre-close flatten lead.
+    expected = 10500 - lead
+    assert expected - 10 < slept_s < expected + 10, (
+        f"Expected ~{expected}s sleep for half-day (13:00 close, lead {lead}s), "
+        f"got {slept_s:.1f}s"
     )
 
 
@@ -96,12 +99,13 @@ def test_2_full_day_sleeps_to_1600(mock_broker, tmp_store):
     """
     _wait_until_eod on a normal day should sleep until 16:00 ET.
 
-    now_et() returns 10:05 ET.  Sleep seconds = (16:00 - 10:05) = 5h55m = 21300s.
+    now_et() returns 10:05 ET.  Sleep seconds = (16:00 - 10:05) - lead.
     """
     from orb_live.runner.session_runner import SessionRunner
     from orb_live.config.live_config import load_live_config
 
     cfg = load_live_config()
+    lead = cfg.eod_flatten_lead_secs
     slept: list[float] = []
 
     runner = SessionRunner(
@@ -123,9 +127,11 @@ def test_2_full_day_sleeps_to_1600(mock_broker, tmp_store):
 
     assert len(slept) == 1
     slept_s = slept[0]
-    # 16:00 - 10:05 = 5h55m = 21300 seconds
-    assert 21290 < slept_s < 21310, (
-        f"Expected ~21300s sleep for full day (16:00 close), got {slept_s:.1f}s"
+    # 16:00 - 10:05 = 5h55m = 21300 seconds, minus the pre-close flatten lead.
+    expected = 21300 - lead
+    assert expected - 10 < slept_s < expected + 10, (
+        f"Expected ~{expected}s sleep for full day (16:00 close, lead {lead}s), "
+        f"got {slept_s:.1f}s"
     )
 
 

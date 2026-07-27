@@ -18,7 +18,9 @@ orb_backtester.py:simulate_trade (lines 1376-1487):
 PRODUCTION NOTES:
   - atr_trail TP3 mode is NOT implemented (raises NotImplementedError at init).
   - EOD exit at eod_exit_hour=16 NEVER fires on a delivered RTH bar (last bar
-    is 15:59). The runner calls flatten_all('eod_sweep') at 16:00:30 ET instead.
+    is 15:59). The runner calls flatten_all('eod_sweep') ~eod_flatten_lead_secs
+    BEFORE the close (default 15:58 ET) so market exits fill in liquid RTH —
+    market orders sent after 16:00 are rejected/unfilled on leveraged ETFs.
   - Position sizing uses shared account equity (not per-symbol pools as in the
     backtest). See HANDOFF_PROMPT_3.md §5 for the intentional divergence note.
   - Every state change is persisted to state_store BEFORE the order is placed,
@@ -183,6 +185,22 @@ class LivePositionManager:
         self._fills_recorded: set[str] = set()
         self._fills_lock = threading.Lock()
 
+        # Margin budgeting for flood-day entry bursts. _margin_rate holds IB's
+        # true initial-margin fraction per symbol (init_margin / notional),
+        # captured at ORB close via prewarm_margin (main thread). _margin_budget
+        # is a one-time snapshot of available funds; reservations are DERIVED
+        # from live positions in _committed_margin (no leaky accumulator).
+        self._margin_rate: dict[str, float] = {}
+        self._margin_budget: Optional[float] = None
+
+        # Roll back an 'entering' entry immediately on an IB order reject (201).
+        if hasattr(self._broker, "register_order_error_handler"):
+            try:
+                self._broker.register_order_error_handler(self._on_order_error)
+            except Exception as exc:
+                if self._log:
+                    self._log.warning("order_error_handler_reg_failed", exc=str(exc))
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -298,9 +316,29 @@ class LivePositionManager:
                                   symbol=symbol, reason=reason)
             return None
 
-        # Margin check: skip if buying power is insufficient (leveraged ETFs ~1:1 at IB)
         intended_cost = entry["entry_price"] * entry["shares"]
-        if intended_cost > buying_power:
+
+        # Margin-budget check (leveraged-ETF aware). Uses IB's true initial-
+        # margin rate captured at ORB close and reserves across the flood-day
+        # burst by deriving committed margin from live positions — this closes
+        # the race where IB's BuyingPower lags rapid concurrent submissions.
+        if self._margin_budget is not None:
+            rate       = self._margin_rate.get(symbol, 1.0)
+            est_margin = rate * intended_cost
+            committed  = self._committed_margin()
+            if committed + est_margin > self._margin_budget:
+                if self._log:
+                    self._log.warning(
+                        "entry_rejected_margin_budget",
+                        symbol=symbol,
+                        est_margin=round(est_margin, 2),
+                        committed=round(committed, 2),
+                        budget=round(self._margin_budget, 2),
+                    )
+                return None
+
+        # Raw buying-power floor — include notional reserved by resting stop-limits.
+        if self._resting_reserved_bp() + intended_cost > buying_power:
             if self._log:
                 self._log.warning(
                     "entry_rejected_insufficient_buying_power",
@@ -879,6 +917,89 @@ class LivePositionManager:
         """Register the session's candidate symbols for EOD flatten safety net."""
         self._universe = list(symbols)
 
+    # ── Buying-power / margin helpers ─────────────────────────────────────────
+
+    def _resting_reserved_bp(self) -> float:
+        """Notional already reserved by submitted-but-unfilled resting stop-limits."""
+        return sum(
+            r["entry"]["entry_price"] * r["entry"]["shares"]
+            for r in self._resting_entries.values()
+        )
+
+    def prewarm_margin(self, symbol: str, side: str, qty: float, price: float) -> None:
+        """Cache IB's true initial-margin rate for a candidate before the entry
+        window opens.
+
+        MUST be called on the main thread at ORB close (broker.check_margin
+        blocks — it cannot run inside a bar callback). Also snapshots the
+        session margin budget from available funds on the first call.
+        """
+        if not hasattr(self._broker, "check_margin"):
+            return
+        try:
+            if self._margin_budget is None:
+                acct = self._broker.get_account()
+                self._margin_budget = float(
+                    acct.get("available_funds",
+                             acct.get("buying_power", acct.get("equity", 0.0)))
+                )
+            notional = abs(qty) * price
+            if notional <= 0:
+                return
+            res    = self._broker.check_margin(symbol, side, abs(qty), price)
+            init_m = float(res.get("init_margin", notional))
+            self._margin_rate[symbol] = max(0.0, init_m / notional)
+            if self._log:
+                self._log.info(
+                    "margin_prewarmed", symbol=symbol,
+                    rate=round(self._margin_rate[symbol], 4),
+                    budget=round(self._margin_budget, 2),
+                )
+        except Exception as exc:
+            if self._log:
+                self._log.warning("prewarm_margin_failed", symbol=symbol, exc=str(exc))
+
+    def _committed_margin(self) -> float:
+        """Initial margin currently reserved by live positions (entering + open),
+        derived on demand so there is no accumulator to leak or double-count."""
+        total = 0.0
+        for sym, pos in self._positions.items():
+            if pos.status in ("entering", "open"):
+                rate = self._margin_rate.get(sym, 1.0)
+                total += rate * pos.actual_entry_price * pos.remaining
+        return total
+
+    def _on_order_error(self, order_id, error_code, error_string, symbol) -> None:
+        """IB order-level reject (e.g. 201 insufficient margin). Roll back an
+        entry that never filled: cancel any bracket legs, drop the 'entering'
+        row, and free the symbol. Runs on the IB loop thread — non-blocking
+        (cancel/store only). Belt-and-suspenders over _check_pending_entry's
+        next-bar poll; its real value is releasing margin budget immediately."""
+        if not symbol:
+            for sym, pend in list(self._pending_entries.items()):
+                if str(pend.get("order_id")) == str(order_id):
+                    symbol = sym
+                    break
+        if not symbol:
+            return
+        pos = self._positions.get(symbol)
+        if pos is None or pos.status != "entering":
+            return
+        if self._log:
+            self._log.critical(
+                "entry_order_rejected", symbol=symbol,
+                error_code=error_code, error_string=error_string,
+            )
+        for oid in (pos.tp1_order_id, pos.stop_order_id):
+            if oid:
+                try:
+                    self._broker.cancel_order(oid)
+                except Exception:
+                    pass
+        self._store.close_position(symbol)
+        self._positions.pop(symbol, None)
+        self._pending_entries.pop(symbol, None)
+
     # ── Pre-placed stop-limit entry orders ────────────────────────────────────
 
     def place_entry_order(
@@ -897,6 +1018,23 @@ class LivePositionManager:
         if symbol in self._resting_entries or symbol in self._pending_entries or symbol in self._positions:
             if self._log:
                 self._log.warning("resting_entry_blocked_duplicate", symbol=symbol)
+            return None
+
+        # Buying power check — IB reserves margin against resting stop-limits
+        # immediately on submission (leveraged ETFs consume ~100% of notional).
+        _bp_acct = self._broker.get_account()
+        buying_power = float(_bp_acct.get("buying_power", 0))
+        new_cost = entry["entry_price"] * entry["shares"]
+        resting_reserved = self._resting_reserved_bp()
+        if resting_reserved + new_cost > buying_power:
+            if self._log:
+                self._log.warning(
+                    "resting_entry_blocked_insufficient_buying_power",
+                    symbol=symbol,
+                    new_cost=round(new_cost, 2),
+                    resting_reserved=round(resting_reserved, 2),
+                    buying_power=round(buying_power, 2),
+                )
             return None
 
         side = "buy" if direction == 1 else "sell"
@@ -1302,7 +1440,12 @@ class LivePositionManager:
                     except Exception:
                         pass
 
-        # 1. Exit tracked open positions
+        # 1. Exit tracked open positions. Record every symbol for which an exit
+        # order was successfully submitted so Step 3 does NOT re-send a market
+        # order against the still-settling position (which would flip us to the
+        # opposite side overnight). A submit that raised is left OUT of `handled`
+        # so Step 3 retries it against broker truth.
+        handled: set[str] = set()
         for symbol in list(self._positions.keys()):
             pos = self._positions.get(symbol)
             if pos is None or pos.status != "open":
@@ -1310,10 +1453,11 @@ class LivePositionManager:
             exit_reason = ("TP2"      if pos.tp2_hit else
                            "TP1_ONLY" if pos.tp1_hit else "EOD")
             try:
-                self._exit_all(pos, symbol, leg="eod", ref_price=None,
-                               exit_reason=f"{exit_reason}_{reason}",
-                               exit_time=eod_ts,
-                               session_date=pos.session_date)
+                if self._exit_all(pos, symbol, leg="eod", ref_price=None,
+                                  exit_reason=f"{exit_reason}_{reason}",
+                                  exit_time=eod_ts,
+                                  session_date=pos.session_date):
+                    handled.add(symbol)
             except Exception as exc:
                 if self._log:
                     self._log.critical("flatten_all_exception",
@@ -1337,8 +1481,9 @@ class LivePositionManager:
         # 3. Flatten any residual broker positions not already handled above.
         # Pull all IB positions in one call rather than probing per-symbol —
         # this catches orphaned positions regardless of whether _universe was set
-        # (e.g. missed fill events during a connectivity blip).
-        tracked = {sym for sym, p in self._positions.items() if p.status == "open"}
+        # (e.g. missed fill events during a connectivity blip). Symbols already
+        # given an exit order in Step 1 are skipped: their position is still
+        # settling at the broker and re-sending would double-exit into a short.
         try:
             broker_positions = self._broker.get_positions()
         except Exception as exc:
@@ -1348,7 +1493,7 @@ class LivePositionManager:
                                    reason=reason, error=str(exc))
         for bp in broker_positions:
             sym = bp.get("symbol", "")
-            if not sym or sym in tracked:
+            if not sym or sym in handled:
                 continue
             broker_qty = float(bp.get("qty", 0))
             if abs(broker_qty) == 0:
@@ -1667,10 +1812,16 @@ class LivePositionManager:
         exit_reason: str,
         exit_time: datetime,
         session_date: date,
-    ) -> None:
-        """Submit market exit for all remaining shares and close the position."""
+    ) -> bool:
+        """Submit market exit for all remaining shares and close the position.
+
+        Returns True if an exit order was submitted (or the broker was already
+        flat / nothing to exit), False if the market-order submit raised. The
+        EOD sweep uses this to decide whether a position still needs flattening
+        in its broker-truth pass, so an in-flight exit is not double-sent.
+        """
         if pos.remaining <= 0:
-            return
+            return True
 
         side = "sell" if pos.direction == 1 else "buy"
         for _oid in (pos.tp1_order_id, pos.stop_order_id):
@@ -1704,10 +1855,12 @@ class LivePositionManager:
             pos.status    = "closed"
             self._update_pos(pos)
             self._store.close_position(symbol)
-            return
+            return True
+        submit_ok = True
         try:
             self._broker.submit_market_order(symbol, side, exit_qty)
         except Exception as exc:
+            submit_ok = False
             if self._log:
                 self._log.critical("exit_all_failed", symbol=symbol, leg=leg, exc=str(exc))
 
@@ -1740,6 +1893,7 @@ class LivePositionManager:
         )
         self._store.close_position(symbol)
         del self._positions[symbol]
+        return submit_ok
 
     def _persist_new(self, pos: Position, session_date: date) -> None:
         """Write initial position row (status='entering') to state_store."""

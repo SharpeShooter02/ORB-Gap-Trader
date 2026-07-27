@@ -235,6 +235,10 @@ class SessionRunner:
 
             self._engine.on_orb_complete(symbol, p2, orb_df)
 
+            # Prewarm IB's true initial-margin rate for this candidate on the
+            # main thread (check_margin blocks — unsafe in a bar callback).
+            self._prewarm_candidate_margin(p2)
+
             if self._log:
                 self._log.info(
                     "phase2_ready", symbol=symbol,
@@ -269,13 +273,37 @@ class SessionRunner:
 
         self._wait_until_eod(session_date)
 
+    def _prewarm_candidate_margin(self, p2) -> None:
+        """Cache IB's true initial-margin rate for a tradable candidate using a
+        representative order sized like the planned entry. Best-effort — any
+        failure leaves the symbol at the conservative default rate."""
+        if not getattr(p2, "is_candidate", False):
+            return
+        if p2.orb is None or getattr(p2, "size_mult", 0.0) == 0.0:
+            return
+        try:
+            price = float(p2.orb["high"] if p2.gap_direction == 1 else p2.orb["low"])
+            base  = float(getattr(self._cfg, "v1_base_notional", 0.0) or 0.0)
+            mult  = float(getattr(p2, "size_mult", 1.0) or 1.0)
+            if price <= 0 or base <= 0:
+                return
+            qty  = max(1, int((base * mult) / price))
+            side = "buy" if p2.gap_direction == 1 else "sell"
+            self._mgr.prewarm_margin(p2.symbol, side, qty, price)
+        except Exception as exc:
+            if self._log:
+                self._log.warning("prewarm_margin_error", symbol=p2.symbol, exc=str(exc))
+
     def _wait_until_eod(self, session_date: date) -> None:
         # Respect half-day schedules (e.g. July 3 closes at 13:00 ET not 16:00).
+        # Wake `eod_flatten_lead_secs` BEFORE the close so the EOD flatten runs
+        # while regular-hours liquidity is still available (see _run_eod).
         close_t = self._clock.effective_close()
         now     = self._clock.now_et()
         eod     = now.replace(hour=close_t.hour, minute=close_t.minute,
                                second=0, microsecond=0)
-        secs    = (eod - now).total_seconds()
+        lead    = int(getattr(self._cfg, "eod_flatten_lead_secs", 120))
+        secs    = (eod - now).total_seconds() - lead
 
         if self._clock.is_half_day():
             if self._log:
@@ -288,12 +316,15 @@ class SessionRunner:
         if secs > 0:
             if self._log:
                 self._log.info("waiting_for_eod", seconds=round(secs, 1),
-                               close_et=f"{close_t.hour:02d}:{close_t.minute:02d}")
+                               close_et=f"{close_t.hour:02d}:{close_t.minute:02d}",
+                               flatten_lead_secs=lead)
             self._sleep(secs)
 
     def _run_eod(self, session_date: date) -> None:
-        """16:00:30 ET: flatten all positions, record equity, generate report."""
-        self._sleep(30)  # 30 seconds past eod boundary
+        """Flatten all positions ~`eod_flatten_lead_secs` before the close, while
+        regular-hours liquidity is still available. Market exits sent after 16:00
+        ET are rejected/unfilled by IB on leveraged ETFs, so we must be flat
+        BEFORE the close rather than after it."""
         self._mgr.flatten_all("eod_sweep")
         self._store.upsert_day_state(session_date, phase="closed")
 

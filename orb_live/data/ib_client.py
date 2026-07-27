@@ -166,6 +166,7 @@ class IBClient(BrokerClient):
         self._last_event_time: Optional[float] = None
         self._heartbeat_timeout    = float(os.getenv("IB_HEARTBEAT_TIMEOUT", "60"))
         self._fill_watchers: dict[int, object] = {}
+        self._order_error_handlers: list = []
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -231,6 +232,7 @@ class IBClient(BrokerClient):
         if not vals:
             return {
                 "equity": 0.0, "cash": 0.0, "buying_power": 0.0,
+                "available_funds": 0.0,
                 "portfolio_value": 0.0, "daytrade_count": 0,
                 "pattern_day_trader": False,
             }
@@ -251,6 +253,7 @@ class IBClient(BrokerClient):
             "equity":             equity,
             "cash":               _float("TotalCashValue"),
             "buying_power":       _float("BuyingPower"),
+            "available_funds":    _float("AvailableFunds", _float("FullAvailableFunds", equity)),
             "portfolio_value":    equity,
             "daytrade_count":     int(_float("DayTradesRemaining", 0)),
             "pattern_day_trader": False,
@@ -258,6 +261,50 @@ class IBClient(BrokerClient):
 
     def get_equity(self) -> float:
         return self.get_account()["equity"]
+
+    def check_margin(self, symbol: str, side: str, qty: float, price: float) -> dict:
+        """Pre-trade initial-margin preview via IB whatIf.
+
+        Returns {"ok": bool, "init_margin": float, "maint_margin": float}.
+        `init_margin` is IB's TRUE initial requirement for the contract
+        (already reflects the elevated margin IB charges on leveraged ETFs).
+
+        BLOCKING round-trip — MUST be called on the main thread only, never
+        from inside an event callback (bar/fill/order handler), or it will
+        re-enter the running asyncio loop. On any failure it falls back to a
+        conservative full-notional estimate so unknown instruments are
+        treated as 100%-margin rather than silently under-reserved.
+        """
+        notional = abs(qty) * price
+        fallback = {"ok": True, "init_margin": notional, "maint_margin": notional}
+        if not self.is_connected():
+            return fallback
+        try:
+            asset = self.get_asset(symbol)
+            if not asset["tradable"]:
+                return {"ok": False, "init_margin": notional, "maint_margin": notional}
+            contract = self._contract_cache[symbol]
+            action   = "BUY" if side.lower() == "buy" else "SELL"
+            order    = MarketOrder(action, abs(qty))
+            order.whatIf = True
+            state   = self._ib.whatIfOrder(contract, order)
+            init_m  = abs(float(getattr(state, "initMarginChange", 0) or 0))
+            maint_m = abs(float(getattr(state, "maintMarginChange", 0) or 0))
+            # IB returns a max-float sentinel (~1.8e308) when the preview is
+            # unavailable; anything above ~10x notional is impossible margin —
+            # treat as a failed preview and fall back to full notional.
+            if init_m <= 0 or init_m > notional * 10:
+                return fallback
+            return {"ok": True, "init_margin": init_m, "maint_margin": maint_m}
+        except Exception as exc:
+            if self._log:
+                self._log.warning("check_margin_failed", symbol=symbol, exc=str(exc))
+            return fallback
+
+    def register_order_error_handler(self, callback) -> None:
+        """Register callback(order_id: str, code: int, message: str, symbol)
+        invoked on order-level IB errors (e.g. 201 insufficient margin)."""
+        self._order_error_handlers.append(callback)
 
     # ── Positions ─────────────────────────────────────────────────────────────
 
@@ -914,6 +961,10 @@ class IBClient(BrokerClient):
         162,                                    # HMDS no data — handled upstream
     })
 
+    # Order-level rejects that must trigger entry rollback (201 = rejected,
+    # commonly "insufficient margin"; message carries the reason).
+    _ORDER_REJECT_CODES = frozenset({201})
+
     def _on_ib_error(self, reqId, errorCode, errorString, contract) -> None:
         self._last_event_time = time.time()
 
@@ -923,8 +974,9 @@ class IBClient(BrokerClient):
         if errorCode == 10089:
             self._market_data_degraded = True
 
+        sym = getattr(contract, "symbol", None) if contract else None
+
         if self._log:
-            sym = getattr(contract, "symbol", None) if contract else None
             self._log.error(
                 "ib_error",
                 error_code=errorCode,
@@ -932,6 +984,14 @@ class IBClient(BrokerClient):
                 req_id=reqId,
                 symbol=sym,
             )
+
+        if errorCode in self._ORDER_REJECT_CODES and self._order_error_handlers:
+            for cb in list(self._order_error_handlers):
+                try:
+                    cb(str(reqId), errorCode, errorString, sym)
+                except Exception as exc:
+                    if self._log:
+                        self._log.error("order_error_handler_failed", exc=str(exc))
 
     def check_heartbeat(self) -> dict:
         """Return {'ok': bool, 'seconds_since_event': float | None}.

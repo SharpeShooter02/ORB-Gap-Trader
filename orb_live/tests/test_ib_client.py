@@ -1852,6 +1852,7 @@ def test_broker_interface_parity():
     _MOCK_HELPERS = frozenset({
         "set_fill_fraction", "set_fill_sequence", "set_pending_fill",
         "set_equity", "set_quote", "set_broker_position", "fire_fill_watcher",
+        "fire_order_error",
     })
     mock_broker_methods = {
         name for name in vars(MockBroker)   # vars() → only class-defined; skips object builtins

@@ -45,7 +45,8 @@ class BarRouter:
         self._cache   = bar_cache
         self._log     = logger
 
-        self._listeners:   list[Callable[[str, dict], None]] = []
+        self._listeners:       list[Callable[[str, dict], None]] = []
+        self._entry_listeners: list[Callable[[str, dict], None]] = []
         self._symbols:     list[str] = []
         self._subscribed:  bool = False
 
@@ -59,8 +60,18 @@ class BarRouter:
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def register_listener(self, fn: Callable[[str, dict], None]) -> None:
-        """Register a callback invoked on every bar (live or replayed)."""
+        """Register a callback invoked on every completed 1-min bar (live or replayed)."""
         self._listeners.append(fn)
+
+    def register_entry_listener(self, fn: Callable[[str, dict], None]) -> None:
+        """Register a callback invoked on every raw 5-sec bar (entry detection only).
+
+        Fired straight from the broker's 5-sec stream with no missed-bar replay
+        and no last-bar bookkeeping — that machinery is 1-min-specific. If the
+        broker does not deliver 5-sec bars, these listeners simply never fire
+        and the 1-min path (register_listener) remains the entry fallback.
+        """
+        self._entry_listeners.append(fn)
 
     def subscribe(self, symbols: list[str]) -> None:
         """
@@ -86,7 +97,14 @@ class BarRouter:
         self._symbols = list(symbols)
         with self._ts_lock:
             self._last_bar_ts = {s: None for s in symbols}
-        self._broker.subscribe_bars(symbols, self._on_stream_bar)
+        # Only pass the 5-sec entry channel when a listener is registered, so
+        # older 2-arg subscribe_bars stubs keep working unchanged.
+        if self._entry_listeners:
+            self._broker.subscribe_bars(
+                symbols, self._on_stream_bar, self._on_entry_bar
+            )
+        else:
+            self._broker.subscribe_bars(symbols, self._on_stream_bar)
         self._subscribed = True
 
     def bars_received(self, symbol: str) -> int:
@@ -176,6 +194,38 @@ class BarRouter:
                 if self._log:
                     self._log.error(
                         "listener_exception", symbol=symbol,
+                        fn=getattr(fn, "__name__", "?"), exc=str(exc),
+                    )
+
+    def _on_entry_bar(self, bar: dict) -> None:
+        """
+        Callback invoked by the broker on each raw 5-sec bar for fast entry
+        detection. Deliberately bypasses missed-bar replay and last-bar
+        bookkeeping (both 1-min concepts) — it only forwards a normalized bar
+        to the entry listeners. Exceptions are swallowed per-listener so a bad
+        tick never kills the stream.
+        """
+        symbol = str(bar["symbol"])
+        ts     = bar["timestamp"]
+        if hasattr(ts, "astimezone"):
+            ts = ts.astimezone(ET)
+
+        bar_dict = {
+            "timestamp": ts,
+            "open":      float(bar["open"]),
+            "high":      float(bar["high"]),
+            "low":       float(bar["low"]),
+            "close":     float(bar["close"]),
+            "volume":    float(bar["volume"]),
+        }
+
+        for fn in self._entry_listeners:
+            try:
+                fn(symbol, bar_dict)
+            except Exception as exc:
+                if self._log:
+                    self._log.error(
+                        "entry_listener_exception", symbol=symbol,
                         fn=getattr(fn, "__name__", "?"), exc=str(exc),
                     )
 

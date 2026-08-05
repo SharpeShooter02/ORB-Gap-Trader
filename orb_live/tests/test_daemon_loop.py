@@ -152,6 +152,37 @@ def test_daemon_does_not_rerun_completed_session():
     assert sessions_run == [date(2026, 5, 18)]  # ran exactly once, not twice
 
 
+def test_daemon_reconnects_and_resumes_same_day_on_disconnect():
+    """A ConnectionError escaping the session must not kill the daemon: it
+    reconnects and re-runs the SAME day (before 16:00 ET) so trading resumes."""
+    from orb_live.runner.main import _run_daemon
+
+    fixed_now = datetime(2026, 5, 18, 11, 0, 0, tzinfo=ET)  # Monday 11:00, mid-session
+    clock = _FakeClock(fixed_now)
+
+    sessions_run = []
+    reconnects = [0]
+    shutdown = [False]
+
+    class _FakeRunner:
+        def run_session(self, d):
+            sessions_run.append(d)
+            if len(sessions_run) == 1:
+                raise ConnectionError("Socket disconnect")   # first attempt drops
+            shutdown[0] = True                               # second attempt completes
+        def reconnect_broker(self, max_attempts=5):
+            reconnects[0] += 1
+            return True
+
+    _run_daemon(
+        _FakeRunner(), clock,
+        _sleep=lambda _s: None, _shutdown=shutdown, _sleep_interval=60.0,
+    )
+
+    assert reconnects[0] == 1                                  # reconnected after the drop
+    assert sessions_run == [date(2026, 5, 18), date(2026, 5, 18)]  # re-ran the same day
+
+
 def test_daemon_skips_weekend_to_monday():
     """
     Started at Friday 16:30 ET: daemon sleeps ~64 hours to Monday 08:30,

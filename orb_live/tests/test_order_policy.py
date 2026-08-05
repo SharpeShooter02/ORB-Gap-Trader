@@ -83,6 +83,56 @@ def test_compute_entry_limit_bps_override(mock_broker):
     assert abs(limit - 100.30) < 1e-9   # bps override (30) takes precedence over cfg (10)
 
 
+def test_entry_buffer_orb_frac_buy_uses_range(mock_broker):
+    """With entry_buffer_orb_frac and orb_range, buy limit = boundary + frac×range."""
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=10, entry_buffer_orb_frac=0.35)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+    # boundary=100, ORB range=2.0 → 100 + 0.35×2.0 = 100.70
+    limit  = policy.compute_entry_limit("buy", SYMBOL, reference_price=100.0, orb_range=2.0)
+
+    assert abs(limit - 100.70) < 1e-9
+
+
+def test_entry_buffer_orb_frac_sell_uses_range(mock_broker):
+    """Short side: sell limit = boundary − frac×range."""
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=10, entry_buffer_orb_frac=0.35)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+    # boundary=100, ORB range=2.0 → 100 − 0.35×2.0 = 99.30
+    limit  = policy.compute_entry_limit("sell", SYMBOL, reference_price=100.0, orb_range=2.0)
+
+    assert abs(limit - 99.30) < 1e-9
+
+
+def test_entry_buffer_orb_frac_falls_back_to_bps_when_no_range(mock_broker):
+    """No orb_range → range-relative buffer inert, fixed-bps path is used."""
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=10, entry_buffer_orb_frac=0.35)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+    limit  = policy.compute_entry_limit("buy", SYMBOL, reference_price=100.0)
+
+    assert abs(limit - 100.10) < 1e-9   # bps path (10 bps), range buffer not applied
+
+
+def test_entry_buffer_orb_frac_zero_uses_bps(mock_broker):
+    """frac=0 disables the range buffer even when orb_range is supplied."""
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from types import SimpleNamespace
+
+    cfg    = SimpleNamespace(entry_slippage_bps=10, entry_buffer_orb_frac=0.0)
+    policy = MarketableLimitPolicy(mock_broker, cfg)
+    limit  = policy.compute_entry_limit("buy", SYMBOL, reference_price=100.0, orb_range=2.0)
+
+    assert abs(limit - 100.10) < 1e-9   # bps path
+
+
 def test_legacy_kwargs_accepted_without_error(mock_broker, tmp_store):
     """Extra legacy kwargs (_sleep, state_store) are accepted without raising."""
     from orb_live.execution.order_policy import MarketableLimitPolicy

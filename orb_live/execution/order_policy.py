@@ -70,8 +70,22 @@ class MarketableLimitPolicy:
         symbol: str,
         reference_price: Optional[float] = None,
         bps: Optional[int] = None,
+        orb_range: Optional[float] = None,
     ) -> float:
-        """Return the marketable limit price for an entry order (no submission)."""
+        """Return the marketable limit price for an entry order (no submission).
+
+        When orb_range is given and entry_buffer_orb_frac > 0, the buffer is
+        sized as a fraction of the ORB range (boundary ± frac × orb_range) so it
+        scales with the day's volatility — price tends to move fast on a 30-min
+        ORB break, and a fixed bps of price is unanchored to the trade's risk
+        unit. Falls back to the fixed-bps buffer otherwise. reference_price must
+        be supplied (the ORB boundary) to use the range-relative buffer.
+        """
+        frac = getattr(self._cfg, "entry_buffer_orb_frac", 0.0) or 0.0
+        if orb_range and orb_range > 0 and frac > 0 and reference_price is not None:
+            offset = frac * orb_range
+            return (reference_price + offset if side == "buy"
+                    else reference_price - offset)
         _bps = bps if bps is not None else self._cfg.entry_slippage_bps
         return self._compute_limit(side, symbol, _bps, reference_price)
 

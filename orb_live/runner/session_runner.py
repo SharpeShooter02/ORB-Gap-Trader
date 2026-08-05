@@ -67,13 +67,74 @@ class SessionRunner:
         self._ul          = underlying_store
         self._clock       = clock
         self._log         = logger
-        self._sleep       = _sleep or getattr(broker, "sleep", time.sleep)
+        # _raw_sleep is the real (loop-pumping) sleep; _sleep wraps it so a
+        # mid-session socket drop reconnects and resumes in place instead of
+        # crashing the session (and losing position/subscription state).
+        self._raw_sleep   = _sleep or getattr(broker, "sleep", time.sleep)
+        self._sleep       = self._resilient_sleep
 
         self._session_date: Optional[date] = None
         self._phase1_results = []
+        self._watched: list[str] = []   # symbols currently subscribed to bars
 
-        # Register bar dispatch with router
+        # Register bar dispatch with router. The 1-min listener drives cache,
+        # indicators and exits (and is the entry fallback); the 5-sec entry
+        # listener drives low-latency breakout detection only.
         self._router.register_listener(self._on_bar_dispatch)
+        self._router.register_entry_listener(self._on_entry_bar_dispatch)
+
+    # ── Connection resilience ─────────────────────────────────────────────────
+
+    def _resilient_sleep(self, secs: float) -> None:
+        """Sleep that survives an IB socket drop. If the broker disconnects
+        mid-wait, reconnect + re-subscribe, then finish the remaining time — so
+        the session (and its open positions) resume in place. Re-raises only if
+        reconnection is impossible, letting the daemon handle a real outage."""
+        end = time.monotonic() + secs
+        while True:
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            try:
+                self._raw_sleep(remaining)
+                return
+            except ConnectionError as exc:
+                if self._log:
+                    self._log.critical("session_sleep_disconnect", error=str(exc))
+                if not self._reconnect_and_resubscribe():
+                    raise   # genuine outage — surface to the daemon backstop
+
+    def _reconnect_and_resubscribe(self) -> bool:
+        """Reconnect the broker and re-establish bar subscriptions (which are
+        dropped by IB on disconnect). Returns False if the broker can't
+        reconnect."""
+        reconnect = getattr(self._broker, "reconnect", None)
+        if reconnect is None or not reconnect():
+            return False
+        if self._watched:
+            try:
+                self._router.unsubscribe()
+                self._router.subscribe(self._watched)
+                if self._log:
+                    self._log.warning("bars_resubscribed_after_reconnect",
+                                      n=len(self._watched))
+            except Exception as exc:
+                if self._log:
+                    self._log.error("resubscribe_after_reconnect_failed", error=str(exc))
+        return True
+
+    def reconnect_broker(self, max_attempts: int = 5) -> bool:
+        """Reconnect the broker after a disconnect that escaped a session.
+        Used by the daemon before resuming the same day."""
+        reconnect = getattr(self._broker, "reconnect", None)
+        if reconnect is None:
+            return False
+        try:
+            return bool(reconnect(max_attempts=max_attempts))
+        except Exception as exc:
+            if self._log:
+                self._log.error("reconnect_broker_failed", error=str(exc))
+            return False
 
     # ── Main entry point ───────────────────────────────────────────────────────
 
@@ -233,11 +294,13 @@ class SessionRunner:
                 self._engine.on_orb_complete(symbol, p2, None)
                 continue
 
-            self._engine.on_orb_complete(symbol, p2, orb_df)
-
             # Prewarm IB's true initial-margin rate for this candidate on the
             # main thread (check_margin blocks — unsafe in a bar callback).
+            # Must precede on_orb_complete so the margin rate/budget are set
+            # before a resting entry is placed in use_resting_entries mode.
             self._prewarm_candidate_margin(p2)
+
+            self._engine.on_orb_complete(symbol, p2, orb_df)
 
             if self._log:
                 self._log.info(
@@ -250,6 +313,7 @@ class SessionRunner:
         # Subscribing all ~59 symbols at open exceeds IB's market-data line cap,
         # causing IB to silently deliver no bars at all (silent failure — no error).
         watched = [r.symbol for r in p2_results if r.is_candidate]
+        self._watched = watched   # remembered so we can re-subscribe after a reconnect
         if watched:
             self._router.subscribe(watched)
             if self._log:
@@ -339,6 +403,31 @@ class SessionRunner:
 
     # ── Bar dispatch (LOAD-BEARING ORDER) ─────────────────────────────────────
 
+    def _is_post_orb(self, ts) -> bool:
+        """True once ts is at/after the ORB close (market open + orb_minutes)."""
+        bar_time = ts.time() if hasattr(ts, "time") else dtime(0, 0)
+        orb_end_minutes = (
+            self._cfg.strategy_config.market_open_hour * 60
+            + self._cfg.strategy_config.market_open_minute
+            + self._cfg.orb_minutes
+        )
+        orb_end = dtime(orb_end_minutes // 60, orb_end_minutes % 60)
+        return bar_time >= orb_end
+
+    def _on_entry_bar_dispatch(self, symbol: str, bar: dict) -> None:
+        """
+        5-sec entry path: forward the raw bar to the entry state machine ONLY.
+
+        Deliberately does NOT touch cache/indicators/position_manager — those
+        stay on the 1-min pipeline (_on_bar_dispatch). The first path to see the
+        breakout flips the symbol to IN_POSITION; the other then no-ops via the
+        engine's state guard, so running both is idempotent.
+        """
+        ts = bar.get("timestamp")
+        if ts is None or not self._is_post_orb(ts):
+            return
+        self._engine.on_bar(symbol, bar, ts)
+
     def _on_bar_dispatch(self, symbol: str, bar: dict) -> None:
         """
         Called by BarRouter for every incoming bar (live or replayed).
@@ -357,20 +446,7 @@ class SessionRunner:
         if ts is None:
             return
 
-        bar_time = ts.time() if hasattr(ts, "time") else dtime(0, 0)
-        orb_end  = dtime(
-            self._cfg.strategy_config.market_open_hour,
-            self._cfg.strategy_config.market_open_minute,
-        )
-        # Advance orb_end by orb_minutes to get actual ORB close time
-        orb_end_minutes = (
-            self._cfg.strategy_config.market_open_hour * 60
-            + self._cfg.strategy_config.market_open_minute
-            + self._cfg.orb_minutes
-        )
-        orb_end = dtime(orb_end_minutes // 60, orb_end_minutes % 60)
-
-        if bar_time < orb_end:
+        if not self._is_post_orb(ts):
             return  # ORB window bar — cached but not dispatched to engine
 
         # 2. Indicators
@@ -385,7 +461,8 @@ class SessionRunner:
         if self._log:
             self._log.debug(
                 "engine_on_bar", symbol=symbol,
-                bar_time=str(bar_time), close=bar.get("close"),
+                bar_time=str(ts.time() if hasattr(ts, "time") else ts),
+                close=bar.get("close"),
             )
         self._engine.on_bar(symbol, bar, ts)
 

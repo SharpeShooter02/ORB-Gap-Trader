@@ -419,3 +419,82 @@ def test_pp_j_flatten_closes_orphaned_broker_position(mock_broker, tmp_store):
                for sym, side, qty in market_orders), (
         "flatten_all must close orphaned XRPT position via get_positions()"
     )
+
+
+# ── pp-k: resting entries are placed for ALL candidates (no placement cap) ────
+
+def test_pp_k_no_placement_buying_power_cap(mock_broker, tmp_store):
+    """Resting stop-limits consume no margin until triggered, so place_entry_order
+    must place them for every candidate even when combined notional far exceeds
+    buying power. Allocation happens at fill time, not placement."""
+    mock_broker.set_equity(1_000.0)  # buying_power = 4_000
+    mgr = _build_mgr(mock_broker, tmp_store, universe=["A", "B", "C"])
+
+    for sym in ["A", "B", "C"]:
+        # $10k notional each — well beyond the $4k buying power
+        oid = mgr.place_entry_order(
+            _make_entry(entry_price=100.0, shares=100), sym, +1, TRADE_DATE)
+        assert oid is not None, f"{sym} resting order must be placed"
+
+    assert len(mgr._resting_entries) == 3
+
+
+# ── pp-l: fill-time budget gate reverses an overflow fill ─────────────────────
+
+def test_pp_l_fill_time_budget_reverses_overflow(mock_broker, tmp_store):
+    """When simultaneous breaks would over-commit, the fill that overflows the
+    margin budget is reversed (flattened). Proactive cancel is disabled here to
+    isolate the reversal path (i.e. two orders already in flight at IB)."""
+    mgr = _build_mgr(mock_broker, tmp_store, universe=["A", "B"])
+    mgr._margin_budget = 600.0
+    mgr._margin_rate["A"] = 1.0
+    mgr._margin_rate["B"] = 1.0
+
+    oid_a = mgr.place_entry_order(_make_entry(entry_price=100.0, shares=6), "A", +1, TRADE_DATE)
+    oid_b = mgr.place_entry_order(_make_entry(entry_price=100.0, shares=6), "B", +1, TRADE_DATE)
+
+    # Simulate both already filled at IB before either proactive-cancel ran.
+    mgr._cancel_unaffordable_resting = lambda: None
+
+    reversals: list[tuple] = []
+    original = mock_broker.submit_market_order
+    def track(sym, side, qty, **kw):
+        reversals.append((sym, side, qty))
+        return original(sym, side, qty, **kw)
+    mock_broker.submit_market_order = track
+
+    mock_broker.fire_fill_watcher(oid_a, qty=6, price=100.0)  # 600 ≤ 600 → accepted
+    mock_broker.fire_fill_watcher(oid_b, qty=6, price=100.0)  # 1200 > 600 → reversed
+
+    assert mgr._positions["A"].status == "open"
+    assert "B" not in mgr._positions
+    assert any(sym == "B" and side == "sell" for sym, side, qty in reversals), (
+        "overflow fill B must be reversed with a market sell"
+    )
+
+
+# ── pp-m: proactive cancel removes resting orders that no longer fit ──────────
+
+def test_pp_m_proactive_cancel_of_unaffordable_resting(mock_broker, tmp_store):
+    """After an accepted fill consumes the budget, resting orders that no longer
+    fit are cancelled so they never trigger (avoids fill-then-reverse churn)."""
+    mgr = _build_mgr(mock_broker, tmp_store, universe=["A", "B"])
+    mgr._margin_budget = 600.0
+    mgr._margin_rate["A"] = 1.0
+    mgr._margin_rate["B"] = 1.0
+
+    oid_a = mgr.place_entry_order(_make_entry(entry_price=100.0, shares=6), "A", +1, TRADE_DATE)
+    oid_b = mgr.place_entry_order(_make_entry(entry_price=100.0, shares=6), "B", +1, TRADE_DATE)
+
+    cancels: list[str] = []
+    original = mock_broker.cancel_order
+    def track(oid, **kw):
+        cancels.append(oid)
+        return original(oid, **kw)
+    mock_broker.cancel_order = track
+
+    mock_broker.fire_fill_watcher(oid_a, qty=6, price=100.0)  # consumes full budget
+
+    assert mgr._positions["A"].status == "open"
+    assert "B" not in mgr._resting_entries, "B must be proactively cancelled"
+    assert oid_b in cancels

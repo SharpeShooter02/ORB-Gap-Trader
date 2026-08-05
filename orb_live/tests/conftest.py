@@ -117,6 +117,10 @@ class MockBroker:
         self._order_error_handlers = getattr(self, "_order_error_handlers", [])
         self._order_error_handlers.append(callback)
 
+    def reconnect(self, max_attempts: int = 5, base_delay: float = 2.0) -> bool:
+        self.reconnect_calls = getattr(self, "reconnect_calls", 0) + 1
+        return getattr(self, "_reconnect_ok", True)
+
     def fire_order_error(self, order_id, code=201, message="insufficient margin", symbol=None):
         for cb in getattr(self, "_order_error_handlers", []):
             cb(str(order_id), code, message, symbol)

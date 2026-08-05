@@ -273,6 +273,20 @@ def _run_daemon(
             last_run_date = session_date
         except SystemExit:
             break
+        except ConnectionError as exc:
+            # A socket drop escaped the session's in-place reconnect. Reconnect
+            # and let the loop re-run the SAME day (last_run_date not set, and
+            # next_market_day returns today until 16:00 ET) so trading resumes.
+            _log.critical("daemon_session_disconnect",
+                          session_date=str(session_date), error=str(exc))
+            if runner.reconnect_broker():
+                _log.warning("daemon_reconnected_resuming_day",
+                             session_date=str(session_date))
+                _sleep_fn(min(_sleep_interval, 5.0))
+            else:
+                _log.critical("daemon_reconnect_failed_retrying",
+                              session_date=str(session_date))
+                _sleep_fn(min(_sleep_interval, 60.0))
 
 
 def main() -> None:

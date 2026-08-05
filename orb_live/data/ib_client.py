@@ -159,6 +159,7 @@ class IBClient(BrokerClient):
         self._streams:        dict[str, object]       = {}
         self._bar_aggregators: dict[str, BarAggregator] = {}
         self._bar_callback:   Optional[Callable]      = None
+        self._entry_callback: Optional[Callable]      = None
         self._min_tick_cache: dict[str, float]        = {}
         self._market_data_type     = int(os.getenv("IB_MARKET_DATA_TYPE", "1"))
         self._allow_delayed_data   = os.getenv("IB_ALLOW_DELAYED_DATA", "").lower() in ("1", "true")
@@ -217,6 +218,35 @@ class IBClient(BrokerClient):
 
     def is_connected(self) -> bool:
         return self._ib.isConnected()
+
+    def reconnect(self, max_attempts: int = 5, base_delay: float = 2.0) -> bool:
+        """Re-establish the IB socket after a drop, with exponential backoff.
+
+        Cleans up the old connection's event handlers first (disconnect) so a
+        fresh connect() doesn't double-register them, then reconnects. Returns
+        True once connected, False if every attempt fails. Blocks — call on the
+        main thread only (never inside an event callback).
+        """
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self.disconnect()   # safe if already down; removes stale handlers
+            except Exception:
+                pass
+            try:
+                self.connect()
+                if self.is_connected():
+                    if self._log:
+                        self._log.warning("ib_reconnected", attempt=attempt)
+                    return True
+            except Exception as exc:
+                if self._log:
+                    self._log.warning("ib_reconnect_failed", attempt=attempt,
+                                      max_attempts=max_attempts, error=str(exc))
+            if attempt < max_attempts:
+                time.sleep(base_delay * (2 ** (attempt - 1)))
+        if self._log:
+            self._log.critical("ib_reconnect_exhausted", attempts=max_attempts)
+        return False
 
     # ── Account ───────────────────────────────────────────────────────────────
 
@@ -477,11 +507,22 @@ class IBClient(BrokerClient):
 
         Buy → round up  (limit stays ≥ reference, remains immediately fillable).
         Sell → round down (limit stays ≤ reference).
+
+        US sub-penny rule: orders for stocks priced ≥ $1.00 must be in $0.01
+        increments. IB's contract minTick is often finer (0.0001), and rounding
+        to that raw tick yields a sub-penny price IB rejects with Error 110, so
+        clamp the effective tick to a penny at/above $1. Sub-$1 names keep their
+        finer tick (where sub-penny pricing is actually allowed).
         """
+        if price >= 1.0 and 0.0 < tick < 0.01:
+            tick = 0.01
         if tick <= 0:
             return price
         mult = price / tick
-        return (math.ceil(mult) * tick) if side == "buy" else (math.floor(mult) * tick)
+        rounded = (math.ceil(mult) * tick) if side == "buy" else (math.floor(mult) * tick)
+        # Kill float artifacts (e.g. 15.440000000000001) so the wire value is clean.
+        # 6 dp preserves any realistic equity tick (down to 0.0001) exactly.
+        return round(rounded, 6)
 
     # ── Orders ────────────────────────────────────────────────────────────────
 
@@ -1306,7 +1347,26 @@ class IBClient(BrokerClient):
 
     # ── Streaming (Part 4) ────────────────────────────────────────────────────
 
-    def subscribe_bars(self, symbols: list[str], callback: Callable) -> None:
+    @staticmethod
+    def _rt_bar_to_dict(symbol: str, rt) -> dict:
+        """Normalize an ib_async RealTimeBar into the standard bar dict."""
+        _open = getattr(rt, "open_", None)
+        return {
+            "symbol":    symbol,
+            "timestamp": rt.time,
+            "open":      float(_open if _open is not None else rt.open),
+            "high":      float(rt.high),
+            "low":       float(rt.low),
+            "close":     float(rt.close),
+            "volume":    float(rt.volume),
+        }
+
+    def subscribe_bars(
+        self,
+        symbols: list[str],
+        callback: Callable,
+        entry_callback: Optional[Callable] = None,
+    ) -> None:
         """
         Stream 1-minute bars for the given symbols.
 
@@ -1316,11 +1376,18 @@ class IBClient(BrokerClient):
 
         callback signature: fn(bar: dict) where bar has keys:
             symbol, timestamp, open, high, low, close, volume
+
+        entry_callback (optional): fired on EVERY 5-second bar with the same
+        dict shape (timestamp is the 5-sec bar time). Used for low-latency
+        breakout entry detection so a boundary touch is acted on within ~5s
+        instead of waiting up to ~60s for the aggregated 1-min bar. The 1-min
+        callback still drives indicators/exits and remains the entry fallback.
         """
         if not self.is_connected():
             self.connect()
 
-        self._bar_callback = callback
+        self._bar_callback   = callback
+        self._entry_callback = entry_callback
 
         for sym in symbols:
             if sym in self._streams:
@@ -1349,7 +1416,22 @@ class IBClient(BrokerClient):
                     if not (hasNewBar and bars):
                         return
                     self._last_event_time = time.time()
-                    completed = self._bar_aggregators[symbol].add_5sec_bar(bars[-1])
+                    rt = bars[-1]
+
+                    # Low-latency entry path: hand the raw 5-sec bar to the
+                    # entry detector before aggregating, so a boundary touch is
+                    # acted on this tick rather than at minute close.
+                    if self._entry_callback:
+                        try:
+                            self._entry_callback(self._rt_bar_to_dict(symbol, rt))
+                        except Exception as exc:
+                            if self._log:
+                                self._log.error(
+                                    "entry_callback_error",
+                                    symbol=symbol, error=str(exc),
+                                )
+
+                    completed = self._bar_aggregators[symbol].add_5sec_bar(rt)
                     if completed and self._bar_callback:
                         try:
                             self._bar_callback(completed)
@@ -1390,7 +1472,8 @@ class IBClient(BrokerClient):
 
         self._streams.clear()
         self._bar_aggregators.clear()
-        self._bar_callback = None
+        self._bar_callback   = None
+        self._entry_callback = None
 
     def sleep(self, seconds: float) -> None:
         self._ib.sleep(seconds)

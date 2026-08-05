@@ -74,9 +74,13 @@ class _StubBarRouter:
         self.subscribed = []
         self.unsubscribed = False
         self._listeners = []
+        self._entry_listeners = []
 
     def register_listener(self, fn):
         self._listeners.append(fn)
+
+    def register_entry_listener(self, fn):
+        self._entry_listeners.append(fn)
 
     def subscribe(self, symbols):
         self.subscribed.extend(symbols)
@@ -89,6 +93,10 @@ class _StubBarRouter:
 
     def push_bar(self, symbol, bar):
         for fn in self._listeners:
+            fn(symbol, bar)
+
+    def push_entry_bar(self, symbol, bar):
+        for fn in self._entry_listeners:
             fn(symbol, bar)
 
 
@@ -471,6 +479,7 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
     ind.seed_from_orb_bars(orb_df)
     indicators_store["TQQQ"] = ind
 
+    from orb_live.core.logger import get_logger
     runner = SessionRunner(
         config=cfg, broker=mock_broker, state_store=tmp_store,
         bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
@@ -479,6 +488,7 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
         indicators_store=indicators_store,
         underlying_store=SimpleNamespace(),
         clock=_StubClock(), _sleep=lambda _: None,
+        logger=get_logger(__name__),  # exercise the debug-log branch (bar_time)
     )
 
     # Post-ORB breakout bar (10:05 > orb_end=10:00): close=102 > orb_high=101 > ema≈100
@@ -491,6 +501,76 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
     assert mock_broker._orders, (
         "_on_bar_dispatch breakout must place an order in the broker"
     )
+
+
+def test_k2_entry_path_places_order_on_5sec_breakout(mock_broker, tmp_store):
+    """The 5-sec entry path (_on_entry_bar_dispatch) must trigger a breakout and
+    place an order WITHOUT any 1-min bar being dispatched — proving entry no
+    longer waits for minute close. A pre-ORB 5-sec bar must be ignored."""
+    from orb_live.config.live_config import load_live_config
+    from orb_live.execution.indicators import RollingIndicators
+    from orb_live.execution.order_policy import MarketableLimitPolicy
+    from orb_live.execution.position_manager import LivePositionManager
+    from orb_live.execution.risk_gate import RiskGate
+    from orb_live.runner.session_runner import SessionRunner
+    from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
+
+    cfg  = load_live_config()
+    scfg = cfg.strategy_config
+
+    exc = SimpleNamespace(
+        entry_slippage_bps=10, stop_order_type="market",
+        session_kill_loss_pct=0.03, max_concurrent_positions=0,
+        max_gross_exposure_pct=2.0, max_position_pct=0.50,
+    )
+    policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
+    gate   = RiskGate(exc, tmp_store, mock_broker)
+    gate.session_start(100_000.0, TDATE)
+    indicators_store: dict = {}
+
+    mgr = LivePositionManager(
+        broker=mock_broker, policy=policy, state_store=tmp_store,
+        risk_gate=gate, indicators_store=indicators_store, config=scfg,
+    )
+    engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
+    engine.new_session(TDATE)
+
+    orb = _minimal_orb(high=101.0, low=99.0)
+    p2  = _make_p2("TQQQ", orb=orb)
+    engine.on_orb_complete("TQQQ", p2, None)
+
+    ind = RollingIndicators("TQQQ", scfg)
+    orb_df = pd.DataFrame(
+        [{"high": 101.0, "low": 99.0, "close": 100.0}],
+        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
+    )
+    ind.seed_from_orb_bars(orb_df)
+    indicators_store["TQQQ"] = ind
+
+    runner = SessionRunner(
+        config=cfg, broker=mock_broker, state_store=tmp_store,
+        bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
+        pre_market_job=_StubPreMarket(), strategy_engine=engine,
+        position_manager=mgr, risk_gate=gate,
+        indicators_store=indicators_store,
+        underlying_store=SimpleNamespace(),
+        clock=_StubClock(), _sleep=lambda _: None,
+    )
+
+    # Pre-ORB 5-sec bar (09:59:55 < 10:00) that touches the boundary → ignored
+    early = _bar(_et(9, 59).replace(second=55), close=102.0, hi=103.0, lo=101.5)
+    runner._on_entry_bar_dispatch("TQQQ", early)
+    assert engine.get_state("TQQQ") == SymbolState.ORB_COMPLETE
+    assert not mock_broker._orders
+
+    # Post-ORB 5-sec bar (10:00:05) touching the boundary → entry fires now
+    tick = _bar(_et(10, 0).replace(second=5), close=102.0, hi=103.0, lo=101.5)
+    runner._on_entry_bar_dispatch("TQQQ", tick)
+
+    assert engine.get_state("TQQQ") == SymbolState.IN_POSITION, (
+        "5-sec entry path must trigger breakout → IN_POSITION without a 1-min bar"
+    )
+    assert mock_broker._orders
 
     # breakout_signal row must be written
     from orb_live.core.state_store import breakout_signal as bs_table
@@ -644,3 +724,77 @@ def test_m_run_eod_flattens_without_post_close_sleep(mock_broker, tmp_store):
 
     assert flattened == ["eod_sweep"]
     assert sleeps == []          # no 30s post-close sleep anymore
+
+
+# ── n. use_resting_entries flag: place at ORB close, no reactive bar-watch ────
+
+def test_n_resting_entries_flag_places_order_and_skips_bar_watch(mock_broker, tmp_store):
+    """With use_resting_entries=True, on_orb_complete places a resting stop-limit
+    and moves the symbol to RESTING — the reactive on_bar entry path must not
+    fire (no double entry)."""
+    from orb_live.runner.strategy_engine import SymbolState
+
+    engine, mgr, _ind_store, cfg = _build_engine(mock_broker, tmp_store)
+    cfg.use_resting_entries = True
+    engine.new_session(TDATE)
+
+    p2 = _make_p2("TQQQ")   # is_candidate, size_mult=1.0, gap_direction=1, orb set
+    orb_df = pd.DataFrame(
+        [{"high": 101.0, "low": 99.0, "close": 100.5}],
+        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
+    )
+    engine.on_orb_complete("TQQQ", p2, orb_df)
+
+    assert engine.get_state("TQQQ") == SymbolState.RESTING
+    assert "TQQQ" in mgr._resting_entries          # resting order placed at 10:00
+
+    # A breakout bar must NOT open a position via the reactive path.
+    engine.on_bar("TQQQ", _bar(_et(10, 5), close=105.0), _et(10, 5))
+    assert "TQQQ" not in mgr._positions
+
+
+# ── connection resilience ─────────────────────────────────────────────────────
+
+def _build_runner_with_sleep(mock_broker, tmp_store, sleep_fn):
+    from orb_live.runner.session_runner import SessionRunner
+    engine, mgr, ind_store, cfg = _build_engine(mock_broker, tmp_store)
+    runner = SessionRunner(
+        config=cfg, broker=mock_broker, state_store=tmp_store,
+        bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
+        pre_market_job=_StubPreMarket(), strategy_engine=engine,
+        position_manager=mgr, risk_gate=SimpleNamespace(),
+        indicators_store=ind_store, underlying_store=SimpleNamespace(),
+        clock=_ClockAt(_et(10, 5)), _sleep=sleep_fn,
+    )
+    return runner
+
+
+def test_resilient_sleep_reconnects_and_resumes(mock_broker, tmp_store):
+    """A socket drop mid-sleep must reconnect + re-subscribe and finish the
+    wait in place — not crash the session."""
+    calls = {"n": 0}
+    def flaky_sleep(_secs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("Socket disconnect")   # drop on first wait
+
+    runner = _build_runner_with_sleep(mock_broker, tmp_store, flaky_sleep)
+    runner._watched = ["TQQQ", "SOXL"]
+
+    runner._sleep(1.0)   # must NOT raise
+
+    assert mock_broker.reconnect_calls == 1          # reconnected once
+    assert calls["n"] == 2                           # resumed the wait after reconnect
+    assert runner._router.subscribed[-2:] == ["TQQQ", "SOXL"]  # bars re-subscribed
+
+
+def test_resilient_sleep_reraises_when_reconnect_fails(mock_broker, tmp_store):
+    """If the broker can't reconnect, the disconnect is surfaced (to the daemon
+    backstop) rather than silently swallowed."""
+    mock_broker._reconnect_ok = False
+    def always_drops(_secs):
+        raise ConnectionError("Socket disconnect")
+
+    runner = _build_runner_with_sleep(mock_broker, tmp_store, always_drops)
+    with pytest.raises(ConnectionError):
+        runner._sleep(1.0)

@@ -478,6 +478,37 @@ def test_n_flatten_all_closes_all_positions(mock_broker, tmp_store):
     assert pos2.status == "closed"
 
 
+def test_n_flatten_records_real_exit_price_not_zero(mock_broker, tmp_store):
+    """Regression: an EOD/shutdown flatten passes ref_price=None. The recorded
+    exit must be a real price (resolved from the live quote), NOT 0 — a 0 exit
+    booked dollar_pnl = -(entry notional) and corrupted the daily report."""
+    from orb_live.core.state_store import closed_trades
+
+    mgr = _build_mgr(mock_broker, tmp_store)
+    mock_broker.set_quote(bid=99.90, ask=100.10)   # mid = 100.00
+
+    pos = mgr.open_position(_make_entry(entry_price=100.0, shares=10),
+                            SYMBOL, +1, TRADE_DATE)
+    assert pos is not None
+    entry = pos.actual_entry_price
+
+    # Sell into a lower quote so the exit resolves to a real (non-zero) price.
+    mock_broker.set_quote(bid=98.90, ask=99.10)
+    mgr.flatten_all("sigint")
+
+    with tmp_store.conn() as c:
+        rows = c.execute(closed_trades.select()).mappings().all()
+    row = dict(rows[-1])
+
+    exit_px = row["exit_price"]
+    assert exit_px is not None and exit_px > 0, \
+        f"exit price must be real, not 0, got {exit_px}"
+    assert row["dollar_pnl"] != pytest.approx(-entry * 10), \
+        "dollar_pnl must not be the entry notional (the 0-exit bug)"
+    # P&L must be consistent with the recorded exit price, not fabricated.
+    assert row["dollar_pnl"] == pytest.approx((exit_px - entry) * 10, abs=0.01)
+
+
 # ── n2. flatten_all must not double-exit a still-settling position ────────────
 
 def test_n2_flatten_no_double_exit_on_settling_position(mock_broker, tmp_store):

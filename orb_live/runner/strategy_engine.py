@@ -35,6 +35,7 @@ class SymbolState(str, Enum):
     ORB_COMPLETE      = "orb_complete"
     IN_POSITION       = "in_position"
     EXITED_OR_SKIPPED = "exited_or_skipped"
+    RESTING           = "resting"  # pre-placed stop-limit resting; no bar-watch entry
 
 
 class StrategyEngine:
@@ -110,12 +111,56 @@ class StrategyEngine:
                 self._log.info("orb_invalid", symbol=symbol)
             return
 
+        # Pre-placed mode: rest a stop-limit at the ORB boundary now instead of
+        # watching bars for the break. Entry fills arrive via IB fill events.
+        if getattr(self._cfg, "use_resting_entries", False):
+            self._place_resting_entry(symbol, p2_result, orb_bars_df)
+            self._states[symbol] = SymbolState.RESTING
+            return
+
         self._states[symbol] = SymbolState.ORB_COMPLETE
         self._p2[symbol] = p2_result
         if self._log:
             self._log.info(
                 "watching_for_breakout", symbol=symbol,
                 orb_high=p2_result.orb["high"], orb_low=p2_result.orb["low"],
+            )
+
+    def _place_resting_entry(self, symbol: str, p2: "Phase2Result", orb_bars_df) -> None:
+        """Compute the boundary entry and submit a resting stop-limit for it.
+
+        Called once per candidate at 10:00 when use_resting_entries is on. The
+        stop trigger is the ORB boundary (entry_at_boundary sizing); the order
+        rests at IB and fills the instant price crosses. Buying-power overload
+        from simultaneous breaks is resolved at fill time in position_manager.
+        """
+        scfg = self._cfg.strategy_config
+        if orb_bars_df is not None and not orb_bars_df.empty:
+            bar_series = orb_bars_df.iloc[-1]
+        else:
+            ref = p2.orb["high"] if p2.gap_direction == 1 else p2.orb["low"]
+            bar_series = pd.Series(
+                {"high": p2.orb["high"], "low": p2.orb["low"], "close": ref}
+            )
+        current_equity = float(self._broker.get_account().get("equity", 100_000.0))
+        entry = compute_entry(
+            bar_series, p2.orb, p2.gap_direction, scfg,
+            current_equity=current_equity, symbol=symbol,
+            tp1_mult_override=p2.tp1_mult, tp2_mult_override=p2.tp2_mult,
+            size_mult=p2.size_mult, v1_base_notional=self._v1_base_notional or None,
+        )
+        if entry.get("shares", 0) == 0:
+            if self._log:
+                self._log.info("resting_zero_shares", symbol=symbol)
+            return
+        order_id = self._mgr.place_entry_order(
+            entry=entry, symbol=symbol,
+            direction=p2.gap_direction, session_date=self._trade_date,
+        )
+        if self._log:
+            self._log.info(
+                "resting_entry_placed", symbol=symbol, order_id=order_id,
+                shares=entry["shares"], boundary=round(entry["entry_price"], 4),
             )
 
     def get_state(self, symbol: str) -> SymbolState:

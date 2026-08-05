@@ -22,6 +22,7 @@ TDATE = date(2026, 7, 3)   # Independence Day eve — typical half day
 
 class _StubRouter:
     def register_listener(self, fn): pass
+    def register_entry_listener(self, fn): pass
     def subscribe(self, symbols): pass
     def unsubscribe(self): pass
 

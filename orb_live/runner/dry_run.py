@@ -122,6 +122,12 @@ class DryRunBroker:
     def register_order_error_handler(self, callback) -> None:
         return None
 
+    def reconnect(self, max_attempts: int = 5, base_delay: float = 2.0) -> bool:
+        real = getattr(self._real, "reconnect", None)
+        if real is not None:
+            return bool(real(max_attempts=max_attempts, base_delay=base_delay))
+        return True
+
     def get_position(self, symbol: str) -> Optional[dict]:
         return self._positions.get(symbol)
 
@@ -142,8 +148,8 @@ class DryRunBroker:
     def get_asset(self, symbol: str) -> dict:
         return self._real.get_asset(symbol)
 
-    def subscribe_bars(self, symbols, callback):
-        return self._real.subscribe_bars(symbols, callback)
+    def subscribe_bars(self, symbols, callback, entry_callback=None):
+        return self._real.subscribe_bars(symbols, callback, entry_callback)
 
     # ── Internal ───────────────────────────────────────────────────────────────
 

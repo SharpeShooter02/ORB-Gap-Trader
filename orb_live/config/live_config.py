@@ -203,6 +203,15 @@ class LiveConfig:
 
     entry_slippage_bps:      int   = 10
 
+    # Entry-limit room as a fraction of the ORB range. Price tends to move fast
+    # on a 30-min ORB break, so the marketable-limit entry is placed at
+    # boundary ± (entry_buffer_orb_frac × orb_range) rather than a fixed bps of
+    # price — this auto-scales with each day's volatility and bounds the R:R
+    # cost of slippage. When > 0 it supersedes entry_slippage_bps for entries.
+    # 0.35 → fills unless price runs >35% of the ORB range past the boundary
+    # (realized R:R ≈ 1.50 vs the 2.67 boundary-fill backtest).
+    entry_buffer_orb_frac:   float = 0.35
+
     max_gross_exposure_pct:  float = 2.0
     max_position_pct:        float = 0.50
 
@@ -234,6 +243,14 @@ class LiveConfig:
     # books, and IB rejects market orders outside RTH — flattening after 16:00
     # would leave positions unfilled overnight. 60s → flatten at ~15:59 ET.
     eod_flatten_lead_secs: int = 60
+
+    # Entry mechanism. False (default) = reactive: detect the ORB break on a
+    # closed 1-min bar, then place a limit at the boundary. True = pre-placed:
+    # rest a stop-limit at each candidate's ORB boundary at 10:00 so it fills
+    # the instant price crosses. Resting orders are placed for ALL candidates
+    # (no placement cap); buying-power overload is allocated first-come-first-
+    # served at fill time (see LivePositionManager._on_resting_entry_fill).
+    use_resting_entries: bool = False
 
     # ── Storage ───────────────────────────────────────────────────────────────
     data_dir:            Path = field(default_factory=lambda: _DEFAULT_DATA_DIR)

@@ -411,7 +411,8 @@ class LivePositionManager:
         submitted_at = datetime.now(UTC)
         try:
             limit_price = self._policy.compute_entry_limit(
-                side, symbol, entry["entry_price"]
+                side, symbol, entry["entry_price"],
+                orb_range=entry.get("orb_range"),
             )
             bracket = self._broker.submit_bracket_order(
                 symbol=symbol,
@@ -1020,23 +1021,11 @@ class LivePositionManager:
                 self._log.warning("resting_entry_blocked_duplicate", symbol=symbol)
             return None
 
-        # Buying power check — IB reserves margin against resting stop-limits
-        # immediately on submission (leveraged ETFs consume ~100% of notional).
-        _bp_acct = self._broker.get_account()
-        buying_power = float(_bp_acct.get("buying_power", 0))
-        new_cost = entry["entry_price"] * entry["shares"]
-        resting_reserved = self._resting_reserved_bp()
-        if resting_reserved + new_cost > buying_power:
-            if self._log:
-                self._log.warning(
-                    "resting_entry_blocked_insufficient_buying_power",
-                    symbol=symbol,
-                    new_cost=round(new_cost, 2),
-                    resting_reserved=round(resting_reserved, 2),
-                    buying_power=round(buying_power, 2),
-                )
-            return None
-
+        # No placement-time buying-power cap: resting stop-limits consume no
+        # margin until they trigger, so we place them for ALL candidates and let
+        # whichever actually break claim buying power first-come-first-served at
+        # fill time (_on_resting_entry_fill). This avoids betting in advance on
+        # which candidates will break.
         side = "buy" if direction == 1 else "sell"
         try:
             limit_price = self._policy.compute_entry_limit(side, symbol, entry["entry_price"])
@@ -1126,6 +1115,17 @@ class LivePositionManager:
             ok, gate_reason = False, f"gate_exception:{exc}"
             if self._log:
                 self._log.warning("resting_fill_gate_exception", symbol=symbol, exc=str(exc))
+
+        # Margin-budget allocation at fill time. Fills are processed one at a
+        # time (single-threaded loop), so _committed_margin() is current for each
+        # one — the breaks that arrive first claim buying power until the budget
+        # is full; the overflow fill is reversed below. This is where a
+        # buying-power overload from simultaneous breaks is handled.
+        if ok and self._margin_budget is not None:
+            rate       = self._margin_rate.get(symbol, 1.0)
+            est_margin = rate * fill_price * fill_qty
+            if self._committed_margin() + est_margin > self._margin_budget:
+                ok, gate_reason = False, "margin_budget"
 
         if not ok or self._gate.is_session_killed():
             exit_side = "sell" if direction == 1 else "buy"
@@ -1217,6 +1217,31 @@ class LivePositionManager:
 
         self._positions[symbol] = pos
         self._register_fill_watchers(symbol, pos)
+
+        # This fill consumed budget — proactively cancel resting orders that no
+        # longer fit, so they never trigger (avoids a fill-then-reverse round
+        # trip for the losers). Simultaneous breaks are still caught by the
+        # fill-time gate above.
+        self._cancel_unaffordable_resting()
+
+    def _cancel_unaffordable_resting(self) -> None:
+        """Cancel resting entries whose worst-case margin no longer fits the
+        remaining budget after the currently-committed positions."""
+        if self._margin_budget is None:
+            return
+        remaining = self._margin_budget - self._committed_margin()
+        for sym in list(self._resting_entries.keys()):
+            r = self._resting_entries.get(sym)
+            if r is None:
+                continue
+            rate = self._margin_rate.get(sym, 1.0)
+            est  = rate * r["entry"]["entry_price"] * r["entry"]["shares"]
+            if est > remaining:
+                if self.cancel_resting_entry(sym) and self._log:
+                    self._log.info(
+                        "resting_entry_cancelled_budget", symbol=sym,
+                        est_margin=round(est, 2), remaining=round(remaining, 2),
+                    )
 
     def cancel_resting_entry(self, symbol: str) -> bool:
         """Cancel a single pre-placed resting stop-limit entry.  Returns True if found."""
@@ -1803,6 +1828,53 @@ class LivePositionManager:
         self._gate.record_realized_pnl(pnl)
         return ref_price
 
+    def _resolve_exit_price(
+        self, symbol: str, pos: "Position", order_resp: Optional[dict] = None
+    ) -> float:
+        """Best-effort real exit price for a flatten with no ref_price.
+
+        Order of preference: the market order's actual fill (if already visible
+        via the broker's independently-updated trade table) → live quote mid →
+        broker position mark → the entry price (records ~0 P&L, an honest
+        'unknown' rather than a fabricated notional-sized loss). Never 0.
+        """
+        # 1. Actual fill, if the broker already surfaced it.
+        if order_resp:
+            oid = order_resp.get("id") or order_resp.get("order_id")
+            if oid is not None:
+                try:
+                    st = self._broker.get_order(str(oid))
+                    fp = float(st.get("filled_avg_price", 0) or 0)
+                    if st.get("status") in ("filled", "partially_filled") and fp > 0:
+                        return fp
+                except Exception:
+                    pass
+        # 2. Live quote mid (or last).
+        try:
+            q = self._broker.get_latest_quote(symbol)
+            bid = float(q.get("bid", 0) or 0)
+            ask = float(q.get("ask", 0) or 0)
+            if bid > 0 and ask > 0:
+                return (bid + ask) / 2.0
+            last = float(q.get("last", 0) or 0)
+            if last > 0:
+                return last
+        except Exception:
+            pass
+        # 3. Broker position mark.
+        try:
+            bp = self._broker.get_position(symbol) or {}
+            for k in ("market_price", "marketPrice", "mark"):
+                mp = float(bp.get(k, 0) or 0)
+                if mp > 0:
+                    return mp
+        except Exception:
+            pass
+        # 4. Last resort: entry price → ~0 realized P&L (honest 'unknown').
+        if self._log:
+            self._log.warning("exit_price_unresolved_using_entry", symbol=symbol)
+        return pos.actual_entry_price
+
     def _exit_all(
         self,
         pos: Position,
@@ -1857,14 +1929,20 @@ class LivePositionManager:
             self._store.close_position(symbol)
             return True
         submit_ok = True
+        exit_resp: Optional[dict] = None
         try:
-            self._broker.submit_market_order(symbol, side, exit_qty)
+            exit_resp = self._broker.submit_market_order(symbol, side, exit_qty)
         except Exception as exc:
             submit_ok = False
             if self._log:
                 self._log.critical("exit_all_failed", symbol=symbol, leg=leg, exc=str(exc))
 
-        avg_price = ref_price or 0.0
+        # Never record a 0 exit price: EOD/shutdown flattens pass ref_price=None,
+        # which previously booked the trade at 0 and produced a P&L equal to the
+        # entry notional. Resolve a real price (actual fill → live quote → mark →
+        # entry) so the daily report is correct.
+        avg_price = ref_price if (ref_price and ref_price > 0) \
+            else self._resolve_exit_price(symbol, pos, exit_resp)
         dollar_pnl, pnl_pct = self._trade_pnl(
             pos.actual_entry_price, avg_price, exit_qty, pos.direction
         )

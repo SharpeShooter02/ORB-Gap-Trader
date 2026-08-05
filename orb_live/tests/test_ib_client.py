@@ -1057,6 +1057,22 @@ class TestRoundToTick:
     def test_zero_tick_passthrough(self):
         assert self._r(26.603369999999998, 0.0, "buy") == pytest.approx(26.603369999999998)
 
+    def test_subpenny_tick_clamped_to_penny_above_1(self):
+        """IB reports minTick 0.0001 for some ETFs (e.g. ETHU), but orders ≥ $1
+        must be penny-conforming or IB rejects with Error 110. Rounding must
+        clamp to $0.01 — not produce a sub-penny like 15.4445."""
+        sell = self._r(15.44454, 0.0001, "sell")
+        buy  = self._r(15.80001, 0.0001, "buy")
+        assert sell == pytest.approx(15.44)
+        assert buy  == pytest.approx(15.81)
+        # both must be exact multiples of a penny
+        for p in (sell, buy):
+            assert round(p * 100) == pytest.approx(p * 100), f"{p} is sub-penny"
+
+    def test_subdollar_keeps_fine_tick(self):
+        """Below $1, sub-penny pricing IS allowed, so the fine tick is kept."""
+        assert self._r(0.44454, 0.0001, "sell") == pytest.approx(0.4445)
+
     def test_submitted_price_is_multiple_of_mintick(self):
         """submit_limit_order must round price so IB never sees a sub-tick value."""
         client = _client_with_asset("TQQQ", min_tick=0.01)
@@ -1745,6 +1761,40 @@ class TestSubscribeBars:
         # Aggregator must be created so the listener can service incoming bars
         assert "TQQQ" in client._bar_aggregators
         assert isinstance(client._bar_aggregators["TQQQ"], BarAggregator)
+
+    def test_entry_callback_fires_on_every_5sec_bar(self):
+        """The entry_callback must receive a bar dict on EVERY 5-sec bar, while
+        the 1-min callback only fires when a minute completes."""
+        class _FakeEvent:
+            def __init__(self): self.handlers = []
+            def __iadd__(self, fn): self.handlers.append(fn); return self
+
+        client = self._client()
+        mock_stream = MagicMock()
+        mock_stream.updateEvent = _FakeEvent()
+        client._ib.reqRealTimeBars.return_value = mock_stream
+
+        minute_bars: list = []
+        entry_bars:  list = []
+        client.subscribe_bars(
+            ["TQQQ"], callback=minute_bars.append,
+            entry_callback=entry_bars.append,
+        )
+        listener = mock_stream.updateEvent.handlers[0]
+
+        # Two 5-sec bars in the same minute → 2 entry callbacks, 0 minute bars
+        listener([_make_5sec_bar(_min(2026, 5, 19, 10, 0), high=101.0)], True)
+        listener([_make_5sec_bar(
+            _min(2026, 5, 19, 10, 0).replace(second=5), high=103.0)], True)
+        assert len(entry_bars) == 2
+        assert entry_bars[0]["symbol"] == "TQQQ"
+        assert entry_bars[1]["high"] == 103.0
+        assert minute_bars == []
+
+        # A bar in the next minute completes the first → 1 minute bar emitted
+        listener([_make_5sec_bar(_min(2026, 5, 19, 10, 1))], True)
+        assert len(entry_bars) == 3
+        assert len(minute_bars) == 1
 
 
 class TestStopBarsStream:

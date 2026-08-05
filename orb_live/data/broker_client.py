@@ -185,7 +185,12 @@ class BrokerClient(ABC):
     def register_fill_watcher(self, order_id: str, callback) -> None: ...
 
     @abstractmethod
-    def subscribe_bars(self, symbols: list[str], callback: Callable) -> None: ...
+    def subscribe_bars(
+        self,
+        symbols: list[str],
+        callback: Callable,
+        entry_callback: Optional[Callable] = None,
+    ) -> None: ...
 
     @abstractmethod
     def stop_bars_stream(self) -> None: ...

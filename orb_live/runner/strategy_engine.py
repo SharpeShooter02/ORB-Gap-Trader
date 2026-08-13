@@ -65,6 +65,7 @@ class StrategyEngine:
         self._broker           = broker
         self._log              = logger
         self._v1_base_notional = getattr(config, "v1_base_notional", 0.0)
+        self._base_notional_pct = getattr(config, "base_notional_pct", 0.0)
 
         self._states:     dict[str, SymbolState] = {}
         self._p2:         dict[str, "Phase2Result"] = {}
@@ -147,7 +148,7 @@ class StrategyEngine:
             bar_series, p2.orb, p2.gap_direction, scfg,
             current_equity=current_equity, symbol=symbol,
             tp1_mult_override=p2.tp1_mult, tp2_mult_override=p2.tp2_mult,
-            size_mult=p2.size_mult, v1_base_notional=self._v1_base_notional or None,
+            size_mult=p2.size_mult, v1_base_notional=self._base_notional(current_equity),
         )
         if entry.get("shares", 0) == 0:
             if self._log:
@@ -162,6 +163,14 @@ class StrategyEngine:
                 "resting_entry_placed", symbol=symbol, order_id=order_id,
                 shares=entry["shares"], boundary=round(entry["entry_price"], 4),
             )
+
+    def _base_notional(self, current_equity: float) -> Optional[float]:
+        """Per-unit sizing notional. base_notional_pct (fraction of live equity)
+        takes precedence so sizing compounds with the account; falls back to the
+        fixed v1_base_notional. Returns None if neither is usable."""
+        if self._base_notional_pct > 0 and current_equity > 0:
+            return self._base_notional_pct * current_equity
+        return self._v1_base_notional or None
 
     def get_state(self, symbol: str) -> SymbolState:
         return self._states.get(symbol, SymbolState.WAITING_FOR_ORB)
@@ -240,7 +249,7 @@ class StrategyEngine:
             tp1_mult_override=p2.tp1_mult,
             tp2_mult_override=p2.tp2_mult,
             size_mult=p2.size_mult,
-            v1_base_notional=self._v1_base_notional or None,
+            v1_base_notional=self._base_notional(current_equity),
         )
 
         if entry.get("shares", 0) == 0:

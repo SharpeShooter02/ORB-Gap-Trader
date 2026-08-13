@@ -76,6 +76,7 @@ class SessionRunner:
         self._session_date: Optional[date] = None
         self._phase1_results = []
         self._watched: list[str] = []   # symbols currently subscribed to bars
+        self._session_start_equity: Optional[float] = None  # captured at pre-market
 
         # Register bar dispatch with router. The 1-min listener drives cache,
         # indicators and exits (and is the entry fallback); the 5-sec entry
@@ -141,6 +142,7 @@ class SessionRunner:
     def run_session(self, session_date: date) -> None:
         """Run a complete session.  Installs SIGTERM/SIGINT handlers."""
         self._session_date = session_date
+        self._session_start_equity = None
         self._engine.new_session(session_date)
 
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -178,6 +180,21 @@ class SessionRunner:
 
     # ── Phase runners ──────────────────────────────────────────────────────────
 
+    def _fetch_start_equity(self, retries: int = 5, wait: float = 2.0):
+        """Return a positive account equity, or None if it never becomes valid.
+
+        get_account() returns 0.0 when the account download hasn't arrived. A 0
+        must never flow into sizing/risk/session_pnl, so retry (pumping the IB
+        loop via the raw sleep) before giving up.
+        """
+        equity = float(self._broker.get_account().get("equity", 0.0))
+        attempt = 0
+        while equity <= 0.0 and attempt < retries:
+            self._raw_sleep(wait)
+            equity = float(self._broker.get_account().get("equity", 0.0))
+            attempt += 1
+        return equity if equity > 0.0 else None
+
     def _run_pre_market(self, session_date: date) -> None:
         # Refresh underlying data and abort loudly if any are still stale.
         underlyings = {
@@ -192,7 +209,15 @@ class SessionRunner:
                 self._log.critical("underlying_refresh_failed", error=str(exc))
             raise
 
-        equity = float(self._broker.get_account().get("equity", 0.0))
+        # A 0/negative equity means the account download wasn't ready and
+        # get_account fell back — never trust it for sizing, the risk gate, or
+        # the session_pnl baseline. Retry, and if it stays invalid leave the
+        # baseline unset (EOD then records a flat session rather than a fake +$).
+        equity_val = self._fetch_start_equity()
+        equity = equity_val if equity_val is not None else 0.0
+        self._session_start_equity = equity_val
+        if equity_val is None and self._log:
+            self._log.critical("session_start_equity_unavailable", date=str(session_date))
         self._gate.session_start(equity, session_date)
         self._store.upsert_day_state(session_date, phase="pre_market")
 
@@ -392,8 +417,20 @@ class SessionRunner:
         self._mgr.flatten_all("eod_sweep")
         self._store.upsert_day_state(session_date, phase="closed")
 
-        equity = float(self._broker.get_account().get("equity", 0.0))
-        self._store.record_equity(session_date, equity, equity, 0.0)
+        # Real session P&L = end equity (post-flatten) − start equity (pre-market).
+        # IB's equity (NetLiquidation) already includes open-position marks, so the
+        # delta reflects realized session P&L. Fall back to a flat session if the
+        # start baseline is missing (e.g. EOD reached without a pre-market phase).
+        end_equity   = float(self._broker.get_account().get("equity", 0.0))
+        start_equity = (self._session_start_equity
+                        if self._session_start_equity is not None else end_equity)
+        session_pnl  = end_equity - start_equity
+        self._store.record_equity(session_date, start_equity, end_equity, session_pnl)
+        if self._log:
+            self._log.info("session_equity_recorded",
+                           start_equity=round(start_equity, 2),
+                           end_equity=round(end_equity, 2),
+                           session_pnl=round(session_pnl, 2))
 
         from orb_live.ops.reports import generate_daily_report
         generate_daily_report(self._store, session_date, logger=self._log)

@@ -16,6 +16,27 @@ ET = ZoneInfo("America/New_York")
 TDATE = date(2026, 1, 7)
 
 
+def test_phase2_tp1_mult_follows_config_not_hardcoded():
+    """Regression: phase-2 must set tp1_mult from cfg.tp1_target_multiple (2.0 =
+    2× ORB in v1). It was hardcoded to 1.0, which — because tp1_mult is passed to
+    compute_entry as an override — silently beat the config and cut every winner
+    to 1× ORB for weeks. Uses the REAL config, not a MagicMock strategy_config."""
+    from orb_live.config.live_config import load_live_config
+    from orb_live.signals.pre_market import PreMarketJob, Phase1Result
+
+    cfg = load_live_config()
+    job = PreMarketJob(cfg, MagicMock(), MagicMock(), MagicMock())
+    p1  = Phase1Result(symbol="NUGT", gap_abs=0.05, gap_direction=-1,
+                       prior_close=150.0, ps_filter_passed=True)
+    orb = {"high": 156.0, "low": 153.0, "midpoint": 154.5}
+
+    p2 = job._make_p2(p1, orb=orb, first_open=153.0, size_mult=1.0,
+                      preflight=None, is_candidate=True)
+
+    assert p2.tp1_mult == cfg.strategy_config.tp1_target_multiple
+    assert p2.tp1_mult == 2.0, "v1 TP1 must be 2× ORB range, not 1×"
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _make_bar_df(close: float, ts_hour: int = 9, ts_minute: int = 30) -> pd.DataFrame:

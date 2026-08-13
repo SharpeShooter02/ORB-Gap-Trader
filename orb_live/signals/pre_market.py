@@ -17,7 +17,8 @@ PHASE 2 (~10:01 ET, after ORB window closes):
   For each Phase 1 candidate:
     1. Compute opening range from the 9:30-10:00 intraday bars.
     2. Run pre-flight liquidity check.
-    3. Set size_mult = plan.multipliers[sym], tp1_mult=1.0, tp2_mult=0.0.
+    3. Set size_mult = plan.multipliers[sym]; tp1_mult from config
+       (tp1_target_multiple, 2.0 = 2× ORB in v1), tp2_mult=0.0.
   Returns list[Phase2Result] — only is_candidate=True symbols are watched.
 
 CRITICAL CONSTRAINT: every input to plan_session() is causal at 9:30 ET.
@@ -70,8 +71,8 @@ class Phase2Result:
     prior_close: float
     first_open: Optional[float]
     orb: Optional[dict]
-    tp1_mult: float              # always 1.0 in v1
-    tp2_mult: float              # always 0.0 in v1
+    tp1_mult: float              # v1: config tp1_target_multiple (2.0 = 2× ORB)
+    tp2_mult: float              # always 0.0 in v1 (TP1-only)
     rtg_val: Optional[float]     # always None in v1 (kept for interface compat)
     rtg_pct: Optional[float]     # always None in v1
     rtg_excluded: bool           # always False in v1
@@ -446,8 +447,12 @@ class PreMarketJob:
             prior_close=p1.prior_close,
             first_open=first_open,
             orb=orb,
-            tp1_mult=1.0,
-            tp2_mult=0.0,
+            # TP1 target = config tp1_target_multiple (2.0 = 2× ORB range in v1).
+            # Must NOT be hardcoded: it is passed to compute_entry as an override
+            # and so silently beats the config if wrong (was pinned to 1.0, which
+            # cut every winner to 1× ORB — half the intended target).
+            tp1_mult=self._cfg.strategy_config.tp1_target_multiple,
+            tp2_mult=0.0,   # v1 is TP1-only (exit_ratio_tp2=0); TP2 leg unused
             rtg_val=None,
             rtg_pct=None,
             rtg_excluded=False,

@@ -136,6 +136,28 @@ class TestGetAccount:
         assert acct["equity"] == 0.0
         assert acct["cash"]   == 0.0
 
+    def test_await_account_data_polls_until_ready(self):
+        """_await_account_data must pump the loop (ib.sleep) until accountValues
+        populates — the connect-time guard that prevents the 0.0-equity race."""
+        with patch("orb_live.data.ib_client.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.accountValues.side_effect = [[], [], ["ready"]]
+            MockIB.return_value = mock_ib
+            client = IBClient(paper=True)
+
+            assert client._await_account_data(timeout=5.0) is True
+            assert mock_ib.sleep.call_count == 2   # slept twice before data arrived
+
+    def test_await_account_data_times_out(self):
+        """If account data never arrives it returns False (does not hang)."""
+        with patch("orb_live.data.ib_client.IB") as MockIB:
+            mock_ib = MagicMock()
+            mock_ib.accountValues.return_value = []
+            MockIB.return_value = mock_ib
+            client = IBClient(paper=True)
+
+            assert client._await_account_data(timeout=0.5) is False   # 2 iterations
+
 
 # ── Positions ─────────────────────────────────────────────────────────────────
 

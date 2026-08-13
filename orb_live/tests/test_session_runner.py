@@ -726,6 +726,75 @@ def test_m_run_eod_flattens_without_post_close_sleep(mock_broker, tmp_store):
     assert sleeps == []          # no 30s post-close sleep anymore
 
 
+def test_base_notional_scales_with_equity(mock_broker, tmp_store):
+    """base_notional_pct sizes the per-unit notional as a fraction of live equity
+    (compounds with the account); falls back to the fixed value when unusable."""
+    from types import SimpleNamespace
+    from orb_live.runner.strategy_engine import StrategyEngine
+
+    cfg = SimpleNamespace(base_notional_pct=0.10, v1_base_notional=1000.0)
+    eng = StrategyEngine(None, cfg, tmp_store, mock_broker)
+
+    assert eng._base_notional(50_000.0) == pytest.approx(5_000.0)   # 10% of equity
+    assert eng._base_notional(0.0) == 1000.0                        # equity invalid → fixed
+
+
+def test_base_notional_fixed_when_pct_zero(mock_broker, tmp_store):
+    """base_notional_pct=0 keeps the fixed-dollar base regardless of equity."""
+    from types import SimpleNamespace
+    from orb_live.runner.strategy_engine import StrategyEngine
+
+    cfg = SimpleNamespace(base_notional_pct=0.0, v1_base_notional=1000.0)
+    eng = StrategyEngine(None, cfg, tmp_store, mock_broker)
+
+    assert eng._base_notional(50_000.0) == 1000.0
+
+
+def test_fetch_start_equity_retries_past_zero(mock_broker, tmp_store):
+    """A 0.0 equity read (account not ready) must be retried, not trusted."""
+    runner, _mgr, _sleeps = _build_runner_for_eod(
+        mock_broker, tmp_store, now=_et(8, 30), lead=60)
+    calls = {"n": 0}
+    def acct():
+        calls["n"] += 1
+        return {"equity": 0.0 if calls["n"] < 3 else 10_000.0}
+    mock_broker.get_account = acct
+
+    assert runner._fetch_start_equity() == pytest.approx(10_000.0)
+    assert calls["n"] == 3    # two zero reads, then a valid one
+
+
+def test_fetch_start_equity_none_when_always_zero(mock_broker, tmp_store):
+    """If equity never becomes valid, return None so the baseline stays unset
+    (EOD then records a flat session, not a fake +$equity spike)."""
+    runner, _mgr, _sleeps = _build_runner_for_eod(
+        mock_broker, tmp_store, now=_et(8, 30), lead=60)
+    mock_broker.get_account = lambda: {"equity": 0.0}
+
+    assert runner._fetch_start_equity(retries=3) is None
+
+
+def test_m_run_eod_records_real_session_pnl(mock_broker, tmp_store):
+    """_run_eod must record session_pnl = end_equity − start_equity (captured at
+    pre-market), not the old hardcoded 0 with start==end."""
+    from orb_live.core.state_store import equity_curve
+
+    runner, mgr, _sleeps = _build_runner_for_eod(
+        mock_broker, tmp_store, now=_et(15, 58), lead=120)
+    mgr.flatten_all = lambda reason: None
+
+    runner._session_start_equity = 10_000.0     # baseline captured at pre-market
+    mock_broker.set_equity(9_982.13)            # end equity after the day
+
+    runner._run_eod(TDATE)
+
+    with tmp_store.conn() as c:
+        row = dict(c.execute(equity_curve.select()).mappings().all()[-1])
+    assert row["start_equity"] == pytest.approx(10_000.0)
+    assert row["end_equity"]   == pytest.approx(9_982.13)
+    assert row["session_pnl"]  == pytest.approx(-17.87)
+
+
 # ── n. use_resting_entries flag: place at ORB close, no reactive bar-watch ────
 
 def test_n_resting_entries_flag_places_order_and_skips_bar_watch(mock_broker, tmp_store):

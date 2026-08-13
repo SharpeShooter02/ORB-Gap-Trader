@@ -145,19 +145,19 @@ def test_a_tp1_only_full_exit(mock_broker, tmp_store):
     v1 TP1-only: entry fires, TP1 consumes all shares, position closes immediately.
 
     ORB: high=101, low=99 (range=2), ema=100
-    v1 config: exit_ratio_tp1=1.0, tp1_target_multiple=1.0
+    v1 config: exit_ratio_tp1=1.0, tp1_target_multiple=2.0
     v1 sizing: shares = floor(1000 × 1.0 / 102) = 9
-    TP1 price = 102 + 2×1.0 = 104.0; tp1_shares=9, tp2_shares=0, tp3_shares=0
+    TP1 price = 102 + 2×2.0 = 106.0; tp1_shares=9, tp2_shares=0, tp3_shares=0
 
-    Bar 1: hi=105.0 ≥ TP1=104.0 → TP1 fires, all 9 shares exit, remaining=0
+    Bar 1: hi=106.5 ≥ TP1=106.0 → TP1 fires, all 9 shares exit, remaining=0
     → position closes immediately with exit_reason="TP1_ONLY"
     """
     orb = _orb(high=101.0, low=99.0, ema=100.0)
     mgr, engine, indicators_store, ind, scfg = _build_live_stack(
         tmp_store, mock_broker, tp3_ema_value=103.0
     )
-    # v1: tp1_mult=1.0 sets TP1 price = entry + 1×range; tp2_mult=0.0 unused
-    p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=1.0, tp2_mult=0.0)
+    # v1: tp1_mult=2.0 sets TP1 price = entry + 2×range; tp2_mult=0.0 unused
+    p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=2.0, tp2_mult=0.0)
     engine.on_orb_complete("TQQQ", p2, None)
 
     # Entry bar: close=102 > orb_high=101 AND > orb_ema=100 → breakout
@@ -178,8 +178,8 @@ def test_a_tp1_only_full_exit(mock_broker, tmp_store):
         mock_broker._orders[pos.tp1_order_id]["filled_qty"]       = str(pos.entry_shares)
         mock_broker._orders[pos.tp1_order_id]["filled_avg_price"] = str(pos.tp1_price)
 
-    # Bar 1: hi=105 ≥ TP1=104 → OCA TP1 confirmed filled → position closes
-    bar1 = _bar(_et(10, 2), close=104.5, hi=105.0, lo=103.5)
+    # Bar 1: hi=106.5 ≥ TP1=106 → OCA TP1 confirmed filled → position closes
+    bar1 = _bar(_et(10, 2), close=106.2, hi=106.5, lo=105.0)
     ind.on_bar(bar1)
     mgr.on_bar("TQQQ", bar1, _et(10, 2))
 

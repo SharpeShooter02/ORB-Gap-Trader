@@ -191,7 +191,12 @@ class LiveConfig:
     prior_session_filters: Dict[str, tuple] = field(default_factory=dict)
     direction_filters:     Dict[str, int]   = field(default_factory=lambda: dict(DIRECTION_FILTERS))
 
-    # v1 sizing: shares = floor(v1_base_notional × multiplier / entry_price)
+    # Sizing base unit. When base_notional_pct > 0 the per-unit notional is a
+    # fraction of live equity (10% here) so sizing compounds with the account;
+    # v1_base_notional is the fixed-dollar fallback when the pct is 0.
+    # Per-position notional = base × size_mult; total gross is capped at
+    # max_gross_exposure_pct × equity by the risk gate.
+    base_notional_pct: float = 0.10
     v1_base_notional: float = 1_000.0
     cap_units:        float = CAP_UNITS   # 20.0 → 200% cap
     ps_filter_k:      float = K_SIGMA     # 1.00

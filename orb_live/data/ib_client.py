@@ -195,12 +195,34 @@ class IBClient(BrokerClient):
         self._ib.reqMarketDataType(self._market_data_type)
         if not self._allow_delayed_data:
             self._validate_subscription()
+        # Account values download asynchronously after connect. Pump the event
+        # loop until they arrive so get_account() never races to its 0.0 fallback
+        # at session start (which would poison sizing, the risk gate, and the
+        # equity baseline). connect() is always on the main thread, so ib.sleep
+        # here is safe (unlike get_account, which may run inside a bar callback).
+        self._await_account_data()
         if self._log:
             self._log.info(
                 "ib_connected",
                 host=self._host, port=self._port,
                 client_id=self._client_id, paper=self._paper,
             )
+
+    def _await_account_data(self, timeout: float = 30.0) -> bool:
+        """Pump the event loop until accountValues() is populated, or timeout.
+
+        Returns True if account data arrived. MAIN-THREAD ONLY — uses ib.sleep
+        to advance the asyncio loop (time.sleep would block without letting the
+        account download complete). Iteration-capped so it can't busy-spin under
+        a mocked clock in tests.
+        """
+        for _ in range(max(1, int(timeout / 0.25))):
+            if self._ib.accountValues():
+                return True
+            self._ib.sleep(0.25)
+        if self._log:
+            self._log.critical("account_data_not_ready", timeout_s=timeout)
+        return False
 
     def disconnect(self) -> None:
         if self._streams:
@@ -260,6 +282,11 @@ class IBClient(BrokerClient):
             time.sleep(1)
 
         if not vals:
+            # Account data still not ready (connect()'s _await_account_data
+            # should have prevented this). Never return 0.0 silently — callers
+            # must be able to distinguish "no data" from a real zero balance.
+            if self._log:
+                self._log.critical("get_account_no_data_returning_zero")
             return {
                 "equity": 0.0, "cash": 0.0, "buying_power": 0.0,
                 "available_funds": 0.0,

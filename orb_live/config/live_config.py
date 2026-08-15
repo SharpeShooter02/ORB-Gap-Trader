@@ -11,15 +11,11 @@ Verification:
     → ~60 symbols
 """
 
-import datetime
 import logging
-import os
 import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
-
-import pandas as pd
 
 import orb_live  # noqa: F401 — triggers orb_live/__init__.py path setup
 
@@ -42,7 +38,6 @@ _OVERRIDES_FILE       = Path(__file__).parent / "overrides.yaml"
 _SIGMA_OVERRIDE_FILE  = Path(__file__).parent / "sigma_override.yaml"
 _DEFAULT_DATA_DIR     = Path(__file__).parent.parent / "data" / "underlyings"
 _DEFAULT_DB_PATH      = Path(__file__).parent.parent / "state" / "live.db"
-_SIGMA_RUNTIME_FILE   = Path(__file__).parent.parent / "data" / "sigma_runtime.yaml"
 
 _logger = logging.getLogger(__name__)
 
@@ -95,48 +90,6 @@ def _build_ps_filters(
         else:
             filters[sym] = (inst.underlying, threshold)
     return filters
-
-
-def _build_rolling_sigma_map(
-    instruments: dict[str, Instrument],
-    universe: list[str],
-    sigmas: dict[str, float],
-    data_dir: Path,
-) -> dict[str, float]:
-    """Compute rolling sigma from UL parquets; fall back to CSV seeds."""
-    all_uls = sorted({instruments[s].underlying for s in universe if s in instruments})
-    sigma_map: dict[str, float] = {}
-    for ul in all_uls:
-        path = data_dir / f"{ul}.parquet"
-        try:
-            if not path.exists():
-                raise FileNotFoundError
-            df     = pd.read_parquet(path)
-            closes = df["close"].dropna()
-            if len(closes) < 30:
-                raise ValueError(f"only {len(closes)} rows")
-            returns = closes.pct_change().dropna().abs()
-            sigma_map[ul] = float(returns.std())
-        except Exception as exc:
-            seed = sigmas.get(ul)
-            if seed is not None:
-                _logger.warning("rolling_sigma_fallback ul=%s reason=%s seed=%.6f", ul, exc, seed)
-                sigma_map[ul] = seed
-            else:
-                _logger.warning("rolling_sigma_no_seed ul=%s — ps_filter disabled for UL", ul, exc)
-    return sigma_map
-
-
-def _write_sigma_runtime(sigma_map: dict, path: Path) -> None:
-    payload = {
-        "last_computed": datetime.datetime.now(datetime.timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
-        "source": "rolling",
-        "sigmas": {ul: round(s, 6) for ul, s in sorted(sigma_map.items())},
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.dump(payload, default_flow_style=False, sort_keys=False))
 
 
 # ── v1 StrategyConfig ──────────────────────────────────────────────────────────
@@ -279,29 +232,23 @@ def _load_overrides() -> dict:
 
 def load_live_config(
     overrides: Optional[dict] = None,
-    use_rolling: bool = True,
+    use_rolling: bool = True,   # deprecated/ignored — see note below
 ) -> LiveConfig:
     """Build and return a LiveConfig instance sourced from v1.
 
-    use_rolling=True (default): recompute sigmas from UL parquets.
-    use_rolling=False: use sigma_master.csv seeds only (for tests).
+    Sigmas are loaded verbatim from the vendored strategy/data/sigma_master.csv
+    — the same long-history (multi-year) file the backtest uses, refreshed
+    out-of-band by scripts/refresh_sigma_master.py. Live NO LONGER computes a
+    rolling 30-day sigma at startup (that diverged 2–3× from the backtest for
+    some underlyings and silently changed PS-filter thresholds). Nothing is
+    written to sigma_runtime.yaml.
+
+    The `use_rolling` argument is retained only for call-site compatibility and
+    has no effect; every path now uses the CSV seeds.
     """
     instruments, sigmas_seed, universe = _load_v1_universe()
 
-    # Rolling sigma update
-    _env_flag = os.getenv("USE_ROLLING_SIGMAS", "1").strip().lower()
-    _rolling  = use_rolling and (_env_flag not in ("0", "false"))
-
-    if _rolling:
-        effective_sigma = _build_rolling_sigma_map(
-            instruments, universe, sigmas_seed, _DEFAULT_DATA_DIR
-        )
-        try:
-            _write_sigma_runtime(effective_sigma, _SIGMA_RUNTIME_FILE)
-        except Exception as exc:
-            _logger.warning("sigma_runtime_write_failed reason=%s", exc)
-    else:
-        effective_sigma = dict(sigmas_seed)
+    effective_sigma = dict(sigmas_seed)
 
     ps_filters = _build_ps_filters(
         instruments, effective_sigma, universe,

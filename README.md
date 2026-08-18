@@ -2,7 +2,7 @@
 
 Automated live execution of the Opening Range Breakout strategy across a
 universe of leveraged and inverse ETFs.  Uses Interactive Brokers (IBClient)
-for order routing and WebSocket bar streaming.
+for order routing and IB-native streaming (`reqRealTimeBars`, 5-sec bars).
 
 ## Architecture
 
@@ -13,7 +13,7 @@ orb_live/
 │   ├── clock.py      MarketClock — RTH detection, half-day schedule, effective_close()
 │   └── state_store.py  SQLite persistence (20 tables via SQLAlchemy Core)
 ├── data/
-│   ├── ib_client.py       IB Gateway REST + WebSocket wrapper (IBClient)
+│   ├── ib_client.py       IB Gateway wrapper (IBClient, ib_async) — 5-sec real-time bars
 │   └── underlying_data.py  Prior-session OHLCV via yfinance
 ├── signals/
 │   ├── pre_market.py  Phase 1 (gap scan + PS filter) + Phase 2 (RTG + preflight)
@@ -24,7 +24,7 @@ orb_live/
 │   ├── position_manager.py  TP1/TP2/TP3/stop/EOD exit management
 │   └── risk_gate.py       Session kill-switch + concurrent position limits
 ├── runner/
-│   ├── bar_router.py    WebSocket streaming + missed-bar replay + token refresh
+│   ├── bar_router.py    IB-native 5-sec bar streaming + missed-bar REST replay
 │   ├── strategy_engine.py  State machine: WAITING → ORB_COMPLETE → IN_POSITION
 │   └── session_runner.py   Top-level orchestrator (pre-market → trade → EOD)
 └── ops/
@@ -45,7 +45,7 @@ pip install -e .
 # 2. Start IB Gateway / TWS in paper-trading mode
 
 # 3. Run tests
-python -m pytest orb_live/tests/ -q   # 381 tests, ~3s
+python -m pytest orb_live/tests/ -q   # 453 tests, ~1s
 
 # 4. Start session
 python -m orb_live.runner.main --paper
@@ -56,9 +56,21 @@ curl http://localhost:8080/status | python -m json.tool
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for production VPS setup.
 
-## Bar Dispatch Order (load-bearing invariant)
+## Bar Dispatch (two paths)
 
-Within `SessionRunner._on_bar_dispatch`, bars are always processed in this order:
+The runner processes two bar streams from `BarRouter`, both fed by the same
+IB 5-sec `reqRealTimeBars` feed:
+
+**1. Entry path — `SessionRunner._on_entry_bar_dispatch` (every 5-sec bar).**
+Post-ORB 5-sec bars are forwarded straight to the strategy engine for breakout
+detection, so an entry fires the instant price crosses the ORB boundary rather
+than waiting for the 1-min bar to close. It deliberately touches nothing else
+(no cache/indicator/exit work). The first path to see the breakout flips the
+symbol to `IN_POSITION`; the other then no-ops via the engine's state guard, so
+running both is idempotent.
+
+**2. Main path — `SessionRunner._on_bar_dispatch` (aggregated 1-min bar).**
+Load-bearing order — do not reorder steps 2/3/4:
 
 ```
 1. bar_cache.add_bar(symbol, bar)         — accumulate ORB window
@@ -97,18 +109,18 @@ Live universe (58 symbols, drops BTFX + UBR as untradable/delisted).
 | ORB window | 30 min |
 | Gap filter | 2% move on underlying (GAP_THRESHOLD) |
 | PS filter k | 1.00σ (K_SIGMA) |
-| Entry trigger | Intrabar touch of ORB high/low (`entry_at_boundary=True`) — resting stop order at boundary |
-| Entry fill | ORB high (long) / ORB low (short) — no bar-close-based fill |
+| Entry trigger | ORB high/low crossed on a **5-sec** real-time bar (`entry_at_boundary=True`); reactive by default. Optional pre-placed resting stop-limit mode (`use_resting_entries=True`) |
+| Entry order | Marketable limit at `boundary ± (entry_buffer_orb_frac × ORB range)` — `entry_buffer_orb_frac=0.35`, auto-scales the fill room with each day's volatility (realized R:R ≈ 1.50 vs the 2.67 boundary-fill backtest) |
 | EMA breakout gate | **Disabled** (`require_ema_confirmation=False`) |
-| TP structure | TP1-only: 100% of position at **2× ORB range** from boundary entry |
+| TP structure | TP1-only: 100% of position, class-based target (`tp1_target_multiple_by_class`) — **C1 (crypto) 2× ORB**, **C2/C3 1× ORB** — from boundary entry |
 | Stop | midpoint of `orb_mid` and opposite ORB extreme (long: `(orb_mid + orb_low)/2`) |
-| EOD flatten | 16:00 (`eod_exit_hour=16`, `eod_exit_minute=0`) |
-| Base notional | $1,000 per trade (v1_base_notional) |
-| Units cap | 20.0× (CAP_UNITS, 200% max gross exposure) |
+| EOD flatten | 16:00 (`eod_exit_hour=16`, `eod_exit_minute=0`), lead `eod_flatten_lead_secs=60` |
+| Base notional | **10% of live equity** per unit (`base_notional_pct=0.10`); falls back to fixed `v1_base_notional=$1,000` when equity is unavailable |
+| Units cap | 20.0× (CAP_UNITS); gross exposure capped at `max_gross_exposure_pct=2.0` (200%) by the risk gate |
 | Pruning | prune-all (skip-cheap-then-top-2 by prior daily close, applied to broad/BE as well) |
 | Regime system | quiet (< 5 active underlyings), active (5–7), flood (≥ 8) |
 
-**Operational upshot of the boundary-fill variant**: all three price levels (entry, stop, TP) are deterministic at 10:00 ET when the ORB completes, so each candidate can be submitted as a single bracket order (parent stop-market at boundary + OCO stop-loss and take-profit children) rather than requiring live bar-by-bar evaluation through the session. Residuals are flattened by a MOC at 16:00.
+**Operational upshot of the boundary-fill variant**: all three price levels (entry, stop, TP) are deterministic at 10:00 ET when the ORB completes. In the default reactive mode the entry limit is placed the moment a 5-sec bar crosses the boundary, with the stop and TP attached as OCA children; in `use_resting_entries` mode each candidate is instead submitted at 10:00 as a pre-placed stop-limit bracket. Either way, exits rest at IB (OCA stop-loss + take-profit) and residuals are flattened at ~15:59 ET (`eod_flatten_lead_secs`).
 
 ### Class × regime weight matrix
 
@@ -164,35 +176,33 @@ During RTH, `/health` returns 503 if:
 ### Sigma calibration
 
 The prior-session filter uses sigma values (daily-return volatility) of each
-underlying. The live system computes these dynamically from full historical
-data at startup, and refreshes them weekly via cron.
+underlying, thresholded at `sigma × ps_filter_k` (k = 1.00). Live loads these
+**verbatim** from the vendored long-history file
+`orb_live/strategy/data/sigma_master.csv` — the same multi-year file the
+backtest uses. There is **no** rolling 30-day recompute at startup and nothing
+is written to `sigma_runtime.yaml` (that path diverged 2–3× from the backtest
+for some underlyings and silently shifted PS thresholds; it was removed).
 
-- **Seed values:** `reference/_production_run.py`'s `SIGMA` dict — used as
-  fallback when historical parquet data is unavailable.
-- **Live values:** `data/sigma_runtime.yaml` — auto-generated at every
-  startup and after each weekly recalibration. Human-readable; safe to inspect.
-- **History:** `state_store.sigma_history` table — append-only record of
-  every sigma computation, for forensic analysis.
+Sigma methodology: `sigma = close.pct_change().dropna().abs().std()` over the
+**full adjusted** (split/dividend-adjusted) daily history. Adjusted prices are
+deliberate — raw closes carry reverse-split-day jumps that inflate sigma 2–3×
+for names like XOP/GDXJ/MSTR.
 
-To force frozen-seed mode (for backtest parity validation):
-
-```bash
-USE_ROLLING_SIGMAS=0 python -m orb_live.runner.main
-```
-
-To manually recalibrate now:
+To refresh the CSV (self-contained, yfinance only — previews by default):
 
 ```bash
-python -m orb_live.scripts.recalibrate_sigmas --confirm
-python -m orb_live.scripts.recalibrate_sigmas --confirm --db /path/to/orb_live.db
+python -m orb_live.scripts.refresh_sigma_master            # preview universe
+python -m orb_live.scripts.refresh_sigma_master --confirm  # write
+python -m orb_live.scripts.refresh_sigma_master --all      # every CSV row
 ```
 
-Underlyings whose parquet is missing will fall back to seed values and emit a
-`WARN`. Run `backfill_underlyings` if WARNs appear frequently:
-
-```bash
-python -m orb_live.scripts.backfill_underlyings
-```
+Because sigma is measured over many years, a few weeks of new data barely moves
+it — run this monthly/quarterly so values drift slowly without window noise.
+Recomputed rows are merged into the CSV, preserving untouched underlyings; a
+`>20%` move vs the current value is flagged (re-check the backtest if
+unexpected). Parity between live and the CSV is locked by
+`test_sigma_source_parity.py`. Per-symbol overrides can still be layered via
+`config/sigma_override.yaml`.
 
 ## Tests
 
@@ -200,14 +210,16 @@ python -m orb_live.scripts.backfill_underlyings
 python -m pytest orb_live/tests/ -v
 ```
 
-381 tests in ~3 seconds.  All synchronous — no broker credentials required.
+453 tests in ~1 second.  All synchronous — no broker credentials required.
 
 Key test files:
-- `test_session_runner.py` — bar dispatch order invariant, state machine
+- `test_session_runner.py` — bar dispatch order invariant, state machine, 5-sec entry path, equity-scaled sizing
 - `test_half_day_session.py` — half-day schedule correctness
 - `test_operational.py` — health server, alerts, daily rollup, drift detection
 - `test_end_to_end_replay.py` — full session replay with synthetic bars
 - `test_signal_parity.py` — backtest ↔ live parity for indicators and filters
+- `test_sigma_source_parity.py` — live sigma is the CSV, bit-for-bit (no rolling recompute)
+- `test_order_policy.py` — ORB-range entry buffer math
 
 ## Equity curves (2020–2026)
 

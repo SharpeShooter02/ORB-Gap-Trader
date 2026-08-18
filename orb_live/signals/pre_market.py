@@ -39,6 +39,7 @@ from orb_live.signals.strategy_signals import (
     compute_opening_range,
 )
 from orb_live.signals.liquidity import PreFlightCheck, CandidateDecision
+from orb_live.strategy.session_fixture import write_fixture as write_session_fixture
 from orb_live.strategy.v1_strategy import (
     plan_session,
     SessionPlan,
@@ -315,6 +316,21 @@ class PreMarketJob:
         # skip-cheap and zero-weight drops).
         plan_set = set(self._session_plan.candidates)
         results  = [r for r in preliminary_p1 if r.symbol in plan_set]
+
+        # Golden-session fixture: the backtest replays these exact inputs
+        # through the same plan_session() and asserts an identical plan.
+        # Never allowed to break the session — write_fixture swallows errors.
+        write_session_fixture(
+            trade_date,
+            universe=qualified_symbols,
+            instruments=instruments,
+            sigmas=cfg.sigmas,
+            overnight_gaps=overnight_gaps,
+            prior_two_closes=prior_two_closes,
+            prior_etf_close=prior_etf_close,
+            plan=self._session_plan,
+            log=self._log,
+        )
 
         if self._log:
             for _ul, _gap in sorted(overnight_gaps.items()):

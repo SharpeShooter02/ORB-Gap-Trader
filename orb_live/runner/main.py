@@ -145,7 +145,7 @@ def _build_components(args: argparse.Namespace, _log=None):
     # Supporting components
     bar_cache    = BarCache()
     clock        = MarketClock(broker_client=real_client)
-    ul_store     = UnderlyingDataStore(cfg.data_dir, logger_=logger)
+    ul_store     = UnderlyingDataStore(cfg.data_dir, broker=real_client, logger_=logger)
 
     # Execution layer
     policy = MarketableLimitPolicy(broker, cfg, store)

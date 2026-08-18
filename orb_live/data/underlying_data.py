@@ -1,5 +1,12 @@
 """
-data/underlying_data.py — yfinance-backed prior-session underlying data.
+data/underlying_data.py — prior-session underlying daily data.
+
+Daily-bar source is hybrid: for equity underlyings IB (via the injected
+broker's get_daily_bars) is primary — authoritative, subscription-backed, and
+doesn't lag the prior close the way the free yfinance feed can — with yfinance
+as the fallback. Crypto underlyings use yfinance only (IB spot crypto needs a
+separate Paxos subscription/contract handling). When no broker is injected the
+store is yfinance-only (backfill script, tests).
 
 Provides:
   1. UnderlyingDataStore — persistent parquet-backed store for daily bars.
@@ -115,10 +122,15 @@ class UnderlyingDataStore:
     All reads return a view — do not mutate the returned DataFrames.
     """
 
-    def __init__(self, data_dir: Path, logger_=None):
+    def __init__(self, data_dir: Path, broker=None, logger_=None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._log = logger_ or logger
+        # Optional broker (IBClient) used as the PRIMARY daily-bar source for
+        # equity underlyings — authoritative, subscription-backed, and doesn't
+        # lag the prior session's close the way the free yfinance feed can.
+        # yfinance remains the fallback (and the sole source for crypto).
+        self._broker = broker
 
     def _path(self, ul_sym: str) -> Path:
         return self.data_dir / f"{ul_sym}.parquet"
@@ -253,23 +265,60 @@ class UnderlyingDataStore:
                 )
         return None
 
-    def update_one(self, ul_sym: str, lookback_days: int = 10) -> int:
-        """
-        Fetch the most recent `lookback_days` of daily bars from yfinance
-        and append to the parquet file (deduplicating on date).
+    def _fetch_ib_daily(self, ul_sym: str, lookback_days: int) -> Optional[pd.DataFrame]:
+        """Recent daily bars from IB via get_daily_bars, or None on any failure.
 
-        Returns the number of NEW rows written.
+        IB already returns the parquet schema ([date, open, high, low, close,
+        volume] with a tz-naive normalized date), so no yfinance-style
+        normalisation is needed. Any error (not connected, no subscription,
+        empty) returns None so the caller falls back to yfinance.
         """
+        if self._broker is None:
+            return None
+        try:
+            df = self._broker.get_daily_bars(ul_sym, lookback_days=max(lookback_days, 20))
+        except Exception as exc:
+            self._log.warning(f"ib_daily_fetch_failed {ul_sym}: {exc}")
+            return None
+        if df is None or df.empty:
+            return None
+        cols = ["date", "open", "high", "low", "close", "volume"]
+        if not set(cols).issubset(df.columns):
+            return None
+        out = df[cols].copy()
+        out["date"] = pd.to_datetime(out["date"])
+        return out
+
+    def _fetch_daily(self, ul_sym: str, lookback_days: int) -> Optional[pd.DataFrame]:
+        """Normalized daily bars for `ul_sym`, or None if every source failed.
+
+        Equities: IB primary, yfinance fallback. Crypto: yfinance only (IB spot
+        crypto needs a separate Paxos subscription/contract handling)."""
+        if ul_sym not in CRYPTO_UNDERLYINGS:
+            ib_df = self._fetch_ib_daily(ul_sym, lookback_days)
+            if ib_df is not None and not ib_df.empty:
+                return ib_df
+
         yf_sym = _yf_ticker(ul_sym)
         end    = pd.Timestamp.today().normalize()
         start  = end - pd.Timedelta(days=max(lookback_days * 2, 30))
-
         raw = self._yf_download_retry(ul_sym, yf_sym, start, end)
         if raw is None or raw.empty:
-            self._log.warning(f"yfinance returned no data for {ul_sym} ({yf_sym})")
-            return 0
+            return None
+        return _normalise_yf(raw, ul_sym)
 
-        new_df = _normalise_yf(raw, ul_sym)
+    def update_one(self, ul_sym: str, lookback_days: int = 10) -> int:
+        """
+        Fetch the most recent `lookback_days` of daily bars — IB primary for
+        equities, yfinance fallback (and sole crypto source) — and append to the
+        parquet file (deduplicating on date, keeping existing rows on overlap).
+
+        Returns the number of NEW rows written.
+        """
+        new_df = self._fetch_daily(ul_sym, lookback_days)
+        if new_df is None or new_df.empty:
+            self._log.warning(f"no daily data for {ul_sym} (IB + yfinance both empty)")
+            return 0
 
         # Merge with existing
         existing = self.get(ul_sym)

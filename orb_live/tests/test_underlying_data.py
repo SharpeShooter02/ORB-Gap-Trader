@@ -147,6 +147,76 @@ class TestUpdateOne:
                "BTC-USD" in str(call_args)
 
 
+# ── Hybrid source: IB primary, yfinance fallback ──────────────────────────────
+
+def _make_ib_df(dates: list[str], closes: list[float]) -> pd.DataFrame:
+    """IB get_daily_bars-shaped DataFrame (parquet schema, tz-naive date)."""
+    return pd.DataFrame({
+        "date":   pd.to_datetime(dates),
+        "open":   closes, "high": closes, "low": closes, "close": closes,
+        "volume": [1_000_000.0] * len(closes),
+    })
+
+
+class TestHybridSource:
+    def test_equity_uses_ib_and_skips_yfinance(self, tmp_path):
+        """With a broker present, an equity is fetched from IB — yfinance untouched."""
+        from orb_live.data.underlying_data import UnderlyingDataStore
+        broker = MagicMock()
+        broker.get_daily_bars.return_value = _make_ib_df(
+            ["2022-01-03", "2022-01-04"], [380.0, 382.0])
+        store = UnderlyingDataStore(tmp_path / "u", broker=broker)
+
+        with patch("yfinance.download") as mock_dl:
+            n = store.update_one("QQQ", lookback_days=10)
+
+        assert n == 2
+        broker.get_daily_bars.assert_called_once()
+        mock_dl.assert_not_called()
+        assert len(store.get("QQQ")) == 2
+
+    def test_equity_falls_back_to_yfinance_when_ib_empty(self, tmp_path):
+        """IB returning empty (e.g. no subscription) must fall back to yfinance."""
+        from orb_live.data.underlying_data import UnderlyingDataStore
+        broker = MagicMock()
+        broker.get_daily_bars.return_value = pd.DataFrame()
+        store = UnderlyingDataStore(tmp_path / "u", broker=broker)
+
+        yf_df = _make_yf_df(["2022-01-03", "2022-01-04"], [380.0, 382.0])
+        with patch("yfinance.download", return_value=yf_df) as mock_dl:
+            n = store.update_one("QQQ", lookback_days=10)
+
+        assert n == 2
+        mock_dl.assert_called_once()
+        assert len(store.get("QQQ")) == 2
+
+    def test_equity_falls_back_when_ib_raises(self, tmp_path):
+        """An IB error (not connected, timeout) must not abort — fall back to yfinance."""
+        from orb_live.data.underlying_data import UnderlyingDataStore
+        broker = MagicMock()
+        broker.get_daily_bars.side_effect = ConnectionError("not connected")
+        store = UnderlyingDataStore(tmp_path / "u", broker=broker)
+
+        yf_df = _make_yf_df(["2022-01-03"], [380.0])
+        with patch("yfinance.download", return_value=yf_df) as mock_dl:
+            n = store.update_one("QQQ")
+
+        assert n == 1
+        mock_dl.assert_called_once()
+
+    def test_crypto_always_uses_yfinance_even_with_broker(self, tmp_path):
+        """Crypto never hits IB (Paxos not wired) — yfinance only, broker untouched."""
+        from orb_live.data.underlying_data import UnderlyingDataStore
+        broker = MagicMock()
+        store = UnderlyingDataStore(tmp_path / "u", broker=broker)
+
+        yf_df = _make_yf_df(["2022-01-03"], [40000.0])
+        with patch("yfinance.download", return_value=yf_df):
+            store.update_one("BTC", lookback_days=5)
+
+        broker.get_daily_bars.assert_not_called()
+
+
 # ── Holiday alignment ─────────────────────────────────────────────────────────
 
 class TestHolidayAlignment:

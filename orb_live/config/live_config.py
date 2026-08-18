@@ -112,7 +112,10 @@ def _make_v1_strategy_config(
         exit_ratio_tp1=1.0,          # v1: TP1-only (full position)
         exit_ratio_tp2=0.0,
         exit_ratio_tp3=0.0,
-        tp1_target_multiple=2.0,     # 2× ORB range
+        tp1_target_multiple=2.0,     # 2× ORB range (scalar fallback)
+        # Per-class TP1 target: crypto (C1) runs to 2× ORB; C2/C3 take profit at
+        # 1× ORB. Overrides the scalar above per candidate via its v1 class.
+        tp1_target_multiple_by_class={"C1": 2.0, "C2": 1.0, "C3": 1.0},
         require_ema_confirmation=False,   # v1 boundary-fill variant
         entry_at_boundary=True,           # v1 boundary-fill variant
         instrument_exit_overrides={},

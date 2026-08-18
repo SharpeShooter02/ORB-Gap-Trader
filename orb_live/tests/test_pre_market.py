@@ -16,25 +16,27 @@ ET = ZoneInfo("America/New_York")
 TDATE = date(2026, 1, 7)
 
 
-def test_phase2_tp1_mult_follows_config_not_hardcoded():
-    """Regression: phase-2 must set tp1_mult from cfg.tp1_target_multiple (2.0 =
-    2× ORB in v1). It was hardcoded to 1.0, which — because tp1_mult is passed to
-    compute_entry as an override — silently beat the config and cut every winner
-    to 1× ORB for weeks. Uses the REAL config, not a MagicMock strategy_config."""
+def test_phase2_tp1_mult_is_class_based():
+    """Phase-2 sets tp1_mult per the class map: C1 (crypto) → 2× ORB, C2/C3 → 1×.
+    Regression guard: tp1_mult must NOT be hardcoded — it is passed to
+    compute_entry as an override and so silently beats config if wrong (was once
+    pinned to 1.0, cutting every winner to 1× ORB). Uses the REAL config."""
     from orb_live.config.live_config import load_live_config
     from orb_live.signals.pre_market import PreMarketJob, Phase1Result
 
     cfg = load_live_config()
     job = PreMarketJob(cfg, MagicMock(), MagicMock(), MagicMock())
-    p1  = Phase1Result(symbol="NUGT", gap_abs=0.05, gap_direction=-1,
-                       prior_close=150.0, ps_filter_passed=True)
     orb = {"high": 156.0, "low": 153.0, "midpoint": 154.5}
 
-    p2 = job._make_p2(p1, orb=orb, first_open=153.0, size_mult=1.0,
-                      preflight=None, is_candidate=True)
+    def _tp1(symbol):
+        p1 = Phase1Result(symbol=symbol, gap_abs=0.05, gap_direction=-1,
+                          prior_close=150.0, ps_filter_passed=True)
+        return job._make_p2(p1, orb=orb, first_open=153.0, size_mult=1.0,
+                            preflight=None, is_candidate=True).tp1_mult
 
-    assert p2.tp1_mult == cfg.strategy_config.tp1_target_multiple
-    assert p2.tp1_mult == 2.0, "v1 TP1 must be 2× ORB range, not 1×"
+    assert _tp1("BITX") == 2.0, "C1 (crypto) TP1 must be 2× ORB range"
+    assert _tp1("NUGT") == 1.0, "C2 (gold) TP1 must be 1× ORB range"
+    assert _tp1("TQQQ") == 1.0, "C3 (broad leveraged) TP1 must be 1× ORB range"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

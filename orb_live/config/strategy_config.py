@@ -87,6 +87,11 @@ class StrategyConfig:
     tp1_target_multiple: float = 1.0
     tp2_target_multiple: float = 2.0
 
+    # Per-class override of the TP1 target multiple (class → multiple), keyed by
+    # the v1 taxonomy ("C1"/"C2"/"C3"). When a candidate's class is present here
+    # it supersedes the scalar tp1_target_multiple; otherwise the scalar is used.
+    tp1_target_multiple_by_class: dict = field(default_factory=dict)
+
     # ── Stop loss ─────────────────────────────────────────────────────────────
     sl_method: str = "tight"
     sl_slippage_factor: float = 0.0

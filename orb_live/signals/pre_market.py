@@ -43,6 +43,7 @@ from orb_live.strategy.v1_strategy import (
     plan_session,
     SessionPlan,
     GAP_THRESHOLD,
+    classify,
 )
 if TYPE_CHECKING:
     from orb_live.config.live_config import LiveConfig
@@ -430,6 +431,13 @@ class PreMarketJob:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    def _tp1_mult_for(self, symbol: str) -> float:
+        """TP1 target multiple for `symbol`: per-class map (C1→2×, C2/C3→1×) if
+        the class is present, else the scalar tp1_target_multiple fallback."""
+        scfg = self._cfg.strategy_config
+        by_class = getattr(scfg, "tp1_target_multiple_by_class", None) or {}
+        return by_class.get(classify(symbol), scfg.tp1_target_multiple)
+
     def _make_p2(
         self,
         p1: Phase1Result,
@@ -447,11 +455,12 @@ class PreMarketJob:
             prior_close=p1.prior_close,
             first_open=first_open,
             orb=orb,
-            # TP1 target = config tp1_target_multiple (2.0 = 2× ORB range in v1).
+            # TP1 target multiple, per candidate. Class map (C1→2×, C2/C3→1×)
+            # takes precedence over the scalar tp1_target_multiple.
             # Must NOT be hardcoded: it is passed to compute_entry as an override
             # and so silently beats the config if wrong (was pinned to 1.0, which
             # cut every winner to 1× ORB — half the intended target).
-            tp1_mult=self._cfg.strategy_config.tp1_target_multiple,
+            tp1_mult=self._tp1_mult_for(p1.symbol),
             tp2_mult=0.0,   # v1 is TP1-only (exit_ratio_tp2=0); TP2 leg unused
             rtg_val=None,
             rtg_pct=None,

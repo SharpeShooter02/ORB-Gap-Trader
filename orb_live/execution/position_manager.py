@@ -334,7 +334,16 @@ class LivePositionManager:
                         est_margin=round(est_margin, 2),
                         committed=round(committed, 2),
                         budget=round(self._margin_budget, 2),
+                        margin_rate=round(rate, 4),
                     )
+                # Durable record: a trade that silently does not happen is the
+                # worst thing to have no trace of. Queryable from alert_log.
+                self._record_entry_rejection(
+                    session_date, symbol, "margin_budget", gap_direction,
+                    f"est_margin={est_margin:.2f} committed={committed:.2f} "
+                    f"budget={self._margin_budget:.2f} rate={rate:.4f} "
+                    f"intended_cost={intended_cost:.2f}",
+                )
                 return None
 
         # Raw buying-power floor — include notional reserved by resting stop-limits.
@@ -346,6 +355,11 @@ class LivePositionManager:
                     intended_cost=round(intended_cost, 2),
                     buying_power=round(buying_power, 2),
                 )
+            self._record_entry_rejection(
+                session_date, symbol, "insufficient_buying_power", gap_direction,
+                f"intended_cost={intended_cost:.2f} buying_power={buying_power:.2f} "
+                f"reserved={self._resting_reserved_bp():.2f}",
+            )
             return None
 
         # Block if a pending entry or in-memory position already exists
@@ -959,6 +973,40 @@ class LivePositionManager:
         except Exception as exc:
             if self._log:
                 self._log.warning("prewarm_margin_failed", symbol=symbol, exc=str(exc))
+
+    def _record_entry_rejection(self, session_date, symbol: str, reason: str,
+                                gap_direction: int = 0, detail: str = "") -> None:
+        """Persist a rejected entry so it is recoverable after the session.
+
+        Writes a phase-3 candidates row, matching how risk-gate rejections are
+        already recorded, so "why didn't <symbol> trade" is one query against
+        one table. The alert_log row carries the numbers behind the decision.
+
+        Structured logs answer this too, but only while the log file survives.
+        """
+        try:
+            self._store.save_candidate(
+                session_date=session_date, symbol=symbol, phase=3,
+                decision=reason, gap_direction=gap_direction,
+                gap_abs=0.0, prior_close=0.0,
+                ps_filter_passed=None, intended_direction=gap_direction,
+            )
+        except Exception as exc:      # never let bookkeeping kill an entry path
+            if self._log:
+                self._log.warning("entry_rejection_record_failed",
+                                  symbol=symbol, exc=str(exc))
+        try:
+            self._store.log_alert(
+                level="WARNING",
+                message=f"entry rejected for {symbol}: {reason}. {detail}".strip(),
+                category=f"entry_rejected_{reason}",
+                symbol=symbol,
+                trade_date=session_date,
+            )
+        except Exception as exc:
+            if self._log:
+                self._log.warning("entry_rejection_alert_failed",
+                                  symbol=symbol, exc=str(exc))
 
     def _committed_margin(self) -> float:
         """Initial margin currently reserved by live positions (entering + open),

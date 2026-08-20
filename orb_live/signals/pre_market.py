@@ -33,17 +33,16 @@ from typing import Optional, TYPE_CHECKING
 
 import pandas as pd
 
-from orb_live.signals.strategy_signals import (
-    compute_gap,
-    check_prior_session_filter,
-    compute_opening_range,
-)
+from orb_live.signals.strategy_signals import compute_opening_range
+from orb_live.signals.gap_scan import scan_gaps
 from orb_live.signals.liquidity import PreFlightCheck, CandidateDecision
-from orb_live.strategy.session_fixture import write_fixture as write_session_fixture
+from orb_live.strategy.session_fixture import (
+    serialise_raw_inputs,
+    write_fixture as write_session_fixture,
+)
 from orb_live.strategy.v1_strategy import (
     plan_session,
     SessionPlan,
-    GAP_THRESHOLD,
     classify,
 )
 if TYPE_CHECKING:
@@ -83,16 +82,6 @@ class Phase2Result:
     preflight: Optional[CandidateDecision]
     is_candidate: bool
     exclusion_reason: str = ""
-
-
-# ── Warning-capturing logger shim ─────────────────────────────────────────────
-
-class _WarnCapture:
-    def __init__(self):
-        self.warned = False
-
-    def warning(self, event, **kw):  # noqa: ANN
-        self.warned = True
 
 
 # ── PreMarketJob ──────────────────────────────────────────────────────────────
@@ -142,160 +131,87 @@ class PreMarketJob:
         """
         cfg         = self._cfg
         instruments = cfg.instruments   # dict[str, Instrument] from v1
-        sigmas      = cfg.sigmas        # dict[UL, float]
 
         underlying_data = self._load_underlying_data(trade_date)
 
         # ── Gather per-ETF market data ─────────────────────────────────────────
-        # We accumulate inputs for plan_session() as we scan each ETF.
-        overnight_gaps:    dict[str, float]                  = {}  # UL → gap
-        prior_two_closes:  dict[str, tuple[float, float]]    = {}  # UL → (c_t-1, c_t-2)
-        prior_etf_close:   dict[str, float]                  = {}  # sym → last ETF close
+        # I/O only. Everything that decides anything lives in scan_gaps(), so
+        # that the backtest can replay this session from the raw inputs rather
+        # than from the UL gaps we derive from them.
+        fetched_refs:  dict[str, Optional[float]] = {}
+        fetched_daily: dict[str, Optional[pd.DataFrame]] = {}
+        for symbol in cfg.symbols:
+            if symbol not in instruments:
+                continue
+            fetched_refs[symbol]  = self._get_ref_price(symbol, ref_prices, trade_date)
+            fetched_daily[symbol] = self._get_daily_bars(symbol, daily_bars)
 
+        scan_result = scan_gaps(
+            trade_date,
+            symbols=list(cfg.symbols),
+            instruments=instruments,
+            ref_prices=fetched_refs,
+            etf_daily=fetched_daily,
+            ul_daily=underlying_data,
+            config=cfg,
+        )
+
+        overnight_gaps   = scan_result.overnight_gaps
+        prior_two_closes = scan_result.prior_two_closes
+        prior_etf_close  = scan_result.prior_etf_close
+
+        # ── Persist and log what the scan decided ─────────────────────────────
         preliminary_p1: list[Phase1Result] = []
 
-        for symbol in cfg.symbols:
-            inst = instruments.get(symbol)
-            if inst is None:
-                continue
-
-            effective_gap_filter = inst.leverage * GAP_THRESHOLD  # e.g. 0.04 for 2x
-
-            # 1. Reference price (9:30 bar close).
-            ref_price = self._get_ref_price(symbol, ref_prices, trade_date)
-            if ref_price is None or ref_price <= 0:
+        for scan in scan_result.scans:
+            if scan.prior_close is None:
+                # Never got as far as a gap — nothing but the reason to record.
                 self._store.save_gap_scan(
-                    trade_date, symbol, qualifies=False, filter_reason="no_ref_price"
+                    trade_date, scan.symbol,
+                    qualifies=False, filter_reason=scan.filter_reason,
                 )
                 continue
 
-            # 2. Daily bars (for prior ETF close).
-            d_bars = self._get_daily_bars(symbol, daily_bars)
-            if d_bars is None or d_bars.empty:
-                self._store.save_gap_scan(
-                    trade_date, symbol, qualifies=False, filter_reason="no_daily_bars"
-                )
-                continue
-
-            # 3. ETF gap and prior close.
-            gap_result = compute_gap(trade_date, d_bars, ref_price)
-            if gap_result is None:
-                self._store.save_gap_scan(
-                    trade_date, symbol, qualifies=False, filter_reason="no_prior_close"
-                )
-                continue
-
-            etf_gap_abs, gap_direction, prior_close = gap_result
-            prior_etf_close[symbol] = prior_close
-
-            # 4. Convert ETF gap to UL-equivalent gap.
-            #    Non-inverse: ETF_gap =  UL_gap × leverage → UL_gap =  ETF_signed / leverage
-            #    Inverse:     ETF_gap = -UL_gap × leverage → UL_gap = -ETF_signed / leverage
-            etf_gap_signed = etf_gap_abs * gap_direction
-            ul_gap = (-etf_gap_signed if inst.inverse else etf_gap_signed) / inst.leverage
-
-            # 5. ETF-level gap size check (same as |ul_gap| ≥ GAP_THRESHOLD).
-            if etf_gap_abs < effective_gap_filter:
-                self._store.save_gap_scan(
-                    trade_date, symbol,
-                    prev_close=prior_close, open_price=ref_price,
-                    gap_pct=etf_gap_abs, gap_dir=gap_direction,
-                    qualifies=False, filter_reason="gap_too_small",
-                )
-                continue
-
-            # Direction filter (LABU/LABD).
-            allowed_dir = cfg.direction_filters.get(symbol)
-            if allowed_dir is not None and gap_direction != allowed_dir:
-                self._store.save_gap_scan(
-                    trade_date, symbol,
-                    prev_close=prior_close, open_price=ref_price,
-                    gap_pct=etf_gap_abs, gap_dir=gap_direction,
-                    qualifies=False, filter_reason="direction_filtered",
-                )
-                continue
-
-            # Gap qualifies — record before PS filter.
+            # The gap scan row records gap qualification only; the PS filter
+            # gets its own row below, as it did when this was one loop.
+            gap_qualified = scan.filter_reason not in ("gap_too_small", "direction_filtered")
             self._store.save_gap_scan(
-                trade_date, symbol,
-                prev_close=prior_close, open_price=ref_price,
-                gap_pct=etf_gap_abs, gap_dir=gap_direction,
-                qualifies=True,
+                trade_date, scan.symbol,
+                prev_close=scan.prior_close, open_price=scan.ref_price,
+                gap_pct=scan.etf_gap_abs, gap_dir=scan.gap_direction,
+                qualifies=gap_qualified,
+                **({} if gap_qualified else {"filter_reason": scan.filter_reason}),
             )
-
-            # 6. Prior-session filter (uses UL data, matches check_prior_session_filter).
-            warn_cap   = _WarnCapture()
-            ps_passed  = check_prior_session_filter(
-                symbol, trade_date, gap_direction,
-                cfg, underlying_data,
-                logger=warn_cap,
-            )
-            ps_spec       = cfg.prior_session_filters.get(symbol)
-            ul_sym_for_db = ps_spec[0] if ps_spec else None
-
-            # Compute PS metrics for the state store (mirrors check_prior_session_filter).
-            ul_move_pct   = None
-            threshold_pct = float(ps_spec[1]) if ps_spec else None
-            if ul_sym_for_db:
-                _ul_df = underlying_data.get(ul_sym_for_db)
-                if _ul_df is not None:
-                    _pr = _ul_df[_ul_df["date"] < pd.Timestamp(trade_date)].tail(2)
-                    if len(_pr) >= 2:
-                        _c1, _c2 = float(_pr.iloc[-1]["close"]), float(_pr.iloc[-2]["close"])
-                        if _c2 > 0:
-                            _ps_raw = (_c1 - _c2) / _c2
-                            _is_inv = len(ps_spec) == 3 and ps_spec[2] is True
-                            _eff    = -gap_direction if _is_inv else gap_direction
-                            ul_move_pct = _ps_raw * _eff
+            if not gap_qualified:
+                continue
 
             self._store.save_ps_filter(
-                trade_date, symbol,
-                underlying=ul_sym_for_db,
-                ul_move_pct=ul_move_pct,
-                threshold_pct=threshold_pct,
-                passed=ps_passed,
+                trade_date, scan.symbol,
+                underlying=scan.ps_underlying,
+                ul_move_pct=scan.ul_move_pct,
+                threshold_pct=scan.threshold_pct,
+                passed=scan.ps_passed,
             )
 
             if self._log:
                 self._log.info(
                     "ps_filter",
-                    symbol=symbol, ul=ul_sym_for_db,
-                    ul_move=round(ul_move_pct, 4) if ul_move_pct is not None else None,
-                    threshold=round(threshold_pct, 4) if threshold_pct is not None else None,
-                    passed=ps_passed,
+                    symbol=scan.symbol, ul=scan.ps_underlying,
+                    ul_move=round(scan.ul_move_pct, 4) if scan.ul_move_pct is not None else None,
+                    threshold=round(scan.threshold_pct, 4) if scan.threshold_pct is not None else None,
+                    passed=scan.ps_passed,
                 )
 
-            if not ps_passed:
+            if not scan.qualifies:
                 continue
 
-            # Accumulate plan_session() inputs.
-            ul = inst.underlying
-            # UL gap for plan_session() — causal overnight gap on the underlying.
-            # We use our ETF-derived approximation.
-            if ul not in overnight_gaps:
-                overnight_gaps[ul] = ul_gap
-            else:
-                # Keep the most extreme gap if multiple ETFs share a UL.
-                if abs(ul_gap) > abs(overnight_gaps[ul]):
-                    overnight_gaps[ul] = ul_gap
-
-            # Prior two UL closes from underlying_data store.
-            if ul not in prior_two_closes:
-                ul_df = underlying_data.get(ul)
-                if ul_df is not None:
-                    prior_rows = ul_df[ul_df["date"] < pd.Timestamp(trade_date)].tail(2)
-                    if len(prior_rows) >= 2:
-                        c_t1 = float(prior_rows.iloc[-1]["close"])
-                        c_t2 = float(prior_rows.iloc[-2]["close"])
-                        prior_two_closes[ul] = (c_t1, c_t2)
-
             preliminary_p1.append(Phase1Result(
-                symbol=symbol,
-                gap_abs=etf_gap_abs,
-                gap_direction=gap_direction,
-                prior_close=prior_close,
+                symbol=scan.symbol,
+                gap_abs=scan.etf_gap_abs,
+                gap_direction=scan.gap_direction,
+                prior_close=scan.prior_close,
                 ps_filter_passed=True,
-                ps_filter_warning=warn_cap.warned,
+                ps_filter_warning=scan.ps_warned,
             ))
 
         # ── Call plan_session() to get the definitive candidate list ───────────
@@ -329,6 +245,13 @@ class PreMarketJob:
             prior_two_closes=prior_two_closes,
             prior_etf_close=prior_etf_close,
             plan=self._session_plan,
+            raw=serialise_raw_inputs(
+                symbols=list(cfg.symbols),
+                ref_prices=fetched_refs,
+                etf_daily=fetched_daily,
+                ul_daily=underlying_data,
+                prior_session_filters=cfg.prior_session_filters,
+            ),
             log=self._log,
         )
 

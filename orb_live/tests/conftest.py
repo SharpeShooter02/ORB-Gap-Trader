@@ -12,6 +12,22 @@ import pytest
 import orb_live  # noqa: F401 — sys.path setup
 
 
+@pytest.fixture(autouse=True)
+def _isolate_session_fixtures(tmp_path, monkeypatch):
+    """Keep test runs out of the real golden-session corpus.
+
+    PreMarketJob.run_phase1 writes a fixture on every call, defaulting to
+    data/sessions/ — the corpus the backtest repo's replay gate reads as a
+    record of live trading. Any test that runs phase 1 was therefore filing a
+    synthetic session there and the gate was replaying it as real.
+    """
+    from orb_live.strategy import session_fixture
+
+    monkeypatch.setattr(
+        session_fixture, "DEFAULT_FIXTURE_DIR", tmp_path / "sessions"
+    )
+
+
 @pytest.fixture(scope="session")
 def live_cfg():
     from orb_live.config.live_config import load_live_config

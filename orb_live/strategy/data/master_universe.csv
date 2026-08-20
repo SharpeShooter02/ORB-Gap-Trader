@@ -17,7 +17,7 @@ class,exposure,underlying,etf,leverage,direction,binary_event
 2_SECTOR_pair,China Large-Cap,FXI,YANG,3,bear,YES
 2_SECTOR_pair,China Large-Cap,FXI,YINN,3,bull,YES
 2_SECTOR_pair,Gold Miners,GDX,DUST,2,bear,
-2_SECTOR_pair,Gold Miners,GDX,GDXU,2,bull,
+2_SECTOR_pair,Gold Miners,GDX,GDXU,3,bull,
 2_SECTOR_pair,Gold Miners,GDX,NUGT,2,bull,
 2_SECTOR_pair,Jr Gold Miners,GDXJ,JDST,2,bear,
 2_SECTOR_pair,Jr Gold Miners,GDXJ,JNUG,2,bull,

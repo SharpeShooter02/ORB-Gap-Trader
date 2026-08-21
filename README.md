@@ -45,7 +45,7 @@ pip install -e .
 # 2. Start IB Gateway / TWS in paper-trading mode
 
 # 3. Run tests
-python -m pytest orb_live/tests/ -q   # 453 tests, ~1s
+python -m pytest orb_live/tests/ -q   # 490 tests, ~8s
 
 # 4. Start session
 python -m orb_live.runner.main --paper

@@ -197,6 +197,9 @@ stale — regenerate them before comparing any number to one produced before
 2026-08-21.
 
 ### D2. Split artifacts in the intraday ETF cache
+> **Partly misattributed.** Four of the seven "recurring offenders" below
+> (SQQQ, SOXS, DUST, FNGD) turned out to be the D7 timestamp shift, not splits.
+> Re-derive this list after the D7 repair.
 Guarded, not fixed. `apply_split_correction.py` covered the *daily underlying*
 cache; the intraday ETF cache still stores raw prices, so a split leaves the
 prior close on one side of the ratio and the 09:30 print on the other — SOXS
@@ -234,6 +237,43 @@ not tickers — "AI and Big Data", "Dow Jones Transportation Average" — plus r
 ones like BRK.B. Reason recorded as "Insufficient data". Unreviewed since the
 split-correction work; unclear which are benign naming artifacts and which are
 tradable instruments silently missing a filter.
+
+---
+
+### D7. Five symbols have 4-hour-shifted timestamps across their whole history
+Found 2026-08-21 while running the D1 provenance comparison — which is how the
+provenance question earned its keep, even though the answer to the question as
+posed was "the values agree".
+
+**SQQQ, SOXS, DUST, FNGD, UVIX.** Their cached bars were written with naive ET
+timestamps labelled UTC. Read back as UTC and converted to ET they land 4h early
+under EDT, 5h under EST: a session that really ran 09:30-15:59 is stored as
+05:30-11:59. **14,801 symbol-days, 5.4% of the cache.** No other symbol is
+affected, and these five are affected throughout.
+
+The prices are correct — DUST's cached 05:30 bar is byte-identical to IBKR's
+09:30 bar (42.84/43.42/42.76/43.00 on 2026-04-20). Only the labels moved.
+
+**Why it matters.** `load_etf_gaps` takes the bar labelled 09:30, which in a
+shifted session is the **13:30** print, and divides it by the prior session's
+last close — which is *correctly* placed, since the last bar of the file is the
+last bar either way. So the "overnight gap" is really 09:30-to-13:30 intraday
+drift stacked on a real gap. DUST 2026-04-21: 47.21 used as the open instead of
+the true 44.18, giving a 9.66% gap where IBKR says 2.62%.
+
+**Nothing catches it.** These phantom gaps run 2-5%, and `MAX_PLAUSIBLE_GAP` is
+0.50 — 0 of 243 in-window gaps were rejected. 80 of them cleared their own
+threshold and became candidates. Measured against IBKR on the overlap window,
+6 of 9 candidate-membership flips were DUST, every one AV-candidate ->
+IBKR-not-a-candidate. They are phantom trades.
+
+**Bounded impact**: 2.2% of `_priority_trades` (4.3% of summed `pnl_pct`) and
+8.7% of `_unpruned_trades` (3.0%). Real but not structural.
+
+**Fix**: `scripts/fix_shifted_timestamps.py` (in BacktestingGaps) re-labels the
+wall-clock reading as ET. Detection is per session on the RTH start time, so it
+is idempotent and backs up originals before writing. Regenerate the trade
+caches afterwards.
 
 ---
 

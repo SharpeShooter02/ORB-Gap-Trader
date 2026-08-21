@@ -100,16 +100,45 @@ settled first-come with a margin budget of 1x equity:
 
 | Metric | v1 locked | Current |
 |--------|-----------|---------|
-| Sharpe | 2.030 | **2.309** |
-| Max Drawdown | -14.89% | **-6.97%** |
-| Calmar | 4.27 | **8.30** |
+| Sharpe | 2.030 | 2.309 |
+| Max Drawdown | -14.89% | -6.97% |
+| Calmar | 4.27 | 8.30 |
 | Flat P&L | $33,263 | $31,371 |
 | Trades | 2,695 | 2,002 |
 
-P&L is slightly lower and risk materially better, because the current numbers
-exclude trades the account cannot actually finance and settle the rest against
-a real margin budget. The two rows are **not** like-for-like — see "What
-changed" below and the caveats at the end.
+**Read that table carefully — most of the difference is not an improvement.**
+Ablation, each row changing one thing from the row above
+(`scripts/run_ablation.py`):
+
+| step | trades | Sharpe | MaxDD | Net P&L | dDD |
+|---|---|---|---|---|---|
+| UL-basis sizing, all trades | 2,304 | 2.150 | -15.32% | $33,316 | — |
+| + restrict to ETF-basis-covered trades | 2,022 | 2.313 | -10.51% | $32,178 | **+4.81** |
+| + ETF-basis regime/cap_factor | 2,022 | 2.363 | -9.61% | $33,226 | +0.90 |
+| no margin constraint (unpruned set) | 2,070 | 2.379 | -10.51% | $34,318 | -0.90 |
+| + margin budget = 1x equity | 1,948 | 2.261 | -7.28% | $30,041 | **+3.23** |
+| + drop unfillable siblings (cap 2.0) | 1,954 | 2.271 | -7.28% | $30,269 | **+0.00** |
+| + partial entries | 2,002 | 2.309 | -6.97% | $31,371 | +0.31 |
+
+Of the 8.35 points of drawdown improvement:
+
+- **+4.81 (58%) is excluding trades live cannot select.** A correctness fix,
+  not an edge gain. Those 282 trades were profitable but drawdown-heavy, so
+  the v1 headline flattered a population that was never reachable.
+- **+3.23 (39%) is the margin constraint holding fewer positions.** This
+  *costs* performance: -$4,277 and Sharpe 2.379 -> 2.261. Lower drawdown from
+  less exposure is not alpha; halving position size would do the same.
+- **+0.31 (4%) is partial entries** and **+0.00 is the unfillable-sibling
+  cap**, which is worth +$228 (+0.8%).
+
+So the margin-aware selection work contributed almost nothing to the headline.
+Its value is operational: live stops submitting ETHU/BTCZ shorts that IB
+rejects, which currently land as unexplained `entry_rejected_or_unfilled`.
+
+The honest summary is that v1's numbers were overstated, correcting the basis
+raises Sharpe to ~2.37 because the unreachable trades were the risky ones, the
+real margin ceiling then drags it to 2.261, and the margin work recovers about
+half of that (+0.048 Sharpe, +$1,330).
 
 #### What changed since the locked v1 config
 
@@ -143,7 +172,9 @@ changed" below and the caveats at the end.
    floor applied.
 
 Items 4 + 5 together were measured at +4.4% net P&L, Sharpe 2.261 → 2.309,
-MaxDD -7.28% → -6.97%.
+MaxDD -7.28% → -6.97% — i.e. they recover part of what the margin ceiling
+costs, rather than improving on the unconstrained strategy. See the ablation
+above before quoting these.
 
 #### Allocation policy
 

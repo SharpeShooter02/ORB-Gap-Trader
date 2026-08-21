@@ -121,6 +121,21 @@ toward firing. Anything read off it — the 0.43 `reserve` default in
 caches are rebuilt. It also means recent results are crypto-dominated, which
 makes R1 more urgent, not less.
 
+**Options, since IB cannot backfill this.** 1-min history is pacing-limited to
+roughly 60 requests per 10 minutes and capped around 6 months, so 184 symbols x
+~65 trading days (~12,000 requests) is over a day of continuous pulling and
+partly outside the window anyway. That leaves:
+
+1. Keep backfilling only candidate symbol-days — cheap, but preserves exactly
+   the selection conditioning that makes the window untrustworthy.
+2. **Truncate the backtest sample at 2026-05-20** and stop treating the last
+   three months as comparable. Costs 3 months of a 6.5-year sample, buys back a
+   clean population. Needs an end-date bound on `run_v1_at_k`, which has no such
+   parameter today.
+
+Recommended: (2). Not implemented — capping the sample is a research-scope
+decision, not a bug fix.
+
 **Not yet done**: the original provenance question (do AV and IBKR bars actually
 disagree on the 09:30-10:00 ORB high/low?) is still unanswered.
 `compare_av_vs_ibkr_bars.py` is written and ready but has never been run to a
@@ -165,8 +180,18 @@ These are **orphans**: present in the daily cache but no longer referenced by
 `master_universe.csv`, so the derived list correctly skips them. Harmless, but
 they should be deleted rather than left looking stale.
 
-**The intraday cache is NOT repaired by this.** D1's coverage hole is separate
-and still open. Cached trade parquets (`scratchpad/_priority_trades.parquet`,
+**The intraday cache is NOT repaired by this, and cannot be widened by it.**
+Checked after the repair run: the candidate set is unchanged (4,676 vs 4,683
+candidates, still 100% intraday-covered, identical P(fire) by year). The reason
+is structural — `etf_basis.compute_candidates_etf_basis` derives every gap from
+the *intraday* ETF cache and returns an empty frame for a symbol that has none.
+The daily UL cache feeds only the PS filter (`_ps_passes`). So intraday
+coverage is the binding constraint on D1, and repairing daily can neither add
+candidates nor strand existing ones.
+
+The daily repair still matters for correctness: with 41 underlyings frozen at
+May prices, `_ps_passes` was testing recent candidates against stale underlying
+closes. The effect is small but real — 7 candidates changed status. Cached trade parquets (`scratchpad/_priority_trades.parquet`,
 `_unpruned_trades.parquet`) were built against the *old* daily cache and are now
 stale — regenerate them before comparing any number to one produced before
 2026-08-21.

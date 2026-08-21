@@ -245,11 +245,16 @@ Found 2026-08-21 while running the D1 provenance comparison — which is how the
 provenance question earned its keep, even though the answer to the question as
 posed was "the values agree".
 
-**SQQQ, SOXS, DUST, FNGD, UVIX.** Their cached bars were written with naive ET
-timestamps labelled UTC. Read back as UTC and converted to ET they land 4h early
-under EDT, 5h under EST: a session that really ran 09:30-15:59 is stored as
-05:30-11:59. **14,801 symbol-days, 5.4% of the cache.** No other symbol is
-affected, and these five are affected throughout.
+**SQQQ, SOXS, DUST, UVXY, BOIL, FNGD, UVIX, SBIT.** Their cached bars were
+written with naive ET timestamps labelled UTC. Read back as UTC and converted to
+ET they land 4h early under EDT, 5h under EST: a session that really ran
+09:30-15:59 is stored as 05:30-11:59. **21,936 sessions across 1,077 files.**
+
+The first scan of this reported only five symbols. It was wrong twice over: it
+iterated `master_universe.csv`, which has no row for **BOIL** or **UVXY** (see
+L6), and it required >50% of a symbol's sessions to be shifted, which hid
+**SBIT** at 38 partially-shifted sessions. Scan the cache directory, not the
+universe, and do not threshold on prevalence.
 
 The prices are correct — DUST's cached 05:30 bar is byte-identical to IBKR's
 09:30 bar (42.84/43.42/42.76/43.00 on 2026-04-20). Only the labels moved.
@@ -267,8 +272,14 @@ threshold and became candidates. Measured against IBKR on the overlap window,
 6 of 9 candidate-membership flips were DUST, every one AV-candidate ->
 IBKR-not-a-candidate. They are phantom trades.
 
-**Bounded impact**: 2.2% of `_priority_trades` (4.3% of summed `pnl_pct`) and
-8.7% of `_unpruned_trades` (3.0%). Real but not structural.
+**Impact**: **183 of 2,304 `_priority_trades` (7.9%, 7.5% of summed
+`pnl_pct`)** and **795 of 4,153 `_unpruned_trades` (19.1%, -9.8%)**.
+
+The largest single contributor is **BOIL** — 337 unpruned trades summing
+`pnl_pct` -3.069 — which is a `FORCE_INCLUDE` symbol live actually trades, and
+the one with no `master_universe.csv` row. So this is not a backtest-only
+curiosity: the same shifted history feeds BOIL's sigma and its PS-filter
+threshold.
 
 **Fix**: `scripts/fix_shifted_timestamps.py` (in BacktestingGaps) re-labels the
 wall-clock reading as ET. Detection is per session on the RTH start time, so it

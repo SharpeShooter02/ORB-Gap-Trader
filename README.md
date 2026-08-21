@@ -87,19 +87,98 @@ This invariant is enforced by `test_i_indicator_updated_before_position_manager`
 All strategy parameters live in `orb_live/config/live_config.py`.  Production
 config is locked at:
 
-### Backtest results (2020–2026, locked v1 — boundary-fill variant, live-parity universe)
+### Backtest results (2020–2026, live-parity universe)
 
-Live universe (58 symbols, drops BTFX + UBR as untradable/delisted).
+Live universe (58 symbols, drops BTFX + UBR as untradable/delisted). Sizing is
+flat — $1,000 per unit of weight against a fixed $10,000 — so the dollar
+figures do **not** scale to a live account, which sizes at
+`base_notional_pct x current_equity` and compounds. Ratios carry over; dollars
+do not.
 
-| Metric | Value |
-|--------|-------|
-| Sharpe | 2.030 |
-| Max Drawdown | -14.89% |
-| Calmar | 4.27 |
-| Flat P&L | $33,263 |
-| CAGR | 63.67% |
-| Starting equity | $10,000 |
-| Trades (2020–2026) | 2,695 |
+**Current iteration** (2026-08-21). ETF gap basis, measured IB margin rates,
+settled first-come with a margin budget of 1x equity:
+
+| Metric | v1 locked | Current |
+|--------|-----------|---------|
+| Sharpe | 2.030 | **2.309** |
+| Max Drawdown | -14.89% | **-6.97%** |
+| Calmar | 4.27 | **8.30** |
+| Flat P&L | $33,263 | $31,371 |
+| Trades | 2,695 | 2,002 |
+
+P&L is slightly lower and risk materially better, because the current numbers
+exclude trades the account cannot actually finance and settle the rest against
+a real margin budget. The two rows are **not** like-for-like — see "What
+changed" below and the caveats at the end.
+
+#### What changed since the locked v1 config
+
+1. **Candidate selection moved to the ETF gap basis.** The backtest measured
+   the *underlying's* real overnight gap at a flat 2%; live measures the
+   *ETF's own* gap at `leverage x 2%` and reconstructs a UL gap by dividing by
+   leverage, because at 09:31 there is no settled daily bar for GDX — only a
+   print for GDXU. The two disagree on 780 of 2,386 trades. Selecting the way
+   live selects recovers 87.8% of engine trades against the old basis's 69.6%.
+
+2. **GDXU was mislabelled 2x; it is 3x.** Measured by daily log-return
+   regression against GDX: beta 2.99–3.11 with R² = 0.99 in every year since
+   2021. Its live gap threshold was 4% instead of 6%.
+
+3. **Margin rates are measured, not modelled.** FINRA 4210 minima match IB for
+   conventional funds (NUGT 0.52 vs 0.50, TQQQ 0.79 vs 0.75, SQQQ short 0.95
+   vs 0.90) but understate crypto by ~2x (XRPT 1.06, ETHD short 1.11) and
+   crypto shorts by up to 7x (ETHU 4.09, ETU 3.99, BTCL 3.88, BTCZ 2.33).
+
+4. **Unfillable siblings are dropped before skip-cheap** (`MAX_MARGIN_RATE`).
+   A full-size ETHU short needs ~$39k of margin against ~$32k of available
+   funds — impossible, not expensive. The backtest had booked 96 such trades.
+
+5. **Partial entries.** A breakout that does not fit the remaining budget is
+   sized down rather than dropped.
+
+6. **The margin gate runs at all.** It was dead code: `prewarm_margin` sat
+   behind a bar-cache read, and the market-data subscription that fills that
+   cache is deliberately deferred until after that loop (IB line cap), so
+   `_margin_budget` stayed `None` every session and only the raw buying-power
+   floor applied.
+
+Items 4 + 5 together were measured at +4.4% net P&L, Sharpe 2.261 → 2.309,
+MaxDD -7.28% → -6.97%.
+
+#### Allocation policy
+
+Measured, budget 1x equity — live's existing first-come policy is the best of
+the three and the constraint costs it 2%, not the 11–15% a scale-to-fit model
+implied:
+
+| Policy | Sharpe | Net P&L | vs unconstrained |
+|---|---|---|---|
+| unconstrained | 2.363 | $33,226 | — |
+| scale-to-fit | 2.357 | $28,227 | -15.0% |
+| **first-come (live)** | **2.383** | $32,550 | **-2.0%** |
+| gap-ranked, reserve = P(fire) | 2.337 | $31,391 | -5.5% |
+
+Reserving margin for a candidate that fires ~43% of the time loses more than
+it protects, because margin only binds at the moment of entry for 1.8% of
+entries. Selecting the cheapest-margin sibling outright was also rejected at
+-40.2%: long is cheaper than short for 52 of 55 symbols, so it degenerates
+into "never short", and shorts carry ~1.5x the edge per margin dollar.
+
+#### What these numbers do NOT yet capture
+
+- **12.2% of engine trades are unreachable** from the candidate set, despite
+  both paths nominally using `leverage x 2%`. Unreconciled.
+- **Fills are optimistic** — `entry_at_boundary` assumes every breakout fills
+  at the ORB boundary. Live shows unexplained `entry_rejected_or_unfilled`
+  events on conventional names where margin cannot be the cause.
+- **Data quality**: the intraday cache is mixed Alpha Vantage / IBKR
+  provenance with an unmeasured seam at 2026-06-16; split artifacts in the ETF
+  cache are guarded, not fixed; WEBL is mapped to XLC (R² 0.73) rather than
+  FDN (R² 0.98); FNGU's sigma rests on ~18 months of history.
+- **Costs** use a mechanical CS+Amihud model, and partial entries book P&L
+  linearly in size while paying a full spread and commission minimum.
+- **The margin budget is static** at 1x equity; live reads AvailableFunds,
+  which moves intraday with unrealised P&L.
 
 ### Strategy configuration
 
@@ -172,6 +251,34 @@ During RTH, `/health` returns 503 if:
 - `state_store.all_open_positions()` raises
 
 ## Operations
+
+### Margin rate calibration
+
+IB's house requirements move, so rates are re-measured live every session and
+the stored table is only a fallback:
+
+1. `prewarm_margin` runs at ORB close for every candidate, pricing a
+   representative order through IB `whatIfOrder` (no order is placed). This is
+   the source of truth for the session.
+2. `master_universe.csv` (`margin_init_long/short`, `margin_maint_*`,
+   `margin_measured`) is seeded into the manager before entries open, covering
+   any symbol IB does not answer for.
+3. An unknown symbol falls back to 1.0 — full notional — which over-reserves
+   rather than silently over-trading.
+
+Refresh the stored table periodically; a stale rate is worse than an honest
+default because it looks authoritative:
+
+```bash
+# read-only: whatIf previews only, writes the CSV in both repos
+python -m orb_live.scripts.measure_universe_margin --dry-run   # inspect first
+python -m orb_live.scripts.measure_universe_margin
+```
+
+Note `BuyingPower` reads as 4x equity but is 4x **AvailableFunds**, which
+positions deplete — it does not raise the ceiling. Effective capacity is ~1x
+equity of initial margin, which at weight 3.0 is ~4 conventional positions or
+~3 crypto ones.
 
 ### Sigma calibration
 

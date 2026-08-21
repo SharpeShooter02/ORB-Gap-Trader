@@ -253,3 +253,66 @@ def test_cap_keeps_the_price_pick_when_every_sibling_is_capped():
     """Two impossible trades is not a reason to invent a preference."""
     cands = _plan(max_rate=0.5)
     assert [c.symbol for c in cands] == ["BULL"]
+
+
+# ── 4. Live rates are re-pulled from IB each session ─────────────────────────
+
+def test_margin_is_prewarmed_from_ib_even_with_an_empty_bar_cache(
+    mock_broker, tmp_store, monkeypatch,
+):
+    """House requirements move, so the stored table is a fallback, not a source.
+
+    prewarm_margin has to run every session. It previously sat after a
+    bar-cache read in _run_post_orb, and the market-data subscription that
+    fills that cache is deliberately deferred until after the loop (IB's line
+    cap). So every symbol hit the `raw.empty` branch and continued first, and
+    no session ever measured a rate.
+    """
+    from types import SimpleNamespace
+    from datetime import datetime, timezone as _tz
+
+    from orb_live.runner.session_runner import SessionRunner
+    from orb_live.tests.test_session_runner import (
+        _StubBarCache, _StubBarRouter, _StubClock, _StubPreMarket, _make_p1, _make_p2,
+    )
+
+    prewarmed = []
+
+    class _Mgr:
+        def __init__(self):
+            self._margin_budget = None
+
+        def prewarm_margin(self, symbol, side, qty, price):
+            prewarmed.append(symbol)
+
+        def seed_margin_rates(self, rates, budget=None):
+            pass
+
+        def flatten_all(self, *a, **kw):
+            return []
+
+    cfg = SimpleNamespace(
+        orb_minutes=30, eod_exit_hour=16, eod_exit_minute=0,
+        eod_flatten_lead_secs=120, v1_base_notional=1000.0,
+        base_notional_pct=0.10, instruments={},
+        strategy_config=SimpleNamespace(),
+    )
+
+    runner = SessionRunner(
+        config=cfg, broker=mock_broker, state_store=tmp_store,
+        bar_cache=_StubBarCache(),            # EMPTY — the production condition
+        bar_router=_StubBarRouter(),
+        pre_market_job=_StubPreMarket([_make_p1("TQQQ")], [_make_p2("TQQQ")]),
+        strategy_engine=SimpleNamespace(on_orb_complete=lambda *a, **kw: None),
+        position_manager=_Mgr(), risk_gate=SimpleNamespace(),
+        indicators_store={}, underlying_store=SimpleNamespace(),
+        clock=_StubClock(), _sleep=lambda _: None,
+    )
+    runner._phase1_results = [_make_p1("TQQQ")]
+    monkeypatch.setattr(runner, "_wait_until_eod", lambda *_a, **_kw: None)
+
+    runner._run_post_orb(datetime.now(_tz.utc).date())
+
+    assert prewarmed == ["TQQQ"], (
+        "prewarm must run for every candidate, not only those with cached bars"
+    )

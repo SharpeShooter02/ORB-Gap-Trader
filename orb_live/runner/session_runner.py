@@ -298,6 +298,16 @@ class SessionRunner:
                 self._engine.on_orb_complete(symbol, p2, None)
                 continue
 
+            # Measure IB's TRUE initial-margin rate for this candidate, on the
+            # main thread (check_margin blocks — unsafe in a bar callback).
+            # MUST stay above the bar-cache read: the market-data subscription
+            # that fills that cache is deliberately deferred until after this
+            # loop (subscribing all ~59 symbols at open exceeds IB's line cap),
+            # so the cache is always empty here and the `raw.empty` branch below
+            # used to skip this entirely. House requirements move, so the CSV
+            # table seeded above is a fallback, not the source of truth.
+            self._prewarm_candidate_margin(p2)
+
             # Get ORB bars from cache and seed the indicator
             raw = self._cache.get_bars(symbol)
             if raw.empty:
@@ -326,12 +336,6 @@ class SessionRunner:
                     self._log.error("indicator_seed_failed", symbol=symbol, exc=str(exc))
                 self._engine.on_orb_complete(symbol, p2, None)
                 continue
-
-            # Prewarm IB's true initial-margin rate for this candidate on the
-            # main thread (check_margin blocks — unsafe in a bar callback).
-            # Must precede on_orb_complete so the margin rate/budget are set
-            # before a resting entry is placed in use_resting_entries mode.
-            self._prewarm_candidate_margin(p2)
 
             self._engine.on_orb_complete(symbol, p2, orb_df)
 
@@ -404,7 +408,18 @@ class SessionRunner:
             return
         try:
             price = float(p2.orb["high"] if p2.gap_direction == 1 else p2.orb["low"])
-            base  = float(getattr(self._cfg, "v1_base_notional", 0.0) or 0.0)
+            # Match live sizing: base_notional_pct of equity, falling back to
+            # the fixed notional. The rate is scale-invariant, but a probe the
+            # size of the real order also surfaces size-dependent rejections.
+            base = 0.0
+            pct = float(getattr(self._cfg, "base_notional_pct", 0.0) or 0.0)
+            if pct > 0:
+                try:
+                    base = pct * float(self._broker.get_account().get("equity", 0.0))
+                except Exception:
+                    base = 0.0
+            if base <= 0:
+                base = float(getattr(self._cfg, "v1_base_notional", 0.0) or 0.0)
             mult  = float(getattr(p2, "size_mult", 1.0) or 1.0)
             if price <= 0 or base <= 0:
                 return

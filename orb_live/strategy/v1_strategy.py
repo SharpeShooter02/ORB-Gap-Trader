@@ -45,6 +45,15 @@ import pandas as pd
 # Prior-session filter σ multiplier. Higher = looser filter.
 K_SIGMA = 1.00
 
+#: Siblings needing more than this fraction of notional in initial margin are
+#: dropped before skip-cheap picks the most expensive. Measured rates cluster:
+#: conventional funds sit at 0.5-0.96, crypto shorts at 1.12-1.21, then a gap
+#: to the unfillable group (BTCZ 2.33, BTCL 3.88, ETU 3.99, ETHU 4.09). Any
+#: value in 1.67-3.33 separates the clusters identically in backtest, so this
+#: is not a tuned parameter. Measured +4.4% net P&L with partial fills on,
+#: Sharpe 2.261 -> 2.309, MaxDD -7.28% -> -6.97%.
+MAX_MARGIN_RATE: float = 2.0
+
 # Position cap. Each unit of weight × leverage = 10% of equity, so 20 = 200% total.
 CAP_UNITS = 20.0
 
@@ -125,6 +134,20 @@ class Instrument:
     underlying: str
     leverage: int
     inverse: bool
+    #: Measured IB initial-margin rate (init_margin / notional), per side.
+    #: None where master_universe.csv carries no measurement. Optional so that
+    #: golden-session fixtures written before these columns existed still
+    #: deserialise through Instrument(**recorded).
+    margin_long: Optional[float] = None
+    margin_short: Optional[float] = None
+
+    def margin_rate(self, etf_dir: int) -> Optional[float]:
+        """Rate for the side this instrument would actually be traded on.
+
+        Sides differ, and not by a constant: SQQQ is 0.79 long / 0.95 short
+        while TSLL is 1.00 long / 0.72 short.
+        """
+        return self.margin_long if etf_dir >= 0 else self.margin_short
 
 
 @dataclass(frozen=True)
@@ -161,11 +184,21 @@ def load_master(master_csv: str | Path) -> dict[str, Instrument]:
         ul  = str(row.get("underlying", "")).strip()
         if not sym or not ul or ul.lower() == "nan":
             continue
+        def _rate(col):
+            v = row.get(col)
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return None
+            return v if v > 0 else None
+
         instruments[sym] = Instrument(
             symbol=sym,
             underlying=ul,
             leverage=int(row.get("leverage", 2) or 2),
             inverse=str(row.get("direction", "bull")).strip().lower() == "bear",
+            margin_long=_rate("margin_init_long"),
+            margin_short=_rate("margin_init_short"),
         )
     # Add FORCE_INCLUDE entries if missing
     for sym, info in FORCE_INCLUDE.items():
@@ -255,14 +288,23 @@ def compute_candidates(
     overnight_gaps: dict[str, float],
     prior_two_closes: dict[str, tuple[float, float]],
     prior_etf_close: dict[str, float],
+    max_margin_rate: Optional[float] = MAX_MARGIN_RATE,
 ) -> list[Candidate]:
     """Return today's qualified candidates after all filters and skip-cheap-top-2 pruning.
 
     Steps (per spec):
         1. Per UL: |gap| ≥ 2% AND passes_ps_filter(k=1.00 σ)
         2. Per instrument: drop if direction filter set and gap sign mismatches
-        3. Per (date, UL) group: skip-cheap-top-2 — keep up to the 2 most-expensive
-           ETFs by prior close. (Single-instrument groups are kept.)
+        3. Per (date, UL) group: drop siblings the account cannot fill, then
+           skip-cheap-top-2 — keep up to the 2 most-expensive ETFs by prior
+           close. (Single-instrument groups are kept.)
+
+    max_margin_rate — siblings whose measured rate for the side they would be
+        traded on exceeds this are removed BEFORE the price sort, unless that
+        would empty the group. Shorting ETHU costs 4.09x notional: at weight
+        3.0 on a $32k account it needs ~$39k against ~$32k of available funds,
+        so skip-cheap was selecting a trade that could never fill while a
+        fillable sibling sat next to it. Pass None to disable.
     """
     # Step 1: which ULs qualify today
     ul_qualifying: dict[str, float] = {}
@@ -297,6 +339,15 @@ def compute_candidates(
     # Step 3: skip-cheap per UL group — always keep exactly 1 (most expensive by prior close)
     final: list[Candidate] = []
     for ul, group in cands_by_ul.items():
+        if max_margin_rate is not None and len(group) > 1:
+            fillable = [
+                c for c in group
+                if (instruments[c.symbol].margin_rate(c.etf_dir) or 0.0) <= max_margin_rate
+            ]
+            # Only narrow the field when something survives. Two impossible
+            # trades is not a reason to invent a preference between them.
+            if fillable:
+                group = fillable
         if len(group) <= 1:
             final.extend(group)
             continue

@@ -191,6 +191,9 @@ class LivePositionManager:
         # is a one-time snapshot of available funds; reservations are DERIVED
         # from live positions in _committed_margin (no leaky accumulator).
         self._margin_rate: dict[str, float] = {}
+        # Side-specific rates seeded from master_universe.csv. Kept separate
+        # from _margin_rate so a live prewarm measurement still wins.
+        self._margin_rate_seed: dict[tuple, float] = {}
         self._margin_budget: Optional[float] = None
 
         # Roll back an 'entering' entry immediately on an IB order reject (201).
@@ -323,28 +326,62 @@ class LivePositionManager:
         # burst by deriving committed margin from live positions — this closes
         # the race where IB's BuyingPower lags rapid concurrent submissions.
         if self._margin_budget is not None:
-            rate       = self._margin_rate.get(symbol, 1.0)
+            rate       = self.margin_rate_for(symbol, gap_direction)
             est_margin = rate * intended_cost
             committed  = self._committed_margin()
-            if committed + est_margin > self._margin_budget:
-                if self._log:
-                    self._log.warning(
-                        "entry_rejected_margin_budget",
-                        symbol=symbol,
-                        est_margin=round(est_margin, 2),
-                        committed=round(committed, 2),
-                        budget=round(self._margin_budget, 2),
-                        margin_rate=round(rate, 4),
+            room       = self._margin_budget - committed
+
+            if est_margin > room:
+                # Size down to the remaining budget rather than dropping the
+                # entry: idle buying power is strictly worse than a smaller
+                # position. Off by default so behaviour is unchanged unless
+                # asked for.
+                min_frac = float(getattr(cfg, "partial_entry_min_frac", 0.10))
+                allow = bool(getattr(cfg, "allow_partial_entries", False))
+                # Shares straight from the remaining budget. Scaling the target
+                # by room/est_margin loses a share to floating point: 6 x
+                # (400/600) is 3.9999, which truncates to 3.
+                per_share = rate * entry["entry_price"]
+                new_shares = int(room // per_share) if per_share > 0 else 0
+                new_shares = min(new_shares, int(entry["shares"]))
+                frac = (new_shares / entry["shares"]) if entry["shares"] else 0.0
+
+                if allow and frac >= min_frac and new_shares >= 1:
+                    entry = dict(entry)
+                    entry["shares"] = new_shares
+                    # Exit legs must track the reduced size or the bracket
+                    # would try to close more than we hold.
+                    entry["tp1_shares"] = new_shares
+                    entry["tp2_shares"] = 0
+                    entry["tp3_shares"] = 0
+                    intended_cost = entry["entry_price"] * new_shares
+                    est_margin = rate * intended_cost
+                    if self._log:
+                        self._log.info(
+                            "entry_partially_sized", symbol=symbol,
+                            shares=new_shares, frac=round(frac, 4),
+                            room=round(room, 2), rate=round(rate, 4),
+                        )
+                else:
+                    if self._log:
+                        self._log.warning(
+                            "entry_rejected_margin_budget",
+                            symbol=symbol,
+                            est_margin=round(est_margin, 2),
+                            committed=round(committed, 2),
+                            budget=round(self._margin_budget, 2),
+                            margin_rate=round(rate, 4),
+                        )
+                    # Durable record: a trade that silently does not happen is
+                    # the worst thing to have no trace of. Queryable from
+                    # alert_log.
+                    self._record_entry_rejection(
+                        session_date, symbol, "margin_budget", gap_direction,
+                        f"est_margin={est_margin:.2f} committed={committed:.2f} "
+                        f"budget={self._margin_budget:.2f} rate={rate:.4f} "
+                        f"intended_cost={intended_cost:.2f}",
                     )
-                # Durable record: a trade that silently does not happen is the
-                # worst thing to have no trace of. Queryable from alert_log.
-                self._record_entry_rejection(
-                    session_date, symbol, "margin_budget", gap_direction,
-                    f"est_margin={est_margin:.2f} committed={committed:.2f} "
-                    f"budget={self._margin_budget:.2f} rate={rate:.4f} "
-                    f"intended_cost={intended_cost:.2f}",
-                )
-                return None
+                    return None
 
         # Raw buying-power floor — include notional reserved by resting stop-limits.
         if self._resting_reserved_bp() + intended_cost > buying_power:
@@ -941,6 +978,60 @@ class LivePositionManager:
             for r in self._resting_entries.values()
         )
 
+    def seed_margin_rates(self, rates: dict, budget: Optional[float] = None) -> None:
+        """Arm the margin gate from the measured profile table.
+
+        Why this exists rather than relying on prewarm_margin: that path never
+        executes in production. _run_post_orb reads bar_cache before the market
+        data subscription is started (deliberately deferred to ~10:00 to stay
+        under IB's line cap), so every symbol takes the `raw.empty` branch and
+        continues before prewarm is reached. _margin_budget therefore stayed
+        None and the entire margin-budget check was skipped, leaving only the
+        raw buying-power floor.
+
+        rates — {(symbol, direction): rate}; direction +1 long, -1 short.
+        budget — initial-margin budget. Defaults to the broker's available
+            funds, which is what actually limits us: IB reports BuyingPower at
+            4x equity, but that is 4x AVAILABLE FUNDS and positions deplete
+            available funds, so it does not raise the ceiling.
+        """
+        for key, rate in rates.items():
+            if isinstance(key, tuple) and len(key) == 2:
+                sym, direction = key
+                self._margin_rate_seed[(str(sym), 1 if int(direction) >= 0 else -1)] = float(rate)
+            else:                       # {symbol: rate} — applies to both sides
+                self._margin_rate_seed[(str(key), 1)] = float(rate)
+                self._margin_rate_seed[(str(key), -1)] = float(rate)
+
+        if budget is None:
+            try:
+                acct = self._broker.get_account()
+                budget = float(acct.get("available_funds",
+                                        acct.get("buying_power",
+                                                 acct.get("equity", 0.0))))
+            except Exception as exc:
+                if self._log:
+                    self._log.warning("seed_margin_budget_failed", exc=str(exc))
+                return
+        self._margin_budget = budget
+
+        if self._log:
+            self._log.info("margin_rates_seeded",
+                           n=len(self._margin_rate_seed), budget=round(budget, 2))
+
+    def margin_rate_for(self, symbol: str, direction: int = 1) -> float:
+        """Initial-margin rate for one side of one symbol.
+
+        A live prewarm measurement beats the stored table; the table beats the
+        conservative 1.0 default, which treats an unknown instrument as costing
+        full notional rather than silently under-reserving.
+        """
+        measured = self._margin_rate.get(symbol)
+        if measured is not None:
+            return measured
+        side = 1 if direction >= 0 else -1
+        return self._margin_rate_seed.get((symbol, side), 1.0)
+
     def prewarm_margin(self, symbol: str, side: str, qty: float, price: float) -> None:
         """Cache IB's true initial-margin rate for a candidate before the entry
         window opens.
@@ -1014,7 +1105,7 @@ class LivePositionManager:
         total = 0.0
         for sym, pos in self._positions.items():
             if pos.status in ("entering", "open"):
-                rate = self._margin_rate.get(sym, 1.0)
+                rate = self.margin_rate_for(sym, pos.direction)
                 total += rate * pos.actual_entry_price * pos.remaining
         return total
 

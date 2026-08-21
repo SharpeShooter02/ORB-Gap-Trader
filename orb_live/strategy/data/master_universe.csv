@@ -1,185 +1,185 @@
-class,exposure,underlying,etf,leverage,direction,binary_event
-1_BROAD,Dow 30,DIA,SDOW,3,bear,
-1_BROAD,Dow 30,DIA,UDOW,3,bull,
-1_BROAD,Russell 2000,IWM,SRTY,3,bear,
-1_BROAD,Russell 2000,IWM,TZA,3,bear,
-1_BROAD,Russell 2000,IWM,TNA,3,bull,
-1_BROAD,Russell 2000,IWM,URTY,3,bull,
-1_BROAD,Nasdaq 100,QQQ,FNGD,3,bear,
-1_BROAD,Nasdaq 100,QQQ,SQQQ,3,bear,
-1_BROAD,Nasdaq 100,QQQ,FNGU,3,bull,
-1_BROAD,Nasdaq 100,QQQ,TQQQ,3,bull,
-1_BROAD,S&P 500,SPY,SPXS,3,bear,
-1_BROAD,S&P 500,SPY,SPXL,3,bull,
-1_BROAD,S&P 500,SPY,UPRO,3,bull,
-2_SECTOR_pair,EM Broad,EEM,EDZ,3,bear,
-2_SECTOR_pair,EM Broad,EEM,EDC,3,bull,
-2_SECTOR_pair,China Large-Cap,FXI,YANG,3,bear,YES
-2_SECTOR_pair,China Large-Cap,FXI,YINN,3,bull,YES
-2_SECTOR_pair,Gold Miners,GDX,DUST,2,bear,
-2_SECTOR_pair,Gold Miners,GDX,GDXU,3,bull,
-2_SECTOR_pair,Gold Miners,GDX,NUGT,2,bull,
-2_SECTOR_pair,Jr Gold Miners,GDXJ,JDST,2,bear,
-2_SECTOR_pair,Jr Gold Miners,GDXJ,JNUG,2,bull,
-2_SECTOR_pair,Biotech,IBB,LABD,3,bear,YES
-2_SECTOR_pair,Biotech,IBB,LABU,3,bull,YES
-2_SECTOR_pair,Semiconductors,SOXX,SOXS,3,bear,
-2_SECTOR_pair,Semiconductors,SOXX,SOXL,3,bull,
-2_SECTOR_pair,Comm Services,XLC,WEBS,3,bear,
-2_SECTOR_pair,Comm Services,XLC,WEBL,3,bull,
-2_SECTOR_pair,Financials,XLF,FAZ,3,bear,
-2_SECTOR_pair,Financials,XLF,FAS,3,bull,
-2_SECTOR_pair,Technology,XLK,TECS,3,bear,
-2_SECTOR_pair,Technology,XLK,TECL,3,bull,
-3_SECTOR_bull_only,AI and Big Data,AI and Big Data,AIBU,2,bull,
-3_SECTOR_bull_only,ARKK,ARKK,TARK,2,bull,
-3_SECTOR_bull_only,China A,ASHR,CHAU,2,bull,YES
-3_SECTOR_bull_only,Dow Jones Transportation Average,Dow Jones Transportation Average,TPOR,3,bull,
-3_SECTOR_bull_only,Dow Jones U.S. Consumer Discretionary Index,Dow Jones U.S. Consumer Discretionary Index,UCC,2,bull,
-3_SECTOR_bull_only,Dow Jones U.S. Financials Index,Dow Jones U.S. Financials Index,UYG,2,bull,
-3_SECTOR_bull_only,Dow Jones U.S. Health Care Index,Dow Jones U.S. Health Care Index,RXL,2,bull,
-3_SECTOR_bull_only,Dow Jones U.S. Oil & Gas Index,Dow Jones U.S. Oil & Gas Index,DIG,2,bull,
-3_SECTOR_bull_only,Dow Jones U.S. Select Telecom Index,Dow Jones U.S. Select Telecom Index,LTL,2,bull,
-3_SECTOR_bull_only,Dow Jones U.S. Semiconductors Index,Dow Jones U.S. Semiconductors Index,USD,2,bull,
-3_SECTOR_bull_only,Dow Jones U.S. Utilities Index,Dow Jones U.S. Utilities Index,UPW,2,bull,
-3_SECTOR_bull_only,EWJ,EWJ,EZJ,2,bull,
-3_SECTOR_bull_only,Mexico,EWW,MEXX,3,bull,YES
-3_SECTOR_bull_only,S Korea,EWY,KORU,3,bull,YES
-3_SECTOR_bull_only,Brazil,EWZ,BRZU,2,bull,YES
-3_SECTOR_bull_only,Brazil,EWZ,UBR,2,bull,YES
-3_SECTOR_bull_only,FEZ,FEZ,EURL,3,bull,YES
-3_SECTOR_bull_only,FTSE China 50 Index,FTSE China 50 Index,XPP,2,bull,YES
-3_SECTOR_bull_only,Pharma,IHE,PILL,3,bull,YES
-3_SECTOR_bull_only,India,INDY,INDL,3,bull,YES
-3_SECTOR_bull_only,Aero/Defense,ITA,DFEN,3,bull,YES
-3_SECTOR_bull_only,Homebuilders,ITB,NAIL,3,bull,
-3_SECTOR_bull_only,Real Estate,IYR,DRN,3,bull,
-3_SECTOR_bull_only,Indxx Global Robotics & AI Thematic Index,Indxx Global Robotics & AI Thematic Index,UBOT,2,bull,
-3_SECTOR_bull_only,Indxx USA Cloud Computing Index,Indxx USA Cloud Computing Index,CLDL,2,bull,
-3_SECTOR_bull_only,Banks,KBE,BNKU,3,bull,YES
-3_SECTOR_bull_only,Regional Banks,KRE,DPST,3,bull,YES
-3_SECTOR_bull_only,China Net,KWEB,CWEB,2,bull,YES
-3_SECTOR_bull_only,MAX Airlines,JETS,JETU,3,bull,
-3_SECTOR_bull_only,MDY,MDY,MIDU,3,bull,
-3_SECTOR_bull_only,MSCI EAFE Index,MSCI EAFE Index,EFO,2,bull,
-3_SECTOR_bull_only,MSCI Emerging Markets Index,MSCI Emerging Markets Index,EET,2,bull,
-3_SECTOR_bull_only,Cannabis,MSOS,MSOX,2,bull,YES
-3_SECTOR_bull_only,MicroSectors Travel,MicroSectors Travel,FLYU,3,bull,
-3_SECTOR_bull_only,Nasdaq CTA Cybersecurity Index,Nasdaq CTA Cybersecurity Index,UCYB,2,bull,
-3_SECTOR_bull_only,S&P 500 High Beta Index,SPHB,HIBL,3,bull,
-3_SECTOR_bull_only,S&P MidCap 400,MDY,UMDD,3,bull,
-3_SECTOR_bull_only,S&P SmallCap 600,IJR,SAA,2,bull,
-3_SECTOR_bull_only,Solactive FANG Innovation Index,QQQ,BULZ,3,bull,
-3_SECTOR_bull_only,Travel,Travel,OOTO,2,bull,
-3_SECTOR_bull_only,Uranium,Uranium,URAA,2,bull,YES
-3_SECTOR_bull_only,VGK,VGK,UPV,2,bull,
-3_SECTOR_bull_only,Volatility,VIX,UVIX,2,bull,
-3_SECTOR_bull_only,Materials,XLB,UYM,2,bull,
-3_SECTOR_bull_only,Energy (XLE),XLE,WTIU,3,bull,
-3_SECTOR_bull_only,Industrials,XLI,DUSL,3,bull,
-3_SECTOR_bull_only,Staples,XLP,UGE,2,bull,
-3_SECTOR_bull_only,Utilities,XLU,UTSL,3,bull,
-3_SECTOR_bull_only,Healthcare (broad),XLV,CURE,3,bull,
-3_SECTOR_bull_only,Cons Disc,XLY,WANT,3,bull,
-3_SECTOR_bull_only,XOP,XOP,NRGU,3,bull,
-3_SECTOR_bull_only,Retail,XRT,RETL,3,bull,
-4_CRYPTO,BTC,BTC,BTCZ,2,bear,
-4_CRYPTO,BTC,BTC,SBIT,2,bear,
-4_CRYPTO,BTC,BTC,BITU,2,bull,
-4_CRYPTO,BTC,BTC,BITX,2,bull,
-4_CRYPTO,BTC,BTC,BTCL,2,bull,
-4_CRYPTO,BTC,BTC,BTFX,2,bull,
-4_CRYPTO,ETH,ETH,ETHD,2,bear,
-4_CRYPTO,ETH,ETH,ETH,2,bull,
-4_CRYPTO,ETH,ETH,ETHT,2,bull,
-4_CRYPTO,ETH,ETH,ETHU,2,bull,
-4_CRYPTO,ETH,ETH,ETU,2,bull,
-4_CRYPTO,SOL,SOL,SOLT,2,bull,
-4_CRYPTO,XRP,XRP,XRPT,2,bull,
-4_CRYPTO,XRP,XRP,UXRP,2,bull,
-5_SINGLE_STOCK,AAPL,AAPL,AAPB,2,bull,
-5_SINGLE_STOCK,AAPL,AAPL,AAPU,2,bull,
-5_SINGLE_STOCK,AAPL,AAPL,AAPW,2,bull,
-5_SINGLE_STOCK,AAPL,AAPL,AAPX,2,bull,
-5_SINGLE_STOCK,ADBE,ADBE,ADBG,2,bull,
-5_SINGLE_STOCK,AMD,AMD,AMDG,2,bull,
-5_SINGLE_STOCK,AMD,AMD,AMDL,2,bull,
-5_SINGLE_STOCK,AMD,AMD,AMUU,2,bull,
-5_SINGLE_STOCK,AMZN,AMZN,AMZZ,2,bear,
-5_SINGLE_STOCK,AMZN,AMZN,AMZA,2,bull,
-5_SINGLE_STOCK,AMZN,AMZN,AMZU,2,bull,
-5_SINGLE_STOCK,APP,APP,APPX,2,bull,
-5_SINGLE_STOCK,ARM,ARM,ARMG,2,bull,
-5_SINGLE_STOCK,ARM,ARM,ARMU,2,bull,
-5_SINGLE_STOCK,ASML,ASML,ASMG,2,bull,
-5_SINGLE_STOCK,AVGO,AVGO,AVGG,2,bull,
-5_SINGLE_STOCK,AVGO,AVGO,AVGX,2,bull,
-5_SINGLE_STOCK,AVGO,AVGO,AVL,2,bull,
-5_SINGLE_STOCK,BA,BA,BOEU,2,bull,
-5_SINGLE_STOCK,BABA,BABA,BABX,2,bull,
-5_SINGLE_STOCK,BABA,BABA,KBAB,2,bull,
-5_SINGLE_STOCK,BRK.B,BRK-B,BRKU,2,bull,
-5_SINGLE_STOCK,COIN,COIN,COIG,2,bull,
-5_SINGLE_STOCK,COIN,COIN,COIW,2,bull,
-5_SINGLE_STOCK,COIN,COIN,CONL,2,bull,
-5_SINGLE_STOCK,COIN,COIN,CONX,2,bull,
-5_SINGLE_STOCK,CRM,CRM,CRMG,2,bull,
-5_SINGLE_STOCK,CRWD,CRWD,CRWL,2,bull,
-5_SINGLE_STOCK,DELL,DELL,DLLL,2,bull,
-5_SINGLE_STOCK,DJT,DJT,DJTU,2,bull,
-5_SINGLE_STOCK,GOOGL,GOOGL,GGLL,2,bull,
-5_SINGLE_STOCK,GOOGL,GOOGL,GOOX,2,bull,
-5_SINGLE_STOCK,HOOD,HOOD,HOOG,2,bull,
-5_SINGLE_STOCK,HOOD,HOOD,HOOX,2,bull,
-5_SINGLE_STOCK,HOOD,HOOD,ROBN,2,bull,
-5_SINGLE_STOCK,INTC,INTC,INTW,2,bull,
-5_SINGLE_STOCK,IONQ,IONQ,IONL,2,bull,
-5_SINGLE_STOCK,LLY,LLY,ELIL,2,bull,
-5_SINGLE_STOCK,LLY,LLY,LLYX,2,bull,
-5_SINGLE_STOCK,MARA,MARA,MRAL,2,bull,
-5_SINGLE_STOCK,META,META,FBL,2,bull,
-5_SINGLE_STOCK,META,META,METU,2,bull,
-5_SINGLE_STOCK,MRVL,MRVL,MVLL,2,bull,
-5_SINGLE_STOCK,MSCI,MSCI,USML,2,bull,
-5_SINGLE_STOCK,MSFT,MSFT,MSFL,2,bull,
-5_SINGLE_STOCK,MSFT,MSFT,MSFO,2,bull,
-5_SINGLE_STOCK,MSFT,MSFT,MSFU,2,bull,
-5_SINGLE_STOCK,MSFT,MSFT,MSFX,2,bull,
-5_SINGLE_STOCK,MSTR,MSTR,MSTU,2,bull,
-5_SINGLE_STOCK,MSTR,MSTR,MSTX,2,bull,
-5_SINGLE_STOCK,MU,MU,MULL,2,bull,
-5_SINGLE_STOCK,MU,MU,MUU,2,bull,
-5_SINGLE_STOCK,NFLX,NFLX,NFLU,2,bull,
-5_SINGLE_STOCK,NFLX,NFLX,NFXL,2,bull,
-5_SINGLE_STOCK,NVDA,NVDA,NVDG,2,bull,
-5_SINGLE_STOCK,NVDA,NVDA,NVDL,2,bull,
-5_SINGLE_STOCK,NVDA,NVDA,NVDU,2,bull,
-5_SINGLE_STOCK,NVDA,NVDA,NVDW,2,bull,
-5_SINGLE_STOCK,NVDA,NVDA,NVDX,2,bull,
-5_SINGLE_STOCK,PANW,PANW,PALU,2,bull,
-5_SINGLE_STOCK,PDD,PDD,KPDD,2,bull,
-5_SINGLE_STOCK,PLTR,PLTR,PLTG,2,bull,
-5_SINGLE_STOCK,PLTR,PLTR,PLTU,2,bull,
-5_SINGLE_STOCK,PLTR,PLTR,PLTW,2,bull,
-5_SINGLE_STOCK,PLTR,PLTR,PTIR,2,bull,
-5_SINGLE_STOCK,PYPL,PYPL,PYPG,2,bull,
-5_SINGLE_STOCK,QCOM,QCOM,QCML,2,bull,
-5_SINGLE_STOCK,RBLX,RBLX,RBLU,2,bull,
-5_SINGLE_STOCK,RDDT,RDDT,RDTL,2,bull,
-5_SINGLE_STOCK,RKLB,RKLB,RKLX,2,bull,
-5_SINGLE_STOCK,SMCI,SMCI,SMCL,2,bull,
-5_SINGLE_STOCK,SMCI,SMCI,SMCX,2,bull,
-5_SINGLE_STOCK,SNPS,SNPS,SNPX,2,bull,
-5_SINGLE_STOCK,TSLA,TSLA,TSL,2,bull,
-5_SINGLE_STOCK,TSLA,TSLA,TSLG,2,bull,
-5_SINGLE_STOCK,TSLA,TSLA,TSLI,2,bull,
-5_SINGLE_STOCK,TSLA,TSLA,TSLL,2,bull,
-5_SINGLE_STOCK,TSLA,TSLA,TSLR,2,bull,
-5_SINGLE_STOCK,TSLA,TSLA,TSLT,2,bull,
-5_SINGLE_STOCK,TSLA,TSLA,TSLW,2,bull,
-5_SINGLE_STOCK,TSM,TSM,TSMG,2,bull,
-5_SINGLE_STOCK,TSM,TSM,TSMU,2,bull,
-5_SINGLE_STOCK,TSM,TSM,TSMX,2,bull,
-5_SINGLE_STOCK,UBER,UBER,UBRL,2,bull,
-5_SINGLE_STOCK,VRT,VRT,VRTL,2,bull,
-5_SINGLE_STOCK,XOM,XOM,XOMX,2,bull,
+class,exposure,underlying,etf,leverage,direction,binary_event,margin_init_long,margin_maint_long,margin_init_short,margin_maint_short,margin_measured
+1_BROAD,Dow 30,DIA,SDOW,3,bear,,0.7867,0.7492,0.944,0.8991,2026-08-20
+1_BROAD,Dow 30,DIA,UDOW,3,bull,,0.7866,0.7491,0.9439,0.8989,2026-08-20
+1_BROAD,Russell 2000,IWM,SRTY,3,bear,,0.7929,0.7551,0.9514,0.9061,2026-08-20
+1_BROAD,Russell 2000,IWM,TZA,3,bear,,0.7935,0.7557,0.9521,0.9068,2026-08-20
+1_BROAD,Russell 2000,IWM,TNA,3,bull,,0.7817,0.7444,0.938,0.8933,2026-08-20
+1_BROAD,Russell 2000,IWM,URTY,3,bull,,0.7813,0.7441,0.9376,0.8929,2026-08-20
+1_BROAD,Nasdaq 100,QQQ,FNGD,3,bear,,0.7898,0.7522,0.9477,0.9026,2026-08-20
+1_BROAD,Nasdaq 100,QQQ,SQQQ,3,bear,,0.7921,0.7544,0.9505,0.9053,2026-08-20
+1_BROAD,Nasdaq 100,QQQ,FNGU,3,bull,,0.784,0.7467,0.9408,0.896,2026-08-20
+1_BROAD,Nasdaq 100,QQQ,TQQQ,3,bull,,0.7825,0.7452,0.939,0.8943,2026-08-20
+1_BROAD,S&P 500,SPY,SPXS,3,bear,,0.788,0.7505,0.9457,0.9006,2026-08-20
+1_BROAD,S&P 500,SPY,SPXL,3,bull,,0.7864,0.749,0.9437,0.8988,2026-08-20
+1_BROAD,S&P 500,SPY,UPRO,3,bull,,0.7865,0.7491,0.9439,0.8989,2026-08-20
+2_SECTOR_pair,EM Broad,EEM,EDZ,3,bear,,0.8108,0.7722,0.973,0.9266,2026-08-20
+2_SECTOR_pair,EM Broad,EEM,EDC,3,bull,,0.7628,0.7265,0.9153,0.8718,2026-08-20
+2_SECTOR_pair,China Large-Cap,FXI,YANG,3,bear,YES,0.7959,0.758,0.9551,0.9096,2026-08-20
+2_SECTOR_pair,China Large-Cap,FXI,YINN,3,bull,YES,0.7787,0.7416,0.9344,0.8899,2026-08-20
+2_SECTOR_pair,Gold Miners,GDX,DUST,2,bear,,0.5347,0.5092,0.6416,0.6111,2026-08-20
+2_SECTOR_pair,Gold Miners,GDX,GDXU,3,bull,,0.7661,0.7296,0.9193,0.8755,2026-08-20
+2_SECTOR_pair,Gold Miners,GDX,NUGT,2,bull,,0.5151,0.4906,0.6181,0.5887,2026-08-20
+2_SECTOR_pair,Jr Gold Miners,GDXJ,JDST,2,bear,,0.5358,0.5103,0.643,0.6124,2026-08-20
+2_SECTOR_pair,Jr Gold Miners,GDXJ,JNUG,2,bull,,0.516,0.4915,0.6192,0.5898,2026-08-20
+2_SECTOR_pair,Biotech,IBB,LABD,3,bear,YES,0.7933,0.7556,0.952,0.9067,2026-08-20
+2_SECTOR_pair,Biotech,IBB,LABU,3,bull,YES,0.7753,0.7384,0.9303,0.886,2026-08-20
+2_SECTOR_pair,Semiconductors,SOXX,SOXS,3,bear,,0.8031,0.7648,0.9637,0.9178,2026-08-20
+2_SECTOR_pair,Semiconductors,SOXX,SOXL,3,bull,,0.771,0.7343,0.9252,0.8811,2026-08-20
+2_SECTOR_pair,Comm Services,XLC,WEBS,3,bear,,0.7883,0.7507,0.9459,0.9009,2026-08-20
+2_SECTOR_pair,Comm Services,XLC,WEBL,3,bull,,0.7879,0.7504,0.9455,0.9005,2026-08-20
+2_SECTOR_pair,Financials,XLF,FAZ,3,bear,,0.7864,0.7489,0.9436,0.8987,2026-08-20
+2_SECTOR_pair,Financials,XLF,FAS,3,bull,,0.7866,0.7491,0.9439,0.899,2026-08-20
+2_SECTOR_pair,Technology,XLK,TECS,3,bear,,0.7966,0.7586,0.9559,0.9104,2026-08-20
+2_SECTOR_pair,Technology,XLK,TECL,3,bull,,0.7798,0.7427,0.9358,0.8912,2026-08-20
+3_SECTOR_bull_only,AI and Big Data,AI and Big Data,AIBU,2,bull,,,,,,
+3_SECTOR_bull_only,ARKK,ARKK,TARK,2,bull,,,,,,
+3_SECTOR_bull_only,China A,ASHR,CHAU,2,bull,YES,,,,,
+3_SECTOR_bull_only,Dow Jones Transportation Average,Dow Jones Transportation Average,TPOR,3,bull,,,,,,
+3_SECTOR_bull_only,Dow Jones U.S. Consumer Discretionary Index,Dow Jones U.S. Consumer Discretionary Index,UCC,2,bull,,,,,,
+3_SECTOR_bull_only,Dow Jones U.S. Financials Index,Dow Jones U.S. Financials Index,UYG,2,bull,,,,,,
+3_SECTOR_bull_only,Dow Jones U.S. Health Care Index,Dow Jones U.S. Health Care Index,RXL,2,bull,,,,,,
+3_SECTOR_bull_only,Dow Jones U.S. Oil & Gas Index,Dow Jones U.S. Oil & Gas Index,DIG,2,bull,,,,,,
+3_SECTOR_bull_only,Dow Jones U.S. Select Telecom Index,Dow Jones U.S. Select Telecom Index,LTL,2,bull,,,,,,
+3_SECTOR_bull_only,Dow Jones U.S. Semiconductors Index,Dow Jones U.S. Semiconductors Index,USD,2,bull,,,,,,
+3_SECTOR_bull_only,Dow Jones U.S. Utilities Index,Dow Jones U.S. Utilities Index,UPW,2,bull,,,,,,
+3_SECTOR_bull_only,EWJ,EWJ,EZJ,2,bull,,,,,,
+3_SECTOR_bull_only,Mexico,EWW,MEXX,3,bull,YES,0.9842,0.8947,1.0737,0.8947,2026-08-20
+3_SECTOR_bull_only,S Korea,EWY,KORU,3,bull,YES,0.7384,0.7032,0.8861,0.8439,2026-08-20
+3_SECTOR_bull_only,Brazil,EWZ,BRZU,2,bull,YES,0.5237,0.4988,0.6285,0.5985,2026-08-20
+3_SECTOR_bull_only,Brazil,EWZ,UBR,2,bull,YES,,,,,
+3_SECTOR_bull_only,FEZ,FEZ,EURL,3,bull,YES,0.7843,0.747,0.9412,0.8964,2026-08-20
+3_SECTOR_bull_only,FTSE China 50 Index,FTSE China 50 Index,XPP,2,bull,YES,,,,,
+3_SECTOR_bull_only,Pharma,IHE,PILL,3,bull,YES,0.7831,0.7458,0.9397,0.8949,2026-08-20
+3_SECTOR_bull_only,India,INDY,INDL,3,bull,YES,0.6606,0.5005,0.7207,0.6006,2026-08-20
+3_SECTOR_bull_only,Aero/Defense,ITA,DFEN,3,bull,YES,,,,,
+3_SECTOR_bull_only,Homebuilders,ITB,NAIL,3,bull,,,,,,
+3_SECTOR_bull_only,Real Estate,IYR,DRN,3,bull,,,,,,
+3_SECTOR_bull_only,Indxx Global Robotics & AI Thematic Index,Indxx Global Robotics & AI Thematic Index,UBOT,2,bull,,,,,,
+3_SECTOR_bull_only,Indxx USA Cloud Computing Index,Indxx USA Cloud Computing Index,CLDL,2,bull,,,,,,
+3_SECTOR_bull_only,Banks,KBE,BNKU,3,bull,YES,,,,,
+3_SECTOR_bull_only,Regional Banks,KRE,DPST,3,bull,YES,,,,,
+3_SECTOR_bull_only,China Net,KWEB,CWEB,2,bull,YES,,,,,
+3_SECTOR_bull_only,MAX Airlines,JETS,JETU,3,bull,,,,,,
+3_SECTOR_bull_only,MDY,MDY,MIDU,3,bull,,,,,,
+3_SECTOR_bull_only,MSCI EAFE Index,MSCI EAFE Index,EFO,2,bull,,,,,,
+3_SECTOR_bull_only,MSCI Emerging Markets Index,MSCI Emerging Markets Index,EET,2,bull,,,,,,
+3_SECTOR_bull_only,Cannabis,MSOS,MSOX,2,bull,YES,0.6113,0.5557,1.0135,1.0135,2026-08-20
+3_SECTOR_bull_only,MicroSectors Travel,MicroSectors Travel,FLYU,3,bull,,,,,,
+3_SECTOR_bull_only,Nasdaq CTA Cybersecurity Index,Nasdaq CTA Cybersecurity Index,UCYB,2,bull,,,,,,
+3_SECTOR_bull_only,S&P 500 High Beta Index,SPHB,HIBL,3,bull,,,,,,
+3_SECTOR_bull_only,S&P MidCap 400,MDY,UMDD,3,bull,,,,,,
+3_SECTOR_bull_only,S&P SmallCap 600,IJR,SAA,2,bull,,,,,,
+3_SECTOR_bull_only,Solactive FANG Innovation Index,QQQ,BULZ,3,bull,,,,,,
+3_SECTOR_bull_only,Travel,Travel,OOTO,2,bull,,,,,,
+3_SECTOR_bull_only,Uranium,Uranium,URAA,2,bull,YES,,,,,
+3_SECTOR_bull_only,VGK,VGK,UPV,2,bull,,,,,,
+3_SECTOR_bull_only,Volatility,VIX,UVIX,2,bull,,,,,,
+3_SECTOR_bull_only,Materials,XLB,UYM,2,bull,,,,,,
+3_SECTOR_bull_only,Energy (XLE),XLE,WTIU,3,bull,,,,,,
+3_SECTOR_bull_only,Industrials,XLI,DUSL,3,bull,,,,,,
+3_SECTOR_bull_only,Staples,XLP,UGE,2,bull,,,,,,
+3_SECTOR_bull_only,Utilities,XLU,UTSL,3,bull,,,,,,
+3_SECTOR_bull_only,Healthcare (broad),XLV,CURE,3,bull,,,,,,
+3_SECTOR_bull_only,Cons Disc,XLY,WANT,3,bull,,,,,,
+3_SECTOR_bull_only,XOP,XOP,NRGU,3,bull,,,,,,
+3_SECTOR_bull_only,Retail,XRT,RETL,3,bull,,,,,,
+4_CRYPTO,BTC,BTC,BTCZ,2,bear,,1.0585,1.0585,2.3286,2.1169,2026-08-20
+4_CRYPTO,BTC,BTC,SBIT,2,bear,,1.0514,1.0514,1.1566,1.0514,2026-08-20
+4_CRYPTO,BTC,BTC,BITU,2,bull,,0.9532,0.9532,1.1629,0.9532,2026-08-20
+4_CRYPTO,BTC,BTC,BITX,2,bull,,0.9527,0.9527,1.1623,0.9527,2026-08-20
+4_CRYPTO,BTC,BTC,BTCL,2,bull,,0.9519,0.9519,3.8838,2.8557,2026-08-20
+4_CRYPTO,BTC,BTC,BTFX,2,bull,,,,,,
+4_CRYPTO,ETH,ETH,ETHD,2,bear,,1.013,1.013,1.1143,1.013,2026-08-20
+4_CRYPTO,ETH,ETH,ETH,2,bull,,0.9891,0.4946,0.6034,0.4946,2026-08-20
+4_CRYPTO,ETH,ETH,ETHT,2,bull,,0.981,0.981,1.1969,0.981,2026-08-20
+4_CRYPTO,ETH,ETH,ETHU,2,bull,,0.9813,0.9813,4.0038,2.944,2026-08-20
+4_CRYPTO,ETH,ETH,ETU,2,bull,,0.9776,0.9776,3.9887,2.9328,2026-08-20
+4_CRYPTO,SOL,SOL,SOLT,2,bull,,0.9637,0.9637,1.1757,0.9637,2026-08-20
+4_CRYPTO,XRP,XRP,XRPT,2,bull,,0.9357,0.9357,1.1416,0.9357,2026-08-20
+4_CRYPTO,XRP,XRP,UXRP,2,bull,,0.9652,0.9652,1.1775,0.9652,2026-08-20
+5_SINGLE_STOCK,AAPL,AAPL,AAPB,2,bull,,,,,,
+5_SINGLE_STOCK,AAPL,AAPL,AAPU,2,bull,,,,,,
+5_SINGLE_STOCK,AAPL,AAPL,AAPW,2,bull,,,,,,
+5_SINGLE_STOCK,AAPL,AAPL,AAPX,2,bull,,,,,,
+5_SINGLE_STOCK,ADBE,ADBE,ADBG,2,bull,,,,,,
+5_SINGLE_STOCK,AMD,AMD,AMDG,2,bull,,,,,,
+5_SINGLE_STOCK,AMD,AMD,AMDL,2,bull,,0.7888,0.7171,0.7076,0.5968,2026-08-20
+5_SINGLE_STOCK,AMD,AMD,AMUU,2,bull,,,,,,
+5_SINGLE_STOCK,AMZN,AMZN,AMZZ,2,bear,,,,,,
+5_SINGLE_STOCK,AMZN,AMZN,AMZA,2,bull,,,,,,
+5_SINGLE_STOCK,AMZN,AMZN,AMZU,2,bull,,,,,,
+5_SINGLE_STOCK,APP,APP,APPX,2,bull,,,,,,
+5_SINGLE_STOCK,ARM,ARM,ARMG,2,bull,,,,,,
+5_SINGLE_STOCK,ARM,ARM,ARMU,2,bull,,,,,,
+5_SINGLE_STOCK,ASML,ASML,ASMG,2,bull,,,,,,
+5_SINGLE_STOCK,AVGO,AVGO,AVGG,2,bull,,,,,,
+5_SINGLE_STOCK,AVGO,AVGO,AVGX,2,bull,,,,,,
+5_SINGLE_STOCK,AVGO,AVGO,AVL,2,bull,,,,,,
+5_SINGLE_STOCK,BA,BA,BOEU,2,bull,,,,,,
+5_SINGLE_STOCK,BABA,BABA,BABX,2,bull,,,,,,
+5_SINGLE_STOCK,BABA,BABA,KBAB,2,bull,,,,,,
+5_SINGLE_STOCK,BRK.B,BRK-B,BRKU,2,bull,,,,,,
+5_SINGLE_STOCK,COIN,COIN,COIG,2,bull,,,,,,
+5_SINGLE_STOCK,COIN,COIN,COIW,2,bull,,,,,,
+5_SINGLE_STOCK,COIN,COIN,CONL,2,bull,,,,,,
+5_SINGLE_STOCK,COIN,COIN,CONX,2,bull,,,,,,
+5_SINGLE_STOCK,CRM,CRM,CRMG,2,bull,,,,,,
+5_SINGLE_STOCK,CRWD,CRWD,CRWL,2,bull,,,,,,
+5_SINGLE_STOCK,DELL,DELL,DLLL,2,bull,,,,,,
+5_SINGLE_STOCK,DJT,DJT,DJTU,2,bull,,,,,,
+5_SINGLE_STOCK,GOOGL,GOOGL,GGLL,2,bull,,,,,,
+5_SINGLE_STOCK,GOOGL,GOOGL,GOOX,2,bull,,,,,,
+5_SINGLE_STOCK,HOOD,HOOD,HOOG,2,bull,,,,,,
+5_SINGLE_STOCK,HOOD,HOOD,HOOX,2,bull,,,,,,
+5_SINGLE_STOCK,HOOD,HOOD,ROBN,2,bull,,,,,,
+5_SINGLE_STOCK,INTC,INTC,INTW,2,bull,,,,,,
+5_SINGLE_STOCK,IONQ,IONQ,IONL,2,bull,,,,,,
+5_SINGLE_STOCK,LLY,LLY,ELIL,2,bull,,,,,,
+5_SINGLE_STOCK,LLY,LLY,LLYX,2,bull,,,,,,
+5_SINGLE_STOCK,MARA,MARA,MRAL,2,bull,,,,,,
+5_SINGLE_STOCK,META,META,FBL,2,bull,,,,,,
+5_SINGLE_STOCK,META,META,METU,2,bull,,,,,,
+5_SINGLE_STOCK,MRVL,MRVL,MVLL,2,bull,,,,,,
+5_SINGLE_STOCK,MSCI,MSCI,USML,2,bull,,,,,,
+5_SINGLE_STOCK,MSFT,MSFT,MSFL,2,bull,,,,,,
+5_SINGLE_STOCK,MSFT,MSFT,MSFO,2,bull,,,,,,
+5_SINGLE_STOCK,MSFT,MSFT,MSFU,2,bull,,,,,,
+5_SINGLE_STOCK,MSFT,MSFT,MSFX,2,bull,,,,,,
+5_SINGLE_STOCK,MSTR,MSTR,MSTU,2,bull,,,,,,
+5_SINGLE_STOCK,MSTR,MSTR,MSTX,2,bull,,,,,,
+5_SINGLE_STOCK,MU,MU,MULL,2,bull,,,,,,
+5_SINGLE_STOCK,MU,MU,MUU,2,bull,,,,,,
+5_SINGLE_STOCK,NFLX,NFLX,NFLU,2,bull,,,,,,
+5_SINGLE_STOCK,NFLX,NFLX,NFXL,2,bull,,,,,,
+5_SINGLE_STOCK,NVDA,NVDA,NVDG,2,bull,,,,,,
+5_SINGLE_STOCK,NVDA,NVDA,NVDL,2,bull,,,,,,
+5_SINGLE_STOCK,NVDA,NVDA,NVDU,2,bull,,0.657,0.5973,0.7167,0.5973,2026-08-20
+5_SINGLE_STOCK,NVDA,NVDA,NVDW,2,bull,,,,,,
+5_SINGLE_STOCK,NVDA,NVDA,NVDX,2,bull,,,,,,
+5_SINGLE_STOCK,PANW,PANW,PALU,2,bull,,,,,,
+5_SINGLE_STOCK,PDD,PDD,KPDD,2,bull,,,,,,
+5_SINGLE_STOCK,PLTR,PLTR,PLTG,2,bull,,,,,,
+5_SINGLE_STOCK,PLTR,PLTR,PLTU,2,bull,,,,,,
+5_SINGLE_STOCK,PLTR,PLTR,PLTW,2,bull,,,,,,
+5_SINGLE_STOCK,PLTR,PLTR,PTIR,2,bull,,,,,,
+5_SINGLE_STOCK,PYPL,PYPL,PYPG,2,bull,,,,,,
+5_SINGLE_STOCK,QCOM,QCOM,QCML,2,bull,,,,,,
+5_SINGLE_STOCK,RBLX,RBLX,RBLU,2,bull,,,,,,
+5_SINGLE_STOCK,RDDT,RDDT,RDTL,2,bull,,,,,,
+5_SINGLE_STOCK,RKLB,RKLB,RKLX,2,bull,,,,,,
+5_SINGLE_STOCK,SMCI,SMCI,SMCL,2,bull,,,,,,
+5_SINGLE_STOCK,SMCI,SMCI,SMCX,2,bull,,,,,,
+5_SINGLE_STOCK,SNPS,SNPS,SNPX,2,bull,,,,,,
+5_SINGLE_STOCK,TSLA,TSLA,TSL,2,bull,,,,,,
+5_SINGLE_STOCK,TSLA,TSLA,TSLG,2,bull,,,,,,
+5_SINGLE_STOCK,TSLA,TSLA,TSLI,2,bull,,,,,,
+5_SINGLE_STOCK,TSLA,TSLA,TSLL,2,bull,,0.9955,0.9955,0.7168,0.5973,2026-08-20
+5_SINGLE_STOCK,TSLA,TSLA,TSLR,2,bull,,,,,,
+5_SINGLE_STOCK,TSLA,TSLA,TSLT,2,bull,,,,,,
+5_SINGLE_STOCK,TSLA,TSLA,TSLW,2,bull,,,,,,
+5_SINGLE_STOCK,TSM,TSM,TSMG,2,bull,,,,,,
+5_SINGLE_STOCK,TSM,TSM,TSMU,2,bull,,,,,,
+5_SINGLE_STOCK,TSM,TSM,TSMX,2,bull,,,,,,
+5_SINGLE_STOCK,UBER,UBER,UBRL,2,bull,,,,,,
+5_SINGLE_STOCK,VRT,VRT,VRTL,2,bull,,,,,,
+5_SINGLE_STOCK,XOM,XOM,XOMX,2,bull,,,,,,

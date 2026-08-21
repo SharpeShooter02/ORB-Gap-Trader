@@ -84,6 +84,16 @@ class StrategyConfig:
     rtg_routing_pairs: tuple = ()
     rtg_routing_fixed: dict = field(default_factory=dict)
 
+    # Partial entries. When a breakout does not fit the remaining margin
+    # budget, size it down instead of dropping it — idle buying power is
+    # strictly worse than a smaller position. Measured +4.4% net P&L alongside
+    # the margin-rate cap; partials were 77 of 2,002 trades (4%).
+    allow_partial_entries: bool = True
+    #: Floor below which a partial is rejected instead. Live buys whole shares,
+    #: so a 2% slice is a rounding artifact that still pays a full spread and
+    #: the commission minimum.
+    partial_entry_min_frac: float = 0.10
+
     tp1_target_multiple: float = 1.0
     tp2_target_multiple: float = 2.0
 

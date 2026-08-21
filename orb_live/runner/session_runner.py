@@ -281,6 +281,14 @@ class SessionRunner:
 
         p2_results = self._pre_market.run_phase2(session_date, self._phase1_results)
 
+        # Arm the margin gate from the measured profile table before any entry
+        # can be placed. This does NOT depend on _prewarm_candidate_margin,
+        # which is unreachable: the loop below reads bar_cache, and the market
+        # data subscription that fills it is deliberately deferred until after
+        # the loop (IB line cap). Without this the budget stays None and the
+        # leveraged-ETF margin check never runs at all.
+        self._seed_margin_rates()
+
         from orb_live.execution.indicators import RollingIndicators
 
         for p2 in p2_results:
@@ -361,6 +369,30 @@ class SessionRunner:
                 self._router.subscribe(watched)
 
         self._wait_until_eod(session_date)
+
+    def _seed_margin_rates(self) -> None:
+        """Push measured per-symbol, per-side margin rates into the manager.
+
+        Rates come from master_universe.csv, populated by
+        orb_live/scripts/measure_universe_margin.py against IB whatIf. Best
+        effort: a failure here leaves the manager on its conservative 1.0
+        default, which over-reserves rather than over-trades.
+        """
+        try:
+            instruments = getattr(self._cfg, "instruments", None) or {}
+            rates = {}
+            for sym, inst in instruments.items():
+                for direction in (1, -1):
+                    rate = inst.margin_rate(direction)
+                    if rate:
+                        rates[(sym, direction)] = float(rate)
+            if rates:
+                self._mgr.seed_margin_rates(rates)
+            elif self._log:
+                self._log.warning("margin_rates_missing_from_profile")
+        except Exception as exc:
+            if self._log:
+                self._log.warning("seed_margin_rates_failed", exc=str(exc))
 
     def _prewarm_candidate_margin(self, p2) -> None:
         """Cache IB's true initial-margin rate for a tradable candidate using a

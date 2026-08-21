@@ -195,6 +195,9 @@ entries. Selecting the cheapest-margin sibling outright was also rejected at
 -40.2%: long is cheaper than short for 52 of 55 symbols, so it degenerates
 into "never short", and shorts carry ~1.5x the edge per margin dollar.
 
+See [docs/OPEN_ISSUES.md](docs/OPEN_ISSUES.md) for the full register of known
+defects, data-quality gaps and open questions across both repos.
+
 #### What these numbers do NOT yet capture
 
 - **12.2% of engine trades are unreachable** from the candidate set, despite

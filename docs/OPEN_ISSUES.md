@@ -3,7 +3,7 @@
 Known, unresolved, and deliberately not fixed yet. Spans both repos:
 `orb-live-trading` (live) and `../BacktestingGaps` (backtest/research).
 
-Last reviewed 2026-08-21. Add to this file rather than relying on a session
+Last reviewed 2026-08-21 (D1 rewritten after measurement; D1b added and fixed). Add to this file rather than relying on a session
 transcript — everything below has already been lost to a crash once.
 
 ---
@@ -66,16 +66,110 @@ window before that.
 
 ## Data quality
 
-### D1. Alpha Vantage / IBKR bar seam, never measured
-`BacktestingGaps/scripts/compare_av_vs_ibkr_bars.py` was written to diff cached
-AV-era bars against fresh IBKR pulls on the same (symbol, date), specifically
-the 09:30–10:00 ORB high/low. **Its verdict was never recorded.**
-`pull_ibkr_last_2mo.py` then backfilled IBKR bars from 2026-06-16 onward, so the
-intraday cache is mixed-provenance with an unmeasured seam at that date.
+### D1. The cache stops covering the universe after 2026-05-20 (was: "AV/IBKR seam")
+Measured 2026-08-21; this entry previously described a provenance seam at
+2026-06-16. That framing was wrong. There is no clean seam — there is missing
+data, and a backfill that replaced it selectively.
 
-A bar-source discontinuity mid-sample presents as a regime change that is not
-one. Everything else is measured against these bars, so this is the top data
-priority.
+**Intraday cache**, universe symbols with any bars on a given day:
+
+| period | symbols/day |
+|---|---|
+| through 2026-05-20 | 130-175 |
+| 2026-05-21 .. 05-27 | 89 -> 43 |
+| **2026-05-28 .. 06-15** | **0 — 12 consecutive trading days, no data at all** |
+| 2026-06-16 onward | 2-32 |
+
+By month: 176 symbols in 2026-05, **32** in 2026-06, 31 in 2026-07, 20 in
+2026-08. 149 of 184 universe symbols have no intraday file after 2026-05.
+
+The post-06-16 bars exist because `pull_ibkr_last_2mo.py` backfilled them — but
+it only fetched `(symbol, date)` pairs that *could plausibly fire*, and merged
+them into the existing files. So recent coverage is **conditioned on the signal
+being measured**: the days a symbol gapped are present, the days it did not are
+absent. That is not a thinner sample of the same population, it is a different
+population.
+
+**Consequence — measured, not assumed.** The first guess was that candidates
+would be left with no intraday bars and so count as guaranteed misses. That was
+checked and is **false**: 0 of 4,683 candidates in the traded span lack intraday
+bars. Candidates and bars narrowed together, so P(fire) is not contaminated that
+way.
+
+What actually happens is a **composition shift plus a within-class inflation**:
+
+| window | C1 crypto | C2 | C3 | candidates | symbols | days |
+|---|---|---|---|---|---|---|
+| pre-2026 | 12.8% | 43.2% | 44.1% | 4,132 | 54 | 1,276 |
+| 2026-01..05 | 32.1% | 44.0% | 23.9% | 461 | 40 | 94 |
+| 2026-06+ | 35.6% | 45.6% | 18.9% | **90** | **18** | 33 |
+
+C3's underlyings are the ones that went stale (D1b), so C3 candidates fall away
+and crypto — whose underlyings never went stale — goes from an eighth of the
+candidate set to over a third. C1 has the highest P(fire), so the pooled number
+drifts up: **0.432 pooled, 0.505 in 2026, 0.567 since 2026-06-01.**
+
+And P(fire) is up *within every class* in the recent window (C1 .594, C2 .537,
+C3 .588 vs .419/.465/.381 pre-2026) — that part is the selection-conditioned
+backfill, since only plausibly-firing symbol-days were ever fetched.
+
+So the recent window is **not** a like-for-like continuation of the sample: it is
+thin (90 candidates over 33 days from 18 symbols), crypto-weighted, and biased
+toward firing. Anything read off it — the 0.43 `reserve` default in
+`run_allocation_policies.py`, per-year side preference (R3), and especially the
+2026 column of any per-year table — should be treated as unreliable until the
+caches are rebuilt. It also means recent results are crypto-dominated, which
+makes R1 more urgent, not less.
+
+**Not yet done**: the original provenance question (do AV and IBKR bars actually
+disagree on the 09:30-10:00 ORB high/low?) is still unanswered.
+`compare_av_vs_ibkr_bars.py` is written and ready but has never been run to a
+recorded verdict. Fractional-volume fingerprinting was tried as a cheap proxy
+and **does not discriminate** — 2026-02 files sit at 5-26% fractional, mid-range
+— so the question needs the actual IB comparison.
+
+### D1b. The daily underlying cache stopped updating for 41 of 71 underlyings
+Root cause found and fixed 2026-08-21. `scripts/refresh_daily_ul_cache.py` had a
+hardcoded `EQUITY_ULS` list of **14** symbols while `master_universe.csv`
+references **71** underlyings, so everything outside that list froze wherever the
+last bulk build left it: 9 at 2026-04-29, 2 at 2026-05-06, 11 at 2026-05-13,
+19 at 2026-05-15. Only 30 of 71 ran to 2026-08-18.
+
+Those 41 stale underlyings feed **56 of 184** ETFs. By class the damage is
+concentrated in **C3 (37.6% of rows stale)**, not C2 (10.3%); C1 crypto is
+entirely clean. It is therefore *not* an explanation for R2.
+
+It went unnoticed for months because of a **second, independent bug that hid
+it**: at `--lookback 250` the script asked IB for `durationStr="500 D"`, and IB
+answers an over-365 "D" duration with a *timeout rather than an error*. Every
+symbol returned an empty frame, `merge_and_write` added 0 rows, and nothing in
+the logs looked wrong. So the list was both too short and never actually
+fetching. Fixed in `ib_client.get_daily_bars` (switch to a "Y" duration past
+365 days) with a parametrized regression test.
+
+Fixed by deriving the list from `master_universe.csv` (ticker-shaped entries
+only — several `underlying` cells hold index names, see D6). Adding an ETF to
+the universe now refreshes its underlying automatically.
+
+**Result of the repair run** (2026-08-21, 250-day lookback): 11,221 new daily
+rows across 89 equity underlyings; 94 of 106 cached underlyings now current
+through 2026-08-21.
+
+Still failing, both minor:
+- **BRK-B** — not a valid IB symbol; IB wants `BRK B` (space, not hyphen).
+- **VIX** — `IB returned 0 rows`. It is an index, not a `Stock` contract, so it
+  needs a different contract type or a non-IB source.
+
+Seven underlyings remain at May dates (GME, IEF, MELI, SMH, SNOW, TLT, VWO).
+These are **orphans**: present in the daily cache but no longer referenced by
+`master_universe.csv`, so the derived list correctly skips them. Harmless, but
+they should be deleted rather than left looking stale.
+
+**The intraday cache is NOT repaired by this.** D1's coverage hole is separate
+and still open. Cached trade parquets (`scratchpad/_priority_trades.parquet`,
+`_unpruned_trades.parquet`) were built against the *old* daily cache and are now
+stale — regenerate them before comparing any number to one produced before
+2026-08-21.
 
 ### D2. Split artifacts in the intraday ETF cache
 Guarded, not fixed. `apply_split_correction.py` covered the *daily underlying*

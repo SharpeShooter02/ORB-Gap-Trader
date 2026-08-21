@@ -1551,6 +1551,41 @@ class TestGetDailyBars:
         df = client.get_daily_bars("TQQQ", lookback_days=5)
         assert len(df) == 5
 
+    def test_get_daily_bars_duration_stays_within_ib_day_limit(self):
+        """IB answers a >365 "D" duration with a timeout, not an error.
+
+        refresh_daily_ul_cache.py ran with lookback=250 -> "500 D" and every
+        symbol came back empty, which is how 41 underlyings silently stopped
+        updating without anything in the logs looking wrong.
+        """
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(3)
+        client.get_daily_bars("TQQQ", lookback_days=250)
+
+        duration = client._ib.reqHistoricalData.call_args.kwargs["durationStr"]
+        assert duration == "2 Y"
+
+    def test_get_daily_bars_short_lookback_still_uses_days(self):
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(3)
+        client.get_daily_bars("TQQQ", lookback_days=30)
+        assert client._ib.reqHistoricalData.call_args.kwargs["durationStr"] == "60 D"
+
+    @pytest.mark.parametrize("lookback", [1, 60, 182, 183, 250, 400, 1000])
+    def test_get_daily_bars_duration_is_always_valid(self, lookback):
+        """Never emit a "D" duration IB will reject, at any lookback."""
+        client = self._client()
+        client._ib.reqHistoricalData.return_value = self._bars(3)
+        client.get_daily_bars("TQQQ", lookback_days=lookback)
+
+        d = client._ib.reqHistoricalData.call_args.kwargs["durationStr"]
+        n, unit = d.split()
+        assert unit in ("D", "Y")
+        if unit == "D":
+            assert 0 < int(n) <= 365
+        else:
+            assert int(n) >= 1
+
     def test_get_daily_bars_empty_on_no_data(self):
         client = self._client()
         client._ib.reqHistoricalData.return_value = []

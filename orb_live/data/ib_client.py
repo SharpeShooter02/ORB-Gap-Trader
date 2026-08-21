@@ -1142,7 +1142,10 @@ class IBClient(BrokerClient):
             return _empty
 
         contract = self._contract_cache[symbol]
-        duration = f"{lookback_days * 2} D"
+        # IB rejects a "D" duration longer than 365 and answers with a timeout
+        # rather than an error, so a large lookback silently returned nothing.
+        days = lookback_days * 2
+        duration = f"{days} D" if days <= 365 else f"{-(-days // 365)} Y"
 
         try:
             raw = self._ib.reqHistoricalData(

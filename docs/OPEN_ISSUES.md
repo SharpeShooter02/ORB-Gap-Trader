@@ -316,16 +316,58 @@ way neither the backtest nor the gate models.
 
 ## Research questions
 
-### R1. Does crypto earn its margin cost?
+### R1. Does crypto earn its margin cost? — LARGELY ANSWERED 2026-08-21
+On repaired data C1 is the **worst class per margin dollar (2.469) while paying
+the highest rate (median 1.066)**; C3 returns 9.663 and C2 5.634. But note the
+measurement is a first moment and cannot see diversification, which is the
+actual case for holding crypto — that still needs a variance/drawdown
+contribution study, not a mean-return ranking.
+
+What is clear is narrower and actionable: **C1 flood is the only ~zero cell in
+the table (+0.0004, n=55) and 6 of its 9 symbols are negative there.** Crypto
+also only trades 55 flood days against 241 quiet and 133 active, so it is not
+mainly competing for flood-day margin — but the slice where it does compete is
+the slice where it does not earn.
+
+Original note follows.
 C1 has the highest P(fire) (45.5%) but IB charges ~2x the modelled rate — near
 or above full notional regardless of stated leverage. Three crypto positions
 saturate the account where four conventional ones fit. Whether crypto deserves
 its share of a constrained budget is unanswered.
 
-### R2. C2 is incoherent
-Largest class (~4,355 candidates) and the least well-behaved: the gap-size
-signal is non-monotone within it, unlike C1 (crypto) and C3 (large
-market-following ETFs). Reads as a universe-composition problem.
+### R2. C2 is incoherent — ANSWERED 2026-08-21
+It is a residual bucket, not a cluster. Split by what the instruments actually
+track, the sub-groups disagree on exactly the axis the regime notch operates on
+(mean pnl_pct per margin dollar, per trade):
+
+| sub-group | syms | trades | flood | active | quiet | win |
+|---|---|---|---|---|---|---|
+| gold miners | 5 | 289 | **+0.0265** | +0.0123 | +0.0037 | 54% |
+| international | 8 | 338 | +0.0047 | +0.0083 | -0.0008 | 45% |
+| single-stock | 4 | 328 | +0.0014 | +0.0103 | +0.0055 | 51% |
+
+**Gold miners on flood days are the best cell in the strategy** — better than
+C3 flood (+0.0181) — and the `("C2","flood"): 0.5` notch suppresses them because
+they share a bucket with two groups that genuinely are weak on flood. The notch
+is right about C2-as-labelled and wrong about two thirds of what is in it.
+
+The same boundary shows up in the candidate screen: gold *bullion* (UGL -0.063,
+GLL -0.034) is negative while gold *miners* (NUGT +0.0206, JNUG +0.0205) are
+near the top. Same metal, opposite behaviour, because one is equity and one is
+not. The category should follow the driver, not the sector.
+
+Caveat before acting: the gold-miner flood cell is n=57 with 5/7-year sign
+stability. The strongest argument for splitting rests on the thinnest data, and
+splitting means three new weight cells estimated on thinner samples each.
+
+**Removals need no theory and are independent of the split**: GDXU (-0.312 over
+74 trades, worst in C2, and the symbol with the L-series 3x/threshold bug) and
+the near-zero international cluster KORU (+0.0004, n=81), BRZU (-0.0008, n=74),
+YINN (-0.0007, n=24) — 179 trades for nothing.
+
+`CLASS_2_SYMS` also lists 13 symbols that have never produced a trade (AMDG,
+AMUU, NVDG, NVDL, NVDW, NVDX, TSL, TSLG, TSLI, TSLR, TSLT, TSLW, UVIX). They
+lose every sibling contest, so removing them is hygiene, not P&L.
 
 ### R3. Side preference is real but unstable
 Shorts return ~1.5x per margin dollar pooled, but the ratio flips by year

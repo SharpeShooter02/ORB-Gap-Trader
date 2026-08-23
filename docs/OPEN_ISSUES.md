@@ -316,7 +316,55 @@ way neither the backtest nor the gate models.
 
 ## Research questions
 
-### R1. Does crypto earn its margin cost? — LARGELY ANSWERED 2026-08-21
+> **Methodology warning, learned the hard way 2026-08-21..23.** Two conclusions
+> in this file were reversed on re-examination, both from the same two errors:
+>
+> 1. **Per-symbol P&L in the pruned trade set confounds the instrument with its
+>    era.** skip-cheap picks one sibling per underlying per day, so siblings can
+>    trade disjoint periods. GDXU and NUGT overlap on **zero** pruned days; on
+>    the 90 unpruned days they share, the 3x beats the 2x by **3.5x**. "GDXU is
+>    dead weight" was an artifact. Score symbols on the unpruned set.
+> 2. **Mean return per margin dollar cannot see diversification.** It ranked C1
+>    last when C1 is the class whose removal triples drawdown, and ranked BOIL
+>    second-worst when BOIL is the most independent symbol in the book
+>    (+0.003 mean pairwise P&L correlation over 330 trading days).
+>
+> Before removing any instrument, check both: score it unpruned, and check its
+> marginal contribution with the margin allowed to reflow.
+
+### R1. Does crypto earn its margin cost? — ANSWERED 2026-08-23: YES, decisively
+Drop a class from the candidate set and re-run the real allocation policy at the
+same budget, so the freed margin reflows to whatever else wanted it:
+
+| | trades | Sharpe | vol | MaxDD | P&L |
+|---|---|---|---|---|---|
+| all classes | 1900 | **2.181** | 99.4 | **-8.91%** | 29,145 |
+| without C1 | 1629 | 1.732 | 92.4 | **-23.02%** | 22,237 |
+| without C2 | 1028 | 2.094 | 86.0 | -7.27% | 24,580 |
+| without C3 | 1192 | 1.068 | 57.9 | -7.65% | 10,271 |
+
+**Removing crypto triples drawdown and costs 21% of Sharpe.** Mechanism, from
+pairwise daily-P&L correlation: C1 vs C3 is **-0.245 conditional on both
+trading** (and -0.002 zero-filled). Crypto does not merely fail to correlate --
+it moves opposite to broad-market instruments on shared days. It *raises*
+volatility (99.4 vs 92.4) while *lowering* drawdown, i.e. it earns on the days
+C3 loses, which no variance measure would surface.
+
+The earlier reading here -- "C1 is the worst class per margin dollar (2.469) at
+the highest rate (1.066)" -- was true and completely misleading. A first-moment
+ranking cannot price a hedge. Do not use per-margin mean return to judge whether
+an instrument belongs in the book.
+
+**Still true and still actionable**: C1 flood is ~zero (+0.0004, n=55, 6 of 9
+symbols negative), and C1 is internally redundant (+0.695 conditional
+correlation among its own members). The hedge likely survives on a few crypto
+names rather than eleven, which frees margin without giving up the drawdown
+protection. That is the precise lever; cutting the class is not.
+
+**C2 is the weak class**: dropping it *improves* drawdown (-7.27%) and costs
+only 4% of Sharpe.
+
+### R1-old. Original note, retained for the record
 On repaired data C1 is the **worst class per margin dollar (2.469) while paying
 the highest rate (median 1.066)**; C3 returns 9.663 and C2 5.634. But note the
 measurement is a first moment and cannot see diversification, which is the

@@ -57,6 +57,16 @@ linearly in size while paying a full spread and the commission minimum, so they
 are flattered slightly (77 of 2,002 trades, ~4%).
 
 ### L6. BOIL, GUSH, KOLD have no `master_universe.csv` row
+> **Measured 2026-08-24** — real IB rates, so the 1.0 fallback can go:
+>
+> | | init long | init short | maint long |
+> |---|---|---|---|
+> | BOIL | 0.529 | 0.635 | 0.504 |
+> | KOLD | 0.521 | 0.625 | 0.496 |
+> | GUSH | 0.526 | 0.631 | 0.501 |
+>
+> All ~0.52 long, not 1.0. They have been over-reserving by nearly 2x in the
+> window before `prewarm_margin` runs each session.
 They are `FORCE_INCLUDE` entries defined in `v1_strategy.py`, so they cannot
 carry measured margin columns. They fall back to a conservative 1.0 until
 `prewarm_margin` measures them live each session — which over-reserves in the
@@ -471,6 +481,40 @@ rarely bind). GDX/GDXJ is a special case on every axis, so it is treated as one.
 weight among their candidates" -- a sizing rule, not a selection rule. It needs
 matching changes in `build_day_table` and live's sizing path or golden-gate
 parity breaks.
+
+### R5. XOP has no bear expression — DRIP is available and absent
+XOP's only universe entry is GUSH (2x bull, FORCE_INCLUDE); the sole other XOP
+fund in master is NRGU (3x bull, `3_SECTOR_bull_only`, excluded). So an XOP
+gap-down can only be traded by *shorting* GUSH at 0.631 rather than buying an
+inverse at 0.526.
+
+**DRIP is fully tradable at IB** — measured 2026-08-24 at init long 0.526 /
+short 0.631, identical to GUSH. It is absent from `INSTRUMENTS`,
+`master_universe.csv` and the intraday cache, so the obstacle is history, not
+the broker. Shorts carry ~1.5x the edge per margin dollar in this strategy, so
+having only the expensive side of XOP is a real hole — the same one the
+margin-aware sibling work closed for crypto.
+
+### R6. BOIL/KOLD regime restriction — MEASURED, rejected
+Restricting the natural-gas pair to quiet days makes things worse (Sharpe 2.267
+-> 2.179), because the premise is inverted:
+
+| | quiet | active | flood |
+|---|---|---|---|
+| BOIL | **-0.0195** (n=264) | -0.0172 (n=41) | -0.0127 (n=25) |
+| KOLD | +0.0055 (n=266) | -0.0035 (n=40) | **+0.0256** (n=20) |
+
+BOIL loses in *every* regime and quiet is its worst, carrying -2.577 of its
+-3.089. KOLD's best cell is **flood**, so restricting it away from flood removes
+its strongest regime. Dropping both is clearly bad (Sharpe 2.083, P&L -9.9%):
+KOLD earns its place.
+
+Dropping BOIL alone is a wash -- P&L -1.2%, Sharpe -0.036, drawdown 0.14pp
+better, Calmar identical at 6.60. Its -3.089 eligible loss barely reaches the
+portfolio because skip-cheap already prefers KOLD (only 56 of 326 natgas
+selections are BOIL), the same pattern as DUST. BOIL is also the most
+independent symbol in the book (+0.003 mean pairwise P&L correlation over 330
+days), so a wash is not a reason to remove it.
 
 ### R3. Side preference is real but unstable
 Shorts return ~1.5x per margin dollar pooled, but the ratio flips by year

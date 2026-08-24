@@ -81,8 +81,12 @@ CLASS_1_SYMS: frozenset[str] = frozenset({
 CLASS_2_SYMS: frozenset[str] = frozenset({
     # International leveraged ETFs
     "YINN", "YANG", "KORU", "BRZU", "INDL", "MEXX", "EDC", "EDZ",
-    # Gold miners
-    "NUGT", "DUST", "GDXU", "JNUG", "JDST",
+    # Gold miners are NOT here: they are C3. They are the one C2 sub-group that
+    # contradicts the flood notch -- +0.0265 per margin dollar on flood days
+    # against international +0.0047 and single-stock +0.0014, and better than
+    # C3 flood itself (+0.0181). Weighting them 0.5 in quiet and flood was
+    # suppressing the strongest cell in the strategy. See OPEN_ISSUES R4; the
+    # move only pays alongside SHARED_ALLOTMENT below.
     # Single-stock leveraged ETFs. Only the three FORCE_INCLUDE names are
     # listed: the rest are 5_SINGLE_STOCK with no binary_event flag, so the
     # class filter in build_universe drops them and they can never trade.
@@ -113,15 +117,24 @@ EXPLICIT_DROPS: frozenset[str] = frozenset({
 
 # Force-include — added to universe even if missing from master (synthetic rows).
 # Hardcoded metadata so this file has no external deps.
+#: BOIL, KOLD and GUSH have no master_universe.csv row, so their margin can
+#: only come from here. Without it they fell back to a conservative 1.0 until
+#: prewarm_margin measured them each session -- roughly double the truth, in
+#: the window that matters most (OPEN_ISSUES L6). Rates below measured against
+#: IB 2026-08-24 via whatIfOrder. Live still pulls fresh rates every session
+#: and those take precedence; these only make the fallback honest.
 FORCE_INCLUDE: dict[str, dict] = {
     "AMDL": {"underlying": "AMD",  "leverage": 2, "inverse": False},
     "TSLL": {"underlying": "TSLA", "leverage": 2, "inverse": False},
     "NVDU": {"underlying": "NVDA", "leverage": 2, "inverse": False},
-    "KOLD": {"underlying": "UNG",  "leverage": 2, "inverse": True},
-    "BOIL": {"underlying": "UNG",  "leverage": 2, "inverse": False},
+    "KOLD": {"underlying": "UNG",  "leverage": 2, "inverse": True,
+             "margin_long": 0.521, "margin_short": 0.625},
+    "BOIL": {"underlying": "UNG",  "leverage": 2, "inverse": False,
+             "margin_long": 0.529, "margin_short": 0.635},
     "UXRP": {"underlying": "XRP",  "leverage": 2, "inverse": False},
     "XRPT": {"underlying": "XRP",  "leverage": 2, "inverse": False},
-    "GUSH": {"underlying": "XOP",  "leverage": 2, "inverse": False},
+    "GUSH": {"underlying": "XOP",  "leverage": 2, "inverse": False,
+             "margin_long": 0.526, "margin_short": 0.631},
 }
 
 # Per-instrument direction filter — only trade gap direction matching the sign.
@@ -216,6 +229,8 @@ def load_master(master_csv: str | Path) -> dict[str, Instrument]:
         instruments[sym] = Instrument(
             symbol=sym, underlying=info["underlying"],
             leverage=info["leverage"], inverse=info["inverse"],
+            margin_long=info.get("margin_long"),
+            margin_short=info.get("margin_short"),
         )
     return instruments
 
@@ -376,6 +391,45 @@ def assign_regime(n_uls: int) -> str:
     return "quiet"
 
 
+#: Underlyings that share ONE sizing allotment. GDX and GDXJ are a single
+#: exposure -- 0.935 daily-P&L correlation over 115 shared days, 83% overlap,
+#: and their five ETFs run 0.88-0.96 among themselves including bull against
+#: bear, because this strategy trades the gap DIRECTION. Left as two
+#: underlyings, one gold move opened two full-size positions.
+#:
+#: Deliberately not generalised. Correlation chains: at a 0.60 threshold with
+#: single linkage, {AMD, SOXX, XLK, QQQ, XLC, FXI, EEM} collapses into one
+#: seven-underlying cluster. Overlap matters as much as correlation, too --
+#: AMD/SOXX correlate 0.812 but co-trade on only 32% of days, so bundling them
+#: would almost never bind. GDX/GDXJ is an exception on every axis.
+SHARED_ALLOTMENT: dict[str, str] = {"GDXJ": "GDX"}
+
+
+def allotment_group(underlying: str) -> str:
+    """The sizing group an underlying belongs to (itself, unless shared)."""
+    return SHARED_ALLOTMENT.get(underlying, underlying)
+
+
+def _group_counts(candidates) -> dict[str, int]:
+    """How many candidates fall in each allotment group."""
+    counts: dict[str, int] = {}
+    for c in candidates or ():
+        g = allotment_group(getattr(c, "underlying", getattr(c, "symbol", "")))
+        counts[g] = counts.get(g, 0) + 1
+    return counts
+
+
+def _share_divisor(sym: str, candidates) -> int:
+    """How many ways this symbol's allotment is split today."""
+    if not candidates:
+        return 1
+    for c in candidates:
+        if getattr(c, "symbol", None) == sym:
+            g = allotment_group(getattr(c, "underlying", sym))
+            return max(1, _group_counts(candidates).get(g, 1))
+    return 1
+
+
 def classify(sym: str) -> str:
     if sym in CLASS_1_SYMS: return "C1"
     if sym in CLASS_2_SYMS: return "C2"
@@ -392,15 +446,32 @@ def compute_cap_factor(
     For each candidate, look up its (class, regime) weight and sum. If the sum
     exceeds cap_units, scale everything by cap_units / sum.
     """
-    exp_mult = sum(WEIGHTS.get((classify(c.symbol), regime), 0.0) for c in candidates)
+    # A shared allotment group contributes one position's worth, not one per
+    # member -- otherwise exposure is overstated and the cap binds too early.
+    counts = _group_counts(candidates)
+    exp_mult = sum(
+        WEIGHTS.get((classify(c.symbol), regime), 0.0)
+        / max(1, counts.get(
+            allotment_group(getattr(c, "underlying", c.symbol)), 1))
+        for c in candidates
+    )
     if exp_mult <= 0:
         return 0.0
     return min(1.0, cap_units / exp_mult)
 
 
-def position_multiplier(sym: str, regime: str, cap_factor: float) -> float:
-    """Final per-symbol position multiplier (weight × cap_factor)."""
-    return WEIGHTS.get((classify(sym), regime), 0.0) * cap_factor
+def position_multiplier(sym: str, regime: str, cap_factor: float,
+                        candidates=None) -> float:
+    """Final per-symbol position multiplier (weight x cap_factor).
+
+    When `candidates` is supplied and this symbol's underlying shares an
+    allotment with another candidate that day (see SHARED_ALLOTMENT), the
+    weight is divided among them, so the group consumes one position's worth of
+    margin rather than one each. Omitting `candidates` preserves the old
+    behaviour for callers that do not have the day's set to hand.
+    """
+    base = WEIGHTS.get((classify(sym), regime), 0.0) * cap_factor
+    return base / _share_divisor(sym, candidates)
 
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -428,8 +499,11 @@ def plan_session(
     regime = assign_regime(n_uls)
     cap_factor = compute_cap_factor(cands, regime)
 
+    # `cands` must be passed: it is what lets a shared allotment group split one
+    # position's worth between its members (SHARED_ALLOTMENT). Without it the
+    # rule silently does nothing here while still passing its unit tests.
     multipliers = {
-        c.symbol: position_multiplier(c.symbol, regime, cap_factor)
+        c.symbol: position_multiplier(c.symbol, regime, cap_factor, cands)
         for c in cands
     }
     # Drop candidates with zero multiplier (e.g. C2 on flood days)

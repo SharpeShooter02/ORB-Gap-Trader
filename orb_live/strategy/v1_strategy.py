@@ -83,10 +83,14 @@ CLASS_2_SYMS: frozenset[str] = frozenset({
     "YINN", "YANG", "KORU", "BRZU", "INDL", "MEXX", "EDC", "EDZ",
     # Gold miners
     "NUGT", "DUST", "GDXU", "JNUG", "JDST",
-    # Single-stock leveraged ETFs
-    "AMDL", "AMDG", "AMUU",
-    "TSLL", "TSL", "TSLG", "TSLI", "TSLR", "TSLT", "TSLW",
-    "NVDU", "NVDG", "NVDL", "NVDW", "NVDX",
+    # Single-stock leveraged ETFs. Only the three FORCE_INCLUDE names are
+    # listed: the rest are 5_SINGLE_STOCK with no binary_event flag, so the
+    # class filter in build_universe drops them and they can never trade.
+    # Listing them here only created symbols classify() called C2 while they
+    # were structurally unreachable -- 12 of them, zero trades in 6.5 years.
+    # Removed 2026-08-23; verified absent from the live universe first, since
+    # dropping a name from this set silently reclassifies it to C3.
+    "AMDL", "TSLL", "NVDU",
     # Volatility: none. UVIX sits in master_universe as 3_SECTOR_bull_only,
     # which run_v1_at_k never assembles, so listing it here only created a
     # symbol that classify() called C2 while it could never trade. Measured

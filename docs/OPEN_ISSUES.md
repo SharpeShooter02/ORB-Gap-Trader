@@ -328,6 +328,16 @@ way neither the backtest nor the gate models.
 >    last when C1 is the class whose removal triples drawdown, and ranked BOIL
 >    second-worst when BOIL is the most independent symbol in the book
 >    (+0.003 mean pairwise P&L correlation over 330 trading days).
+> 3. **MaxDD is a single-episode statistic.** Cutting KORU/BRZU appeared to
+>    improve drawdown 20% (-8.91% -> -7.11%); per-year decomposition shows it is
+>    WORSE in 4 of 7 years and the whole gain is one 2025 episode. Always
+>    decompose a drawdown claim by year before acting on it.
+>
+> The common thread is reading one aggregate number without decomposing it.
+> Weak eligible P&L also does not imply portfolio harm: skip-cheap declines to
+> select those names on most days, so the selection rule already prunes them.
+> Measured 2026-08-23: C2 has no instruments worth cutting beyond 13 clones that
+> never trade at all.
 >
 > Before removing any instrument, check both: score it unpruned, and check its
 > marginal contribution with the margin allowed to reflow.

@@ -427,6 +427,51 @@ YINN (-0.0007, n=24) — 179 trades for nothing.
 AMUU, NVDG, NVDL, NVDW, NVDX, TSL, TSLG, TSLI, TSLR, TSLT, TSLW, UVIX). They
 lose every sibling contest, so removing them is hygiene, not P&L.
 
+### R4. Gold miners: share one sizing allotment — MEASURED 2026-08-23
+GDX and GDXJ are one exposure. Their five ETFs correlate **0.88-0.96** in daily
+strategy P&L — *including bull against bear*, because the strategy trades the
+gap DIRECTION, so NUGT and DUST follow through or fail together on the same
+gold move. At the underlying level GDX/GDXJ is **0.935 over 115 shared days with
+83% overlap**, a clear outlier: the next pair is AMD/SOXX at 0.812 on 23 days
+with 32% overlap.
+
+Three arrangements measured under the real allocation policy at 1x equity:
+
+| | trades | Sharpe | vol | MaxDD | Calmar | P&L |
+|---|---|---|---|---|---|---|
+| baseline (both, full weight, C2) | 1942 | 2.267 | 101.1 | -8.91% | 6.60 | 30,657 |
+| merged to one position, C3 | 1839 | 2.180 | 98.1 | -8.60% | 6.33 | 28,793 |
+| separate, C3 weights | 1946 | 2.219 | 105.5 | -9.56% | 6.28 | 31,252 |
+| **split allotment + C3 weights** | 1949 | **2.296** | 99.9 | **-7.99%** | **7.37** | 30,673 |
+
+**Split wins**: same P&L, Sharpe +1.3%, MaxDD 10% better, Calmar +12%, and
+drawdown equal-or-better in **5 of 7 years** (the KORU/BRZU cut managed 3 of 7).
+Merging destroys the second pick (skip-cheap across all five lets GDXU dominate,
+displacing JNUG/JDST, two of the strongest names by eligible P&L). Full C3
+weights double-count the exposure. Splitting does neither.
+
+**Caveats.** 2022 is clearly worse — drawdown 33% deeper (-600 -> -801) and P&L
+-609. The gain needs BOTH changes: split at C2 weights is worse on P&L (29,970).
+And the backtest does not charge the extra commission minimum for the second
+position (~0.9 bps on gold trades, ~$35 total; see L5) because sized_pnl scales
+costs linearly with weight.
+
+**Fees are not the obstacle**: commission is 1.60 bps of an 8.71 bps round trip,
+spread is neutral to splitting, and market impact is *quadratic* in position
+value so two halves cost half the impact of one whole.
+
+**Decided: hard-code this pair, do not generalise.** A correlation threshold was
+explored. The distribution does have a natural gap -- the [0.50, 0.60) bin is
+empty -- but correlation chains: at 0.60 single-linkage, {AMD, SOXX, XLK, QQQ,
+XLC, FXI, EEM} collapses into one seven-underlying cluster. Overlap matters as
+much as correlation (AMD/SOXX co-trade only 32% of days, so bundling them would
+rarely bind). GDX/GDXJ is a special case on every axis, so it is treated as one.
+
+**Not implemented.** The rule is "underlyings sharing an allotment divide the
+weight among their candidates" -- a sizing rule, not a selection rule. It needs
+matching changes in `build_day_table` and live's sizing path or golden-gate
+parity breaks.
+
 ### R3. Side preference is real but unstable
 Shorts return ~1.5x per margin dollar pooled, but the ratio flips by year
 (2.88 / 0.56 / 2.72 / 0.67 / 2.07 / 2.25 / −0.04 for 2020–2026) and the existing

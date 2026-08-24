@@ -51,6 +51,34 @@ If IB *does* apply a lower requirement intraday for a PDT-flagged account and
 the margin analysis needs redoing at a much looser constraint. **Worth asking IB
 directly.** This is the single highest-leverage open question.
 
+### L7. EOD flatten ran 3 minutes earlier than it was scheduled
+2026-08-24. The runner logged its intent clearly:
+
+    waiting_for_eod  seconds=21235.7  close_et=16:00  flatten_lead_secs=60
+    at 14:05:04Z -> wake 19:59:00Z = 15:59 ET
+
+But `closed_trades` records SBIT and SOLT closing at **19:56:06Z = 15:56 ET**,
+both `exit_reason=EOD`, three minutes before the scheduled wake. Something
+flattened the book early and it was not `_wait_until_eod`.
+
+Candidates not yet ruled out: a second exit path in `position_manager`
+(`eod_time` at line 588 uses `cfg.eod_exit_hour`, which is the 16:00 sentinel
+and should never fire on an RTH bar); the daemon loop; or `_sleep` returning
+early. The shutdown handler also calls `flatten_all`, but the SIGINT is logged
+at 20:03:02Z, well after.
+
+Matters because exit timing is worth 5.5% of total P&L between 15:55 and 15:59,
+so an unexplained 3-minute drift is not cosmetic. It also means the new
+`eod_flatten_lead_secs=120` may land at 15:55 in practice rather than 15:58.
+**Verify against the next session's `closed_at` before trusting the setting.**
+
+### L8. Exit timing is invisible to the golden gate
+The fixture records the plan -- candidates, regime, cap_factor, multipliers --
+and `diff_plan` replays it. Nothing records or replays the *exit* path: stops,
+targets, or EOD handling. The 16:00-vs-15:59 divergence that cost 5.5% predates
+this week's work and no replay could have caught it; it surfaced only because a
+position was seen closing early on a live screen.
+
 ### L5. `allow_partial_entries` defaults `True` and has never run live
 New in `206342c`. Watch for `entry_partially_sized`. Backtest partials book P&L
 linearly in size while paying a full spread and the commission minimum, so they

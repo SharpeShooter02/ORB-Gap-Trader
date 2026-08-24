@@ -202,8 +202,20 @@ class LiveConfig:
     # Flatten this many seconds BEFORE the close so exit market orders fill in
     # liquid regular-hours trading. Leveraged ETFs have thin/no after-hours
     # books, and IB rejects market orders outside RTH — flattening after 16:00
-    # would leave positions unfilled overnight. 60s → flatten at ~15:59 ET.
-    eod_flatten_lead_secs: int = 60
+    # would leave positions unfilled overnight. 120s → flatten at 15:58 ET.
+    #
+    # Exit timing is worth real money and the value is front-loaded. Measured
+    # over the full sample: 15:59 +19.172, 15:58 +18.880, 15:57 +18.837,
+    # 15:55 +18.115 — the last being 5.5% worse and negative in all 7 years.
+    # 15:58 takes 72% of that gap while leaving two minutes of margin; a
+    # flatten took ~66s end to end on 2026-08-24. The final minute is worth
+    # another 1.5% but the backtest books the 15:59 bar's CLOSE — effectively
+    # the 16:00 print — so that last slice assumes a fill at the closing price
+    # during the auction, which is the least trustworthy number in the table.
+    #
+    # Must stay in step with run_v1_at_k's eod_exit defaults in the backtest;
+    # test_eod_timing_parity.py asserts it.
+    eod_flatten_lead_secs: int = 120
 
     # Entry mechanism. False (default) = reactive: detect the ORB break on a
     # closed 1-min bar, then place a limit at the boundary. True = pre-placed:

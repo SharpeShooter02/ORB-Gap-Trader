@@ -87,8 +87,13 @@ CLASS_2_SYMS: frozenset[str] = frozenset({
     "AMDL", "AMDG", "AMUU",
     "TSLL", "TSL", "TSLG", "TSLI", "TSLR", "TSLT", "TSLW",
     "NVDU", "NVDG", "NVDL", "NVDW", "NVDX",
-    # Volatility
-    "UVIX",
+    # Volatility: none. UVIX sits in master_universe as 3_SECTOR_bull_only,
+    # which run_v1_at_k never assembles, so listing it here only created a
+    # symbol that classify() called C2 while it could never trade. Measured
+    # standalone and net of costs the whole complex loses: UVIX -0.919 over
+    # 189 trades (36% win, positive in 1 of 5 years), UVXY -5.530 over 358
+    # (1 of 7), SVIX -0.354, SVXY -0.189. Volatility products gap and then
+    # revert against the breakout, which is the opposite of what ORB needs.
     # Energy (XOP)
     "GUSH",
 })

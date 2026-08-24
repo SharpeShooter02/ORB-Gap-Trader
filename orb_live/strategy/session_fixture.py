@@ -58,6 +58,14 @@ def _profile_snapshot() -> dict[str, Any]:
         "weights": {f"{cls}|{reg}": w for (cls, reg), w in v1.WEIGHTS.items()},
         "explicit_drops": sorted(v1.EXPLICIT_DROPS),
         "direction_filters": dict(v1.DIRECTION_FILTERS),
+        # Sizing inputs that are not in `weights` but change multipliers just
+        # as surely. Without these a deliberate retune reads as unexplained
+        # drift: moving the gold miners to C3 and giving GDX/GDXJ a shared
+        # allotment made 2026-08-19 replay at 1.5 where it recorded 3.0, and
+        # nothing in the snapshot could account for it.
+        "shared_allotment": dict(v1.SHARED_ALLOTMENT),
+        "class_1": sorted(v1.CLASS_1_SYMS),
+        "class_2": sorted(v1.CLASS_2_SYMS),
     }
 
 
@@ -197,6 +205,33 @@ def replay(payload: Mapping[str, Any]) -> v1.SessionPlan:
         prior_two_closes={k: (v[0], v[1]) for k, v in inp["prior_two_closes"].items()},
         prior_etf_close=dict(inp["prior_etf_close"]),
     )
+
+
+def diff_profile(recorded: Mapping[str, Any]) -> list[str]:
+    """Profile constants that have changed since a fixture was recorded.
+
+    A plan can stop reproducing for two very different reasons: the code that
+    derives it drifted, or somebody deliberately retuned the strategy. Only the
+    first is a bug. Comparing the recorded snapshot against the current profile
+    tells them apart, which is the whole reason the snapshot is stored.
+    """
+    cur = _profile_snapshot()
+    out: list[str] = []
+    for key in sorted(set(recorded) | set(cur)):
+        r, c = recorded.get(key), cur.get(key)
+        if r == c:
+            continue
+        if isinstance(r, list) and isinstance(c, list):
+            gone, new = sorted(set(r) - set(c)), sorted(set(c) - set(r))
+            bits = []
+            if gone:
+                bits.append(f"removed {gone}")
+            if new:
+                bits.append(f"added {new}")
+            out.append(f"{key}: " + ", ".join(bits))
+        else:
+            out.append(f"{key}: recorded={r} current={c}")
+    return out
 
 
 def diff_plan(recorded: Mapping[str, Any], actual: v1.SessionPlan) -> list[str]:

@@ -94,6 +94,12 @@ class StrategyConfig:
     #: the commission minimum.
     partial_entry_min_frac: float = 0.10
 
+    # NEUTRAL LIBRARY DEFAULT -- not live's value. Live runs 2.0, set in
+    # live_config._make_v1_config. Do not read this field off a bare
+    # StrategyConfig() and treat it as production: reconcile_live_session
+    # did exactly that and manufactured four false divergences. It cannot
+    # simply be raised to 2.0 either -- tp2_target_multiple also defaults
+    # to 2.0 and the tp2 > tp1 invariant would break.
     tp1_target_multiple: float = 1.0
     tp2_target_multiple: float = 2.0
 

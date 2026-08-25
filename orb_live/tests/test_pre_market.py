@@ -55,12 +55,18 @@ def test_tp1_matches_the_backtest_default():
     sys.path.insert(0, r"c:/Users/buttn/Documents/Projects/BacktestingGaps")
     from orb_backtester import StrategyConfig as BTConfig
     from orb_live.config.live_config import load_live_config
+    from orb_live.config.strategy_config import StrategyConfig
 
     scfg = load_live_config().strategy_config
     assert not scfg.tp1_target_multiple_by_class, (
         "a per-class TP1 map is set, but orb_backtester has no by-class TP1 -- "
         "no single backtest run can reproduce live")
     assert scfg.tp1_target_multiple == BTConfig().tp1_target_multiple
+
+    # The bare dataclass default is deliberately NOT live's value, so anything
+    # reading it directly is reading the wrong object -- the failure mode P5,
+    # L7 and the reconciliation bug all shared.
+    assert StrategyConfig().tp1_target_multiple != scfg.tp1_target_multiple
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

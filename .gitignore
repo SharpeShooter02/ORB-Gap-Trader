@@ -41,3 +41,4 @@ env/
 
 # macOS
 .DS_Store
+.claude/worktrees/

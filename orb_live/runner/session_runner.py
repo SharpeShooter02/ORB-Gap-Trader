@@ -137,12 +137,52 @@ class SessionRunner:
                 self._log.error("reconnect_broker_failed", error=str(exc))
             return False
 
+    def _ensure_connected(self) -> None:
+        """Reconnect before a session starts, or refuse to start.
+
+        IB Gateway restarts daily. The daemon sleeps through it with a plain
+        time.sleep (main._run_daemon), which neither pumps the asyncio loop nor
+        checks the socket, so nothing observes the drop until 08:30.
+
+        A dead IB socket does not raise -- it degrades quietly. get_account()
+        returns equity 0.0, check_margin() falls back to full notional, and
+        get_positions() returns [] so the book looks flat. The session would
+        then run to completion with every entry rejected by the risk gate on
+        zero equity: no crash, no ConnectionError, and the daemon's recovery
+        path never reached. That is indistinguishable from a day with no
+        qualifying gaps, which makes it the worst failure available here.
+
+        Raises ConnectionError specifically, because that is what the daemon
+        catches to retry the same session date. Any other exception type
+        escapes the loop and kills the process.
+        """
+        is_conn = getattr(self._broker, "is_connected", None)
+        if is_conn is None:
+            return              # dry-run / test brokers do not implement it
+        try:
+            if is_conn():
+                return
+        except Exception:
+            pass                # treat an unanswerable socket as down
+        if self._log:
+            self._log.critical("session_start_disconnected", action="reconnecting")
+        if not self.reconnect_broker():
+            raise ConnectionError(
+                "broker disconnected at session start and reconnect failed")
+        if self._log:
+            self._log.warning("session_start_reconnected")
+
     # ── Main entry point ───────────────────────────────────────────────────────
 
     def run_session(self, session_date: date) -> None:
         """Run a complete session.  Installs SIGTERM/SIGINT handlers."""
         self._session_date = session_date
         self._session_start_equity = None
+
+        # Before anything asks the broker a question. startup_reconcile reads
+        # positions, and a dead socket answers [] rather than raising.
+        self._ensure_connected()
+
         self._engine.new_session(session_date)
 
         signal.signal(signal.SIGTERM, self._handle_signal)

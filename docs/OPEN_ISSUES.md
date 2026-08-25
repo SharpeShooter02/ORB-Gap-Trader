@@ -428,30 +428,28 @@ way neither the backtest nor the gate models.
 > Before removing any instrument, check both: score it unpruned, and check its
 > marginal contribution with the margin allowed to reflow.
 
-### P5. Every headline backtest figure uses the wrong TP1 for 84% of trades
+### P5. The per-class TP1 split is validated but stale
 Live sets TP1 per class (`live_config.py:118`):
-`tp1_target_multiple_by_class = {"C1": 2.0, "C2": 1.0, "C3": 1.0}`.
+`tp1_target_multiple_by_class = {"C1": 2.0, "C2": 1.0, "C3": 1.0}`, added
+2026-08-18 in `278b8d2`. It was validated at the time by
+`scripts/run_parity_tp_by_class.py`, which runs the backtest twice and merges
+C1 from the 2.0 arm with C2/C3 from the 1.0 arm -- `orb_backtester` has no
+by-class TP1, so two runs is the only way to express it.
 
-`orb_backtester` has no by-class TP1 at all -- `run_v1_at_k` takes a scalar
-`tp1_target_multiple` and defaults it to **2.0**. `_unpruned_trades.parquet`,
-which `current_config_backtest.py` and the stop sweep both read, was generated
-at that default. So every quoted figure runs C2 and C3 to 2x ORB while live
-takes them at 1x.
+The gap is that **nothing since has used that path**. Everything landed this
+week -- D7 repair, gold reclass, UVIX cut, shared allotment, SAMPLE_END, the
+15:58 exit -- flows through `_unpruned_trades.parquet`, which
+`regen_trade_caches.py` builds with `run_v1_at_k`'s scalar default of 2.0. So
+`current_config_backtest.py` and the stop sweep both run C2 and C3 to 2x ORB
+while live takes them at 1x.
 
-C2 + C3 are **1,641 of 1,945 trades (84%)**. This is not a rounding difference:
-doubling the profit target on 84% of the book changes hit rate, hold time, and
-the entire exit mix. Cached `tp1_hit` is 13.4% at 2.0 and would be far higher
-at 1.0.
+C2 + C3 are **1,641 of 1,945 trades (84%)**, and cached `tp1_hit` is 13.4% at
+2.0 where it would be far higher at 1.0, so this moves hit rate, hold time and
+the exit mix -- not a rounding difference.
 
-`scripts/run_parity_tp_by_class.py` already solves this -- it runs the backtest
-twice and merges C1 from the 2.0 arm with C2/C3 from the 1.0 arm -- but the
-headline pipeline does not use it.
-
-Same species as L7: two sides that were never made to reference each other,
-with no test comparing them. Found 2026-08-25 while checking why the cached
-exit-reason mix had no TP1 rows. **Unmeasured. Until it is, the current-config
-numbers (P&L 29,944, Sharpe 2.256, MaxDD -8.60%) describe a strategy that is
-not the one running live.**
+Staleness rather than an unvalidated change, but the effect is the same: the
+current-config figures (P&L 29,944, Sharpe 2.256, MaxDD -8.60%) and the stop
+sweep that rests on them describe the wrong TP1 for most of the book.
 
 ### R1. Does crypto earn its margin cost? — ANSWERED 2026-08-23: YES, decisively
 Drop a class from the candidate set and re-run the real allocation policy at the

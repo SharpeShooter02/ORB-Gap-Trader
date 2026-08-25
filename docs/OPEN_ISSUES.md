@@ -10,7 +10,7 @@ transcript — everything below has already been lost to a crash once.
 
 ## Live defects
 
-### L1. `RollingIndicators` are never seeded — every symbol, every session
+### L1. `RollingIndicators` are never seeded -- inert now, fatal if exit ratios change
 `_run_post_orb` reads `self._cache.get_bars(symbol)`, but the market-data
 subscription that fills that cache is deliberately deferred until *after* the
 loop (subscribing all ~59 symbols at open exceeds IB's line cap and makes IB
@@ -20,9 +20,18 @@ takes the `continue` branch before `indicator.seed_from_orb_bars` runs.
 This is the same bug that hid the margin gate for months. `bacb27e` moved
 `_prewarm_candidate_margin` out from behind it; the indicator seeding was left.
 
-v1 does not use EMA confirmation (`require_ema_confirmation=False`), so this is
-*probably* inert — but nobody has confirmed it, and `tp3_mode` is still
-`ema_crossback` in `StrategyConfig`.
+**Confirmed inert 2026-08-25, and confirmed to be a landmine.** The only
+consumer is the TP3 EMA-crossback branch (`position_manager.py:951`), gated on
+`pos.tp2_hit and pos.remaining > 0`. Live runs `exit_ratio_tp1 = 1.0` with
+tp2/tp3 at 0.0, so TP1 takes the whole position and `remaining` is 0 before
+that branch can be reached. `require_ema_confirmation` is also False. Nothing
+else reads the store.
+
+But the branch does not skip when unseeded — it **raises RuntimeError**. So the
+moment anyone sets `exit_ratio_tp2` or `exit_ratio_tp3` above 0, live throws
+mid-session with a position open. The seeding bug and the exit ratios are two
+unrelated settings that happen to cancel out; nothing ties them together or
+tests the combination.
 
 **Diagnostic**: `phase2_ready` never appears in any session log.
 

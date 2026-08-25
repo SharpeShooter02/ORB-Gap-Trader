@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-08-25",
+  "generated_at": "2026-08-25",
+  "date": "2026-08-25",
+  "n_trades": 1,
+  "n_wins": 0,
+  "win_rate": 0.0,
+  "total_pnl": -5.1,
+  "avg_pnl": -5.1,
+  "best_trade": {
+    "symbol": "AMDL",
+    "pnl": -5.1
+  },
+  "worst_trade": {
+    "symbol": "AMDL",
+    "pnl": -5.1
+  }
+}

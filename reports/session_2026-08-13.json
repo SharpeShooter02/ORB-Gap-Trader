@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-08-13",
+  "generated_at": "2026-08-13",
+  "date": "2026-08-13",
+  "n_trades": 2,
+  "n_wins": 2,
+  "win_rate": 1.0,
+  "total_pnl": 15.870000000000001,
+  "avg_pnl": 7.9350000000000005,
+  "best_trade": {
+    "symbol": "NUGT",
+    "pnl": 8.67
+  },
+  "worst_trade": {
+    "symbol": "JDST",
+    "pnl": 7.2
+  }
+}

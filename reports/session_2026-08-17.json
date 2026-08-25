@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-08-17",
+  "generated_at": "2026-08-17",
+  "date": "2026-08-17",
+  "n_trades": 1,
+  "n_wins": 0,
+  "win_rate": 0.0,
+  "total_pnl": -19.8,
+  "avg_pnl": -19.8,
+  "best_trade": {
+    "symbol": "KORU",
+    "pnl": -19.8
+  },
+  "worst_trade": {
+    "symbol": "KORU",
+    "pnl": -19.8
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-08-20",
+  "generated_at": "2026-08-20",
+  "date": "2026-08-20",
+  "n_trades": 3,
+  "n_wins": 3,
+  "win_rate": 1.0,
+  "total_pnl": 1543.6100000000001,
+  "avg_pnl": 514.5366666666667,
+  "best_trade": {
+    "symbol": "XRPT",
+    "pnl": 759.92
+  },
+  "worst_trade": {
+    "symbol": "SBIT",
+    "pnl": 188.37
+  }
+}

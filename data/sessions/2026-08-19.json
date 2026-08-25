@@ -1,0 +1,1383 @@
+{
+  "schema": 1,
+  "trade_date": "2026-08-19",
+  "written_at": "2026-08-19T13:31:29.662126+00:00",
+  "profile": {
+    "k_sigma": 1.0,
+    "cap_units": 20.0,
+    "gap_threshold": 0.02,
+    "active_min": 5,
+    "flood_min": 8,
+    "weights": {
+      "C1|quiet": 3.0,
+      "C1|active": 3.0,
+      "C1|flood": 3.0,
+      "C2|quiet": 0.5,
+      "C2|active": 3.0,
+      "C2|flood": 0.5,
+      "C3|quiet": 3.0,
+      "C3|active": 3.0,
+      "C3|flood": 3.0
+    },
+    "explicit_drops": [
+      "BNKU",
+      "BTFX",
+      "CHAU",
+      "CWEB",
+      "DFEN",
+      "DPST",
+      "DRN",
+      "MIDU",
+      "NAIL",
+      "NRGU",
+      "RETL",
+      "UBR"
+    ],
+    "direction_filters": {
+      "LABU": 1,
+      "LABD": -1
+    }
+  },
+  "inputs": {
+    "universe": [
+      "BRZU",
+      "DUST",
+      "GDXU",
+      "JDST",
+      "JNUG",
+      "KORU",
+      "LABD",
+      "LABU",
+      "NUGT"
+    ],
+    "instruments": {
+      "SDOW": {
+        "symbol": "SDOW",
+        "underlying": "DIA",
+        "leverage": 3,
+        "inverse": true
+      },
+      "UDOW": {
+        "symbol": "UDOW",
+        "underlying": "DIA",
+        "leverage": 3,
+        "inverse": false
+      },
+      "SRTY": {
+        "symbol": "SRTY",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": true
+      },
+      "TZA": {
+        "symbol": "TZA",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": true
+      },
+      "TNA": {
+        "symbol": "TNA",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": false
+      },
+      "URTY": {
+        "symbol": "URTY",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": false
+      },
+      "FNGD": {
+        "symbol": "FNGD",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": true
+      },
+      "SQQQ": {
+        "symbol": "SQQQ",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": true
+      },
+      "FNGU": {
+        "symbol": "FNGU",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": false
+      },
+      "TQQQ": {
+        "symbol": "TQQQ",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": false
+      },
+      "SPXS": {
+        "symbol": "SPXS",
+        "underlying": "SPY",
+        "leverage": 3,
+        "inverse": true
+      },
+      "SPXL": {
+        "symbol": "SPXL",
+        "underlying": "SPY",
+        "leverage": 3,
+        "inverse": false
+      },
+      "UPRO": {
+        "symbol": "UPRO",
+        "underlying": "SPY",
+        "leverage": 3,
+        "inverse": false
+      },
+      "EDZ": {
+        "symbol": "EDZ",
+        "underlying": "EEM",
+        "leverage": 3,
+        "inverse": true
+      },
+      "EDC": {
+        "symbol": "EDC",
+        "underlying": "EEM",
+        "leverage": 3,
+        "inverse": false
+      },
+      "YANG": {
+        "symbol": "YANG",
+        "underlying": "FXI",
+        "leverage": 3,
+        "inverse": true
+      },
+      "YINN": {
+        "symbol": "YINN",
+        "underlying": "FXI",
+        "leverage": 3,
+        "inverse": false
+      },
+      "DUST": {
+        "symbol": "DUST",
+        "underlying": "GDX",
+        "leverage": 2,
+        "inverse": true
+      },
+      "GDXU": {
+        "symbol": "GDXU",
+        "underlying": "GDX",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NUGT": {
+        "symbol": "NUGT",
+        "underlying": "GDX",
+        "leverage": 2,
+        "inverse": false
+      },
+      "JDST": {
+        "symbol": "JDST",
+        "underlying": "GDXJ",
+        "leverage": 2,
+        "inverse": true
+      },
+      "JNUG": {
+        "symbol": "JNUG",
+        "underlying": "GDXJ",
+        "leverage": 2,
+        "inverse": false
+      },
+      "LABD": {
+        "symbol": "LABD",
+        "underlying": "IBB",
+        "leverage": 3,
+        "inverse": true
+      },
+      "LABU": {
+        "symbol": "LABU",
+        "underlying": "IBB",
+        "leverage": 3,
+        "inverse": false
+      },
+      "SOXS": {
+        "symbol": "SOXS",
+        "underlying": "SOXX",
+        "leverage": 3,
+        "inverse": true
+      },
+      "SOXL": {
+        "symbol": "SOXL",
+        "underlying": "SOXX",
+        "leverage": 3,
+        "inverse": false
+      },
+      "WEBS": {
+        "symbol": "WEBS",
+        "underlying": "XLC",
+        "leverage": 3,
+        "inverse": true
+      },
+      "WEBL": {
+        "symbol": "WEBL",
+        "underlying": "XLC",
+        "leverage": 3,
+        "inverse": false
+      },
+      "FAZ": {
+        "symbol": "FAZ",
+        "underlying": "XLF",
+        "leverage": 3,
+        "inverse": true
+      },
+      "FAS": {
+        "symbol": "FAS",
+        "underlying": "XLF",
+        "leverage": 3,
+        "inverse": false
+      },
+      "TECS": {
+        "symbol": "TECS",
+        "underlying": "XLK",
+        "leverage": 3,
+        "inverse": true
+      },
+      "TECL": {
+        "symbol": "TECL",
+        "underlying": "XLK",
+        "leverage": 3,
+        "inverse": false
+      },
+      "AIBU": {
+        "symbol": "AIBU",
+        "underlying": "AI and Big Data",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TARK": {
+        "symbol": "TARK",
+        "underlying": "ARKK",
+        "leverage": 2,
+        "inverse": false
+      },
+      "CHAU": {
+        "symbol": "CHAU",
+        "underlying": "ASHR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TPOR": {
+        "symbol": "TPOR",
+        "underlying": "Dow Jones Transportation Average",
+        "leverage": 3,
+        "inverse": false
+      },
+      "UCC": {
+        "symbol": "UCC",
+        "underlying": "Dow Jones U.S. Consumer Discretionary Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UYG": {
+        "symbol": "UYG",
+        "underlying": "Dow Jones U.S. Financials Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "RXL": {
+        "symbol": "RXL",
+        "underlying": "Dow Jones U.S. Health Care Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "DIG": {
+        "symbol": "DIG",
+        "underlying": "Dow Jones U.S. Oil & Gas Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "LTL": {
+        "symbol": "LTL",
+        "underlying": "Dow Jones U.S. Select Telecom Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "USD": {
+        "symbol": "USD",
+        "underlying": "Dow Jones U.S. Semiconductors Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UPW": {
+        "symbol": "UPW",
+        "underlying": "Dow Jones U.S. Utilities Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "EZJ": {
+        "symbol": "EZJ",
+        "underlying": "EWJ",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MEXX": {
+        "symbol": "MEXX",
+        "underlying": "EWW",
+        "leverage": 3,
+        "inverse": false
+      },
+      "KORU": {
+        "symbol": "KORU",
+        "underlying": "EWY",
+        "leverage": 3,
+        "inverse": false
+      },
+      "BRZU": {
+        "symbol": "BRZU",
+        "underlying": "EWZ",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UBR": {
+        "symbol": "UBR",
+        "underlying": "EWZ",
+        "leverage": 2,
+        "inverse": false
+      },
+      "EURL": {
+        "symbol": "EURL",
+        "underlying": "FEZ",
+        "leverage": 3,
+        "inverse": false
+      },
+      "XPP": {
+        "symbol": "XPP",
+        "underlying": "FTSE China 50 Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "PILL": {
+        "symbol": "PILL",
+        "underlying": "IHE",
+        "leverage": 3,
+        "inverse": false
+      },
+      "INDL": {
+        "symbol": "INDL",
+        "underlying": "INDY",
+        "leverage": 3,
+        "inverse": false
+      },
+      "DFEN": {
+        "symbol": "DFEN",
+        "underlying": "ITA",
+        "leverage": 3,
+        "inverse": false
+      },
+      "NAIL": {
+        "symbol": "NAIL",
+        "underlying": "ITB",
+        "leverage": 3,
+        "inverse": false
+      },
+      "DRN": {
+        "symbol": "DRN",
+        "underlying": "IYR",
+        "leverage": 3,
+        "inverse": false
+      },
+      "UBOT": {
+        "symbol": "UBOT",
+        "underlying": "Indxx Global Robotics & AI Thematic Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "CLDL": {
+        "symbol": "CLDL",
+        "underlying": "Indxx USA Cloud Computing Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BNKU": {
+        "symbol": "BNKU",
+        "underlying": "KBE",
+        "leverage": 3,
+        "inverse": false
+      },
+      "DPST": {
+        "symbol": "DPST",
+        "underlying": "KRE",
+        "leverage": 3,
+        "inverse": false
+      },
+      "CWEB": {
+        "symbol": "CWEB",
+        "underlying": "KWEB",
+        "leverage": 2,
+        "inverse": false
+      },
+      "JETU": {
+        "symbol": "JETU",
+        "underlying": "JETS",
+        "leverage": 3,
+        "inverse": false
+      },
+      "MIDU": {
+        "symbol": "MIDU",
+        "underlying": "MDY",
+        "leverage": 3,
+        "inverse": false
+      },
+      "EFO": {
+        "symbol": "EFO",
+        "underlying": "MSCI EAFE Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "EET": {
+        "symbol": "EET",
+        "underlying": "MSCI Emerging Markets Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MSOX": {
+        "symbol": "MSOX",
+        "underlying": "MSOS",
+        "leverage": 2,
+        "inverse": false
+      },
+      "FLYU": {
+        "symbol": "FLYU",
+        "underlying": "MicroSectors Travel",
+        "leverage": 3,
+        "inverse": false
+      },
+      "UCYB": {
+        "symbol": "UCYB",
+        "underlying": "Nasdaq CTA Cybersecurity Index",
+        "leverage": 2,
+        "inverse": false
+      },
+      "HIBL": {
+        "symbol": "HIBL",
+        "underlying": "SPHB",
+        "leverage": 3,
+        "inverse": false
+      },
+      "UMDD": {
+        "symbol": "UMDD",
+        "underlying": "MDY",
+        "leverage": 3,
+        "inverse": false
+      },
+      "SAA": {
+        "symbol": "SAA",
+        "underlying": "IJR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BULZ": {
+        "symbol": "BULZ",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": false
+      },
+      "OOTO": {
+        "symbol": "OOTO",
+        "underlying": "Travel",
+        "leverage": 2,
+        "inverse": false
+      },
+      "URAA": {
+        "symbol": "URAA",
+        "underlying": "Uranium",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UPV": {
+        "symbol": "UPV",
+        "underlying": "VGK",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UVIX": {
+        "symbol": "UVIX",
+        "underlying": "VIX",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UYM": {
+        "symbol": "UYM",
+        "underlying": "XLB",
+        "leverage": 2,
+        "inverse": false
+      },
+      "WTIU": {
+        "symbol": "WTIU",
+        "underlying": "XLE",
+        "leverage": 3,
+        "inverse": false
+      },
+      "DUSL": {
+        "symbol": "DUSL",
+        "underlying": "XLI",
+        "leverage": 3,
+        "inverse": false
+      },
+      "UGE": {
+        "symbol": "UGE",
+        "underlying": "XLP",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UTSL": {
+        "symbol": "UTSL",
+        "underlying": "XLU",
+        "leverage": 3,
+        "inverse": false
+      },
+      "CURE": {
+        "symbol": "CURE",
+        "underlying": "XLV",
+        "leverage": 3,
+        "inverse": false
+      },
+      "WANT": {
+        "symbol": "WANT",
+        "underlying": "XLY",
+        "leverage": 3,
+        "inverse": false
+      },
+      "NRGU": {
+        "symbol": "NRGU",
+        "underlying": "XOP",
+        "leverage": 3,
+        "inverse": false
+      },
+      "RETL": {
+        "symbol": "RETL",
+        "underlying": "XRT",
+        "leverage": 3,
+        "inverse": false
+      },
+      "BTCZ": {
+        "symbol": "BTCZ",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": true
+      },
+      "SBIT": {
+        "symbol": "SBIT",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": true
+      },
+      "BITU": {
+        "symbol": "BITU",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BITX": {
+        "symbol": "BITX",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BTCL": {
+        "symbol": "BTCL",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BTFX": {
+        "symbol": "BTFX",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ETHD": {
+        "symbol": "ETHD",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": true
+      },
+      "ETH": {
+        "symbol": "ETH",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ETHT": {
+        "symbol": "ETHT",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ETHU": {
+        "symbol": "ETHU",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ETU": {
+        "symbol": "ETU",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false
+      },
+      "SOLT": {
+        "symbol": "SOLT",
+        "underlying": "SOL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "XRPT": {
+        "symbol": "XRPT",
+        "underlying": "XRP",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UXRP": {
+        "symbol": "UXRP",
+        "underlying": "XRP",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AAPB": {
+        "symbol": "AAPB",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AAPU": {
+        "symbol": "AAPU",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AAPW": {
+        "symbol": "AAPW",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AAPX": {
+        "symbol": "AAPX",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ADBG": {
+        "symbol": "ADBG",
+        "underlying": "ADBE",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AMDG": {
+        "symbol": "AMDG",
+        "underlying": "AMD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AMDL": {
+        "symbol": "AMDL",
+        "underlying": "AMD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AMUU": {
+        "symbol": "AMUU",
+        "underlying": "AMD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AMZZ": {
+        "symbol": "AMZZ",
+        "underlying": "AMZN",
+        "leverage": 2,
+        "inverse": true
+      },
+      "AMZA": {
+        "symbol": "AMZA",
+        "underlying": "AMZN",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AMZU": {
+        "symbol": "AMZU",
+        "underlying": "AMZN",
+        "leverage": 2,
+        "inverse": false
+      },
+      "APPX": {
+        "symbol": "APPX",
+        "underlying": "APP",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ARMG": {
+        "symbol": "ARMG",
+        "underlying": "ARM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ARMU": {
+        "symbol": "ARMU",
+        "underlying": "ARM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ASMG": {
+        "symbol": "ASMG",
+        "underlying": "ASML",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AVGG": {
+        "symbol": "AVGG",
+        "underlying": "AVGO",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AVGX": {
+        "symbol": "AVGX",
+        "underlying": "AVGO",
+        "leverage": 2,
+        "inverse": false
+      },
+      "AVL": {
+        "symbol": "AVL",
+        "underlying": "AVGO",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BOEU": {
+        "symbol": "BOEU",
+        "underlying": "BA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BABX": {
+        "symbol": "BABX",
+        "underlying": "BABA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "KBAB": {
+        "symbol": "KBAB",
+        "underlying": "BABA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "BRKU": {
+        "symbol": "BRKU",
+        "underlying": "BRK-B",
+        "leverage": 2,
+        "inverse": false
+      },
+      "COIG": {
+        "symbol": "COIG",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false
+      },
+      "COIW": {
+        "symbol": "COIW",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false
+      },
+      "CONL": {
+        "symbol": "CONL",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false
+      },
+      "CONX": {
+        "symbol": "CONX",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false
+      },
+      "CRMG": {
+        "symbol": "CRMG",
+        "underlying": "CRM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "CRWL": {
+        "symbol": "CRWL",
+        "underlying": "CRWD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "DLLL": {
+        "symbol": "DLLL",
+        "underlying": "DELL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "DJTU": {
+        "symbol": "DJTU",
+        "underlying": "DJT",
+        "leverage": 2,
+        "inverse": false
+      },
+      "GGLL": {
+        "symbol": "GGLL",
+        "underlying": "GOOGL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "GOOX": {
+        "symbol": "GOOX",
+        "underlying": "GOOGL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "HOOG": {
+        "symbol": "HOOG",
+        "underlying": "HOOD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "HOOX": {
+        "symbol": "HOOX",
+        "underlying": "HOOD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ROBN": {
+        "symbol": "ROBN",
+        "underlying": "HOOD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "INTW": {
+        "symbol": "INTW",
+        "underlying": "INTC",
+        "leverage": 2,
+        "inverse": false
+      },
+      "IONL": {
+        "symbol": "IONL",
+        "underlying": "IONQ",
+        "leverage": 2,
+        "inverse": false
+      },
+      "ELIL": {
+        "symbol": "ELIL",
+        "underlying": "LLY",
+        "leverage": 2,
+        "inverse": false
+      },
+      "LLYX": {
+        "symbol": "LLYX",
+        "underlying": "LLY",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MRAL": {
+        "symbol": "MRAL",
+        "underlying": "MARA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "FBL": {
+        "symbol": "FBL",
+        "underlying": "META",
+        "leverage": 2,
+        "inverse": false
+      },
+      "METU": {
+        "symbol": "METU",
+        "underlying": "META",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MVLL": {
+        "symbol": "MVLL",
+        "underlying": "MRVL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "USML": {
+        "symbol": "USML",
+        "underlying": "MSCI",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MSFL": {
+        "symbol": "MSFL",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MSFO": {
+        "symbol": "MSFO",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MSFU": {
+        "symbol": "MSFU",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MSFX": {
+        "symbol": "MSFX",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MSTU": {
+        "symbol": "MSTU",
+        "underlying": "MSTR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MSTX": {
+        "symbol": "MSTX",
+        "underlying": "MSTR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MULL": {
+        "symbol": "MULL",
+        "underlying": "MU",
+        "leverage": 2,
+        "inverse": false
+      },
+      "MUU": {
+        "symbol": "MUU",
+        "underlying": "MU",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NFLU": {
+        "symbol": "NFLU",
+        "underlying": "NFLX",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NFXL": {
+        "symbol": "NFXL",
+        "underlying": "NFLX",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NVDG": {
+        "symbol": "NVDG",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NVDL": {
+        "symbol": "NVDL",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NVDU": {
+        "symbol": "NVDU",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NVDW": {
+        "symbol": "NVDW",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "NVDX": {
+        "symbol": "NVDX",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "PALU": {
+        "symbol": "PALU",
+        "underlying": "PANW",
+        "leverage": 2,
+        "inverse": false
+      },
+      "KPDD": {
+        "symbol": "KPDD",
+        "underlying": "PDD",
+        "leverage": 2,
+        "inverse": false
+      },
+      "PLTG": {
+        "symbol": "PLTG",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "PLTU": {
+        "symbol": "PLTU",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "PLTW": {
+        "symbol": "PLTW",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "PTIR": {
+        "symbol": "PTIR",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false
+      },
+      "PYPG": {
+        "symbol": "PYPG",
+        "underlying": "PYPL",
+        "leverage": 2,
+        "inverse": false
+      },
+      "QCML": {
+        "symbol": "QCML",
+        "underlying": "QCOM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "RBLU": {
+        "symbol": "RBLU",
+        "underlying": "RBLX",
+        "leverage": 2,
+        "inverse": false
+      },
+      "RDTL": {
+        "symbol": "RDTL",
+        "underlying": "RDDT",
+        "leverage": 2,
+        "inverse": false
+      },
+      "RKLX": {
+        "symbol": "RKLX",
+        "underlying": "RKLB",
+        "leverage": 2,
+        "inverse": false
+      },
+      "SMCL": {
+        "symbol": "SMCL",
+        "underlying": "SMCI",
+        "leverage": 2,
+        "inverse": false
+      },
+      "SMCX": {
+        "symbol": "SMCX",
+        "underlying": "SMCI",
+        "leverage": 2,
+        "inverse": false
+      },
+      "SNPX": {
+        "symbol": "SNPX",
+        "underlying": "SNPS",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSL": {
+        "symbol": "TSL",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSLG": {
+        "symbol": "TSLG",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSLI": {
+        "symbol": "TSLI",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSLL": {
+        "symbol": "TSLL",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSLR": {
+        "symbol": "TSLR",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSLT": {
+        "symbol": "TSLT",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSLW": {
+        "symbol": "TSLW",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSMG": {
+        "symbol": "TSMG",
+        "underlying": "TSM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSMU": {
+        "symbol": "TSMU",
+        "underlying": "TSM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "TSMX": {
+        "symbol": "TSMX",
+        "underlying": "TSM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "UBRL": {
+        "symbol": "UBRL",
+        "underlying": "UBER",
+        "leverage": 2,
+        "inverse": false
+      },
+      "VRTL": {
+        "symbol": "VRTL",
+        "underlying": "VRT",
+        "leverage": 2,
+        "inverse": false
+      },
+      "XOMX": {
+        "symbol": "XOMX",
+        "underlying": "XOM",
+        "leverage": 2,
+        "inverse": false
+      },
+      "KOLD": {
+        "symbol": "KOLD",
+        "underlying": "UNG",
+        "leverage": 2,
+        "inverse": true
+      },
+      "BOIL": {
+        "symbol": "BOIL",
+        "underlying": "UNG",
+        "leverage": 2,
+        "inverse": false
+      },
+      "GUSH": {
+        "symbol": "GUSH",
+        "underlying": "XOP",
+        "leverage": 2,
+        "inverse": false
+      }
+    },
+    "sigmas": {
+      "AAPL": 0.018028762238238,
+      "ADBE": 0.0224590025542639,
+      "AMD": 0.0283947312366271,
+      "AMZN": 0.0240899566940974,
+      "APP": 0.0356612788278368,
+      "ARKK": 0.0167048488973917,
+      "ARM": 0.0359578721413495,
+      "ASHR": 0.0131425468088394,
+      "ASML": 0.0219078209864609,
+      "AVGO": 0.0173258191459365,
+      "BA": 0.0153686864710041,
+      "BABA": 0.0191485366981108,
+      "BRK-B": 0.0104489829624501,
+      "BTC": 0.0262174909609658,
+      "COIN": 0.0360082714777579,
+      "CRM": 0.0192719599292409,
+      "CRWD": 0.0241860033098445,
+      "DELL": 0.0219410317924403,
+      "DIA": 0.0087320431027922,
+      "DJT": 0.1189927509878705,
+      "EEM": 0.0127871718446452,
+      "ETH": 0.0323865031877393,
+      "EWJ": 0.0095101230078796,
+      "EWW": 0.0124630017129413,
+      "EWY": 0.0154491823970506,
+      "EWZ": 0.0167000590802249,
+      "FEZ": 0.0118144592957553,
+      "FXI": 0.0152753640393168,
+      "GDX": 0.0181280844216341,
+      "GDXJ": 0.0196020574035616,
+      "GOOGL": 0.0141445007499298,
+      "HOOD": 0.0334990218372516,
+      "IBB": 0.011161774742484,
+      "IHE": 0.0097378014502988,
+      "IJR": 0.0101640897175416,
+      "INDY": 0.0100812788068153,
+      "INTC": 0.0188021372747601,
+      "IONQ": 0.043984941676679,
+      "ITA": 0.0121080949514554,
+      "ITB": 0.0161272838874977,
+      "IWM": 0.0104991780814221,
+      "IYR": 0.0129722953415081,
+      "JETS": 0.015622960517934,
+      "KBE": 0.0169021311850091,
+      "KRE": 0.0156084566865516,
+      "KWEB": 0.0170710154192427,
+      "LLY": 0.0124881314356466,
+      "MARA": 0.0887275743545635,
+      "MDY": 0.0101326028957157,
+      "META": 0.0190222769159348,
+      "MRVL": 0.0265839662577894,
+      "MSCI": 0.0167133964049109,
+      "MSFT": 0.0140652257619405,
+      "MSOS": 0.0344425583016486,
+      "MSTR": 0.0378786535473303,
+      "MU": 0.0266710104928402,
+      "NFLX": 0.0264705588474793,
+      "NVDA": 0.0277240431711988,
+      "NYFANG": 0.0123392676794319,
+      "PANW": 0.0181297417476275,
+      "PDD": 0.0328590774933395,
+      "PLTR": 0.0322415159594895,
+      "PYPL": 0.0176159948692693,
+      "QCOM": 0.0227346637800087,
+      "QQQ": 0.012566159568669,
+      "RBLX": 0.0329489106384568,
+      "RDDT": 0.0367695594683895,
+      "RKLB": 0.0361922744522708,
+      "SMCI": 0.0309205528398222,
+      "SNPS": 0.0190394760480481,
+      "SOL": 0.0451704894929411,
+      "SOXX": 0.0147809794878326,
+      "SPHB": 0.0123483110213752,
+      "SPY": 0.0087241244908533,
+      "TSLA": 0.025976372893118,
+      "TSM": 0.0189131892720306,
+      "UBER": 0.022962580707197,
+      "UNG": 0.0207978432925421,
+      "VGK": 0.0107627273550665,
+      "VIX": 0.0520977344234194,
+      "VRT": 0.0271354283093325,
+      "XLB": 0.0104644119069272,
+      "XLC": 0.0100948333912235,
+      "XLE": 0.0129352910125383,
+      "XLF": 0.0138777832078129,
+      "XLI": 0.0097115707964189,
+      "XLK": 0.0119300161702896,
+      "XLP": 0.0068823847406116,
+      "XLU": 0.0088818603850852,
+      "XLV": 0.0082407610316145,
+      "XLY": 0.0103281524026713,
+      "XOM": 0.0103264607212964,
+      "XOP": 0.0180424482886679,
+      "XRP": 0.0480252216664079,
+      "XRT": 0.0118846360060167
+    },
+    "overnight_gaps": {
+      "EWZ": 0.027285782671134528,
+      "GDX": 0.0956752838849964,
+      "GDXJ": 0.06699706314243757,
+      "EWY": 0.04484304932735423,
+      "IBB": 0.03771524472952158
+    },
+    "prior_two_closes": {
+      "EWZ": [
+        33.994998931884766,
+        33.97
+      ],
+      "GDX": [
+        90.33000183105469,
+        91.89
+      ],
+      "GDXJ": [
+        117.73999786376953,
+        120.38
+      ],
+      "EWY": [
+        173.1300048828125,
+        185.1
+      ],
+      "IBB": [
+        202.91000366210938,
+        201.93
+      ]
+    },
+    "prior_etf_close": {
+      "AMDL": 51.96,
+      "BITU": 9.48,
+      "BITX": 12.22,
+      "BOIL": 19.62,
+      "BRZU": 83.56,
+      "BTCL": 12.49,
+      "BTCZ": 5.36,
+      "DUST": 42.15,
+      "EDC": 73.97,
+      "EDZ": 15.83,
+      "ETH": 18.26,
+      "ETHD": 56.88,
+      "ETHT": 10.48,
+      "ETHU": 16.26,
+      "ETU": 4.29,
+      "EURL": 50.07,
+      "FAS": 181.17,
+      "FAZ": 31.5,
+      "FNGD": 28.51,
+      "FNGU": 30.89,
+      "GDXU": 124.17,
+      "GUSH": 43.5,
+      "INDL": 44.77,
+      "JDST": 27.24,
+      "JNUG": 159.88,
+      "KOLD": 29.94,
+      "KORU": 17.84,
+      "LABD": 7.2,
+      "LABU": 289.98,
+      "MEXX": 27.02,
+      "MSOX": 2.53,
+      "NUGT": 157.36,
+      "NVDU": 139.13,
+      "PILL": 22.44,
+      "SBIT": 55.43,
+      "SDOW": 22.92,
+      "SOLT": 34.54,
+      "SOXL": 129.1,
+      "SOXS": 44.19,
+      "SPXL": 288.87,
+      "SPXS": 24.57,
+      "SQQQ": 38.28,
+      "SRTY": 21.5,
+      "TECL": 202.1,
+      "TECS": 62.35,
+      "TNA": 73.5,
+      "TQQQ": 72.53,
+      "TSLL": 8.48,
+      "TZA": 38.11,
+      "UDOW": 73.13,
+      "UPRO": 151.19,
+      "URTY": 85.53,
+      "UXRP": 8.8,
+      "WEBL": 27.51,
+      "WEBS": 15.4,
+      "XRPT": 19.37,
+      "YANG": 29.53,
+      "YINN": 28.53
+    }
+  },
+  "plan": {
+    "candidates": [
+      "BRZU",
+      "NUGT",
+      "JNUG",
+      "KORU",
+      "LABU"
+    ],
+    "regime": "active",
+    "n_uls": 5,
+    "cap_factor": 1.0,
+    "multipliers": {
+      "BRZU": 3.0,
+      "NUGT": 3.0,
+      "JNUG": 3.0,
+      "KORU": 3.0,
+      "LABU": 3.0
+    }
+  }
+}

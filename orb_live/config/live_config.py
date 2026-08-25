@@ -199,23 +199,24 @@ class LiveConfig:
     eod_exit_hour:   int = 16
     eod_exit_minute: int = 0
 
-    # Flatten this many seconds BEFORE the close so exit market orders fill in
-    # liquid regular-hours trading. Leveraged ETFs have thin/no after-hours
-    # books, and IB rejects market orders outside RTH — flattening after 16:00
-    # would leave positions unfilled overnight. 120s → flatten at 15:58 ET.
+    # SAFETY NET ONLY. The real exit is bar-driven, in position_manager, off
+    # StrategyConfig.eod_exit_* (15:58) — NOT the eod_exit_* fields above,
+    # which LivePositionManager never sees. This flatten exists to catch
+    # positions the bar exit missed (bar never delivered, exit order rejected).
+    #
+    # It must land AFTER the 15:58 bar is delivered, ~15:59:05. At 120s it
+    # landed at 15:58:00 and would have pre-empted the bar exit, quietly
+    # becoming the real exit path at a different price. 30s → 15:59:30, which
+    # is after delivery and still inside RTH: leveraged ETFs have thin/no
+    # after-hours books and IB rejects market orders past 16:00.
     #
     # Exit timing is worth real money and the value is front-loaded. Measured
     # over the full sample: 15:59 +19.172, 15:58 +18.880, 15:57 +18.837,
-    # 15:55 +18.115 — the last being 5.5% worse and negative in all 7 years.
-    # 15:58 takes 72% of that gap while leaving two minutes of margin; a
-    # flatten took ~66s end to end on 2026-08-24. The final minute is worth
-    # another 1.5% but the backtest books the 15:59 bar's CLOSE — effectively
-    # the 16:00 print — so that last slice assumes a fill at the closing price
-    # during the auction, which is the least trustworthy number in the table.
+    # 15:55 +18.115 — the last 5.5% worse and negative in all 7 years. Live ran
+    # at 15:55 for four sessions because StrategyConfig defaulted there.
     #
-    # Must stay in step with run_v1_at_k's eod_exit defaults in the backtest;
-    # test_eod_timing_parity.py asserts it.
-    eod_flatten_lead_secs: int = 120
+    # test_eod_timing_parity.py asserts the ordering and the backtest match.
+    eod_flatten_lead_secs: int = 30
 
     # Entry mechanism. False (default) = reactive: detect the ORB break on a
     # closed 1-min bar, then place a limit at the boundary. True = pre-placed:

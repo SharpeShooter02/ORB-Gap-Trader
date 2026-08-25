@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-08-19",
+  "generated_at": "2026-08-19",
+  "date": "2026-08-19",
+  "n_trades": 4,
+  "n_wins": 3,
+  "win_rate": 0.75,
+  "total_pnl": 436.04,
+  "avg_pnl": 109.01,
+  "best_trade": {
+    "symbol": "LABU",
+    "pnl": 276.48
+  },
+  "worst_trade": {
+    "symbol": "BRZU",
+    "pnl": -227.0
+  }
+}

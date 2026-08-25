@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-08-18",
+  "generated_at": "2026-08-18",
+  "date": "2026-08-18",
+  "n_trades": 4,
+  "n_wins": 1,
+  "win_rate": 0.25,
+  "total_pnl": -57.14,
+  "avg_pnl": -14.285,
+  "best_trade": {
+    "symbol": "JNUG",
+    "pnl": 77.76
+  },
+  "worst_trade": {
+    "symbol": "AMDL",
+    "pnl": -71.39
+  }
+}

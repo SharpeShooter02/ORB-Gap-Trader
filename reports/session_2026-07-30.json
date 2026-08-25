@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-30",
+  "generated_at": "2026-07-30",
+  "date": "2026-07-30",
+  "n_trades": 6,
+  "n_wins": 5,
+  "win_rate": 0.8333333333333334,
+  "total_pnl": 76.09,
+  "avg_pnl": 12.681666666666667,
+  "best_trade": {
+    "symbol": "KORU",
+    "pnl": 32.34
+  },
+  "worst_trade": {
+    "symbol": "SOLT",
+    "pnl": -17.48
+  }
+}

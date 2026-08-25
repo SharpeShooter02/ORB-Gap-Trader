@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-27",
+  "generated_at": "2026-07-27",
+  "date": "2026-07-27",
+  "n_trades": 1,
+  "n_wins": 1,
+  "win_rate": 1.0,
+  "total_pnl": 3.77,
+  "avg_pnl": 3.77,
+  "best_trade": {
+    "symbol": "GUSH",
+    "pnl": 3.77
+  },
+  "worst_trade": {
+    "symbol": "GUSH",
+    "pnl": 3.77
+  }
+}

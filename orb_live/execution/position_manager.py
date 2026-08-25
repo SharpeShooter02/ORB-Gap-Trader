@@ -17,10 +17,15 @@ orb_backtester.py:simulate_trade (lines 1376-1487):
 
 PRODUCTION NOTES:
   - atr_trail TP3 mode is NOT implemented (raises NotImplementedError at init).
-  - EOD exit at eod_exit_hour=16 NEVER fires on a delivered RTH bar (last bar
-    is 15:59). The runner calls flatten_all('eod_sweep') ~eod_flatten_lead_secs
-    BEFORE the close (default 15:58 ET) so market exits fill in liquid RTH —
-    market orders sent after 16:00 are rejected/unfilled on leveraged ETFs.
+  - The EOD exit here is the REAL exit path. It reads self._config, which
+    runner/main.py sets to cfg.strategy_config — StrategyConfig.eod_exit_*
+    (15:58), NOT LiveConfig.eod_exit_* (16:00). Those are different objects;
+    the 16:00 pair is an unreachable sentinel this class never sees. It fires
+    when the 15:58 bar is DELIVERED, ~15:59:05.
+    The runner's flatten_all('eod_sweep') at close − eod_flatten_lead_secs is
+    only a safety net for positions this path missed, and is scheduled AFTER
+    delivery so it cannot pre-empt the bar exit. Market orders sent after 16:00
+    are rejected/unfilled on leveraged ETFs, so it stays inside RTH.
   - Position sizing uses shared account equity (not per-symbol pools as in the
     backtest). See HANDOFF_PROMPT_3.md §5 for the intentional divergence note.
   - Every state change is persisted to state_store BEFORE the order is placed,

@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-23",
+  "generated_at": "2026-07-23",
+  "date": "2026-07-23",
+  "n_trades": 3,
+  "n_wins": 1,
+  "win_rate": 0.3333333333333333,
+  "total_pnl": -11.580000000000002,
+  "avg_pnl": -3.8600000000000008,
+  "best_trade": {
+    "symbol": "TSLL",
+    "pnl": 10.98
+  },
+  "worst_trade": {
+    "symbol": "NUGT",
+    "pnl": -11.88
+  }
+}

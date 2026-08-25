@@ -119,7 +119,7 @@ class StrategyConfig:
     market_open_hour:   int = 9
     market_open_minute: int = 30
     eod_exit_hour:      int = 15
-    eod_exit_minute:    int = 55
+    eod_exit_minute:    int = 58
     latest_entry_minute: int | None = None
 
     # ── Date range ───────────────────────────────────────────────────────────

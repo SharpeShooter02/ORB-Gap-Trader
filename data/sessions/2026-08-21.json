@@ -1,0 +1,3304 @@
+{
+  "schema": 2,
+  "trade_date": "2026-08-21",
+  "written_at": "2026-08-21T13:31:23.196375+00:00",
+  "profile": {
+    "k_sigma": 1.0,
+    "cap_units": 20.0,
+    "gap_threshold": 0.02,
+    "active_min": 5,
+    "flood_min": 8,
+    "weights": {
+      "C1|quiet": 3.0,
+      "C1|active": 3.0,
+      "C1|flood": 3.0,
+      "C2|quiet": 0.5,
+      "C2|active": 3.0,
+      "C2|flood": 0.5,
+      "C3|quiet": 3.0,
+      "C3|active": 3.0,
+      "C3|flood": 3.0
+    },
+    "explicit_drops": [
+      "BNKU",
+      "BTFX",
+      "CHAU",
+      "CWEB",
+      "DFEN",
+      "DPST",
+      "DRN",
+      "MIDU",
+      "NAIL",
+      "NRGU",
+      "RETL",
+      "UBR"
+    ],
+    "direction_filters": {
+      "LABU": 1,
+      "LABD": -1
+    }
+  },
+  "inputs": {
+    "universe": [],
+    "instruments": {
+      "SDOW": {
+        "symbol": "SDOW",
+        "underlying": "DIA",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7867,
+        "margin_short": 0.944
+      },
+      "UDOW": {
+        "symbol": "UDOW",
+        "underlying": "DIA",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7866,
+        "margin_short": 0.9439
+      },
+      "SRTY": {
+        "symbol": "SRTY",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7929,
+        "margin_short": 0.9514
+      },
+      "TZA": {
+        "symbol": "TZA",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7935,
+        "margin_short": 0.9521
+      },
+      "TNA": {
+        "symbol": "TNA",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7817,
+        "margin_short": 0.938
+      },
+      "URTY": {
+        "symbol": "URTY",
+        "underlying": "IWM",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7813,
+        "margin_short": 0.9376
+      },
+      "FNGD": {
+        "symbol": "FNGD",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7898,
+        "margin_short": 0.9477
+      },
+      "SQQQ": {
+        "symbol": "SQQQ",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7921,
+        "margin_short": 0.9505
+      },
+      "FNGU": {
+        "symbol": "FNGU",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.784,
+        "margin_short": 0.9408
+      },
+      "TQQQ": {
+        "symbol": "TQQQ",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7825,
+        "margin_short": 0.939
+      },
+      "SPXS": {
+        "symbol": "SPXS",
+        "underlying": "SPY",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.788,
+        "margin_short": 0.9457
+      },
+      "SPXL": {
+        "symbol": "SPXL",
+        "underlying": "SPY",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7864,
+        "margin_short": 0.9437
+      },
+      "UPRO": {
+        "symbol": "UPRO",
+        "underlying": "SPY",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7865,
+        "margin_short": 0.9439
+      },
+      "EDZ": {
+        "symbol": "EDZ",
+        "underlying": "EEM",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.8108,
+        "margin_short": 0.973
+      },
+      "EDC": {
+        "symbol": "EDC",
+        "underlying": "EEM",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7628,
+        "margin_short": 0.9153
+      },
+      "YANG": {
+        "symbol": "YANG",
+        "underlying": "FXI",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7959,
+        "margin_short": 0.9551
+      },
+      "YINN": {
+        "symbol": "YINN",
+        "underlying": "FXI",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7787,
+        "margin_short": 0.9344
+      },
+      "DUST": {
+        "symbol": "DUST",
+        "underlying": "GDX",
+        "leverage": 2,
+        "inverse": true,
+        "margin_long": 0.5347,
+        "margin_short": 0.6416
+      },
+      "GDXU": {
+        "symbol": "GDXU",
+        "underlying": "GDX",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7661,
+        "margin_short": 0.9193
+      },
+      "NUGT": {
+        "symbol": "NUGT",
+        "underlying": "GDX",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.5151,
+        "margin_short": 0.6181
+      },
+      "JDST": {
+        "symbol": "JDST",
+        "underlying": "GDXJ",
+        "leverage": 2,
+        "inverse": true,
+        "margin_long": 0.5358,
+        "margin_short": 0.643
+      },
+      "JNUG": {
+        "symbol": "JNUG",
+        "underlying": "GDXJ",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.516,
+        "margin_short": 0.6192
+      },
+      "LABD": {
+        "symbol": "LABD",
+        "underlying": "IBB",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7933,
+        "margin_short": 0.952
+      },
+      "LABU": {
+        "symbol": "LABU",
+        "underlying": "IBB",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7753,
+        "margin_short": 0.9303
+      },
+      "SOXS": {
+        "symbol": "SOXS",
+        "underlying": "SOXX",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.8031,
+        "margin_short": 0.9637
+      },
+      "SOXL": {
+        "symbol": "SOXL",
+        "underlying": "SOXX",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.771,
+        "margin_short": 0.9252
+      },
+      "WEBS": {
+        "symbol": "WEBS",
+        "underlying": "XLC",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7883,
+        "margin_short": 0.9459
+      },
+      "WEBL": {
+        "symbol": "WEBL",
+        "underlying": "XLC",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7879,
+        "margin_short": 0.9455
+      },
+      "FAZ": {
+        "symbol": "FAZ",
+        "underlying": "XLF",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7864,
+        "margin_short": 0.9436
+      },
+      "FAS": {
+        "symbol": "FAS",
+        "underlying": "XLF",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7866,
+        "margin_short": 0.9439
+      },
+      "TECS": {
+        "symbol": "TECS",
+        "underlying": "XLK",
+        "leverage": 3,
+        "inverse": true,
+        "margin_long": 0.7966,
+        "margin_short": 0.9559
+      },
+      "TECL": {
+        "symbol": "TECL",
+        "underlying": "XLK",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7798,
+        "margin_short": 0.9358
+      },
+      "AIBU": {
+        "symbol": "AIBU",
+        "underlying": "AI and Big Data",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TARK": {
+        "symbol": "TARK",
+        "underlying": "ARKK",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CHAU": {
+        "symbol": "CHAU",
+        "underlying": "ASHR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TPOR": {
+        "symbol": "TPOR",
+        "underlying": "Dow Jones Transportation Average",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UCC": {
+        "symbol": "UCC",
+        "underlying": "Dow Jones U.S. Consumer Discretionary Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UYG": {
+        "symbol": "UYG",
+        "underlying": "Dow Jones U.S. Financials Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "RXL": {
+        "symbol": "RXL",
+        "underlying": "Dow Jones U.S. Health Care Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "DIG": {
+        "symbol": "DIG",
+        "underlying": "Dow Jones U.S. Oil & Gas Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "LTL": {
+        "symbol": "LTL",
+        "underlying": "Dow Jones U.S. Select Telecom Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "USD": {
+        "symbol": "USD",
+        "underlying": "Dow Jones U.S. Semiconductors Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UPW": {
+        "symbol": "UPW",
+        "underlying": "Dow Jones U.S. Utilities Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "EZJ": {
+        "symbol": "EZJ",
+        "underlying": "EWJ",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MEXX": {
+        "symbol": "MEXX",
+        "underlying": "EWW",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.9842,
+        "margin_short": 1.0737
+      },
+      "KORU": {
+        "symbol": "KORU",
+        "underlying": "EWY",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7384,
+        "margin_short": 0.8861
+      },
+      "BRZU": {
+        "symbol": "BRZU",
+        "underlying": "EWZ",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.5237,
+        "margin_short": 0.6285
+      },
+      "UBR": {
+        "symbol": "UBR",
+        "underlying": "EWZ",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "EURL": {
+        "symbol": "EURL",
+        "underlying": "FEZ",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7843,
+        "margin_short": 0.9412
+      },
+      "XPP": {
+        "symbol": "XPP",
+        "underlying": "FTSE China 50 Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "PILL": {
+        "symbol": "PILL",
+        "underlying": "IHE",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.7831,
+        "margin_short": 0.9397
+      },
+      "INDL": {
+        "symbol": "INDL",
+        "underlying": "INDY",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": 0.6606,
+        "margin_short": 0.7207
+      },
+      "DFEN": {
+        "symbol": "DFEN",
+        "underlying": "ITA",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NAIL": {
+        "symbol": "NAIL",
+        "underlying": "ITB",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "DRN": {
+        "symbol": "DRN",
+        "underlying": "IYR",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UBOT": {
+        "symbol": "UBOT",
+        "underlying": "Indxx Global Robotics & AI Thematic Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CLDL": {
+        "symbol": "CLDL",
+        "underlying": "Indxx USA Cloud Computing Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "BNKU": {
+        "symbol": "BNKU",
+        "underlying": "KBE",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "DPST": {
+        "symbol": "DPST",
+        "underlying": "KRE",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CWEB": {
+        "symbol": "CWEB",
+        "underlying": "KWEB",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "JETU": {
+        "symbol": "JETU",
+        "underlying": "JETS",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MIDU": {
+        "symbol": "MIDU",
+        "underlying": "MDY",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "EFO": {
+        "symbol": "EFO",
+        "underlying": "MSCI EAFE Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "EET": {
+        "symbol": "EET",
+        "underlying": "MSCI Emerging Markets Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MSOX": {
+        "symbol": "MSOX",
+        "underlying": "MSOS",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.6113,
+        "margin_short": 1.0135
+      },
+      "FLYU": {
+        "symbol": "FLYU",
+        "underlying": "MicroSectors Travel",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UCYB": {
+        "symbol": "UCYB",
+        "underlying": "Nasdaq CTA Cybersecurity Index",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "HIBL": {
+        "symbol": "HIBL",
+        "underlying": "SPHB",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UMDD": {
+        "symbol": "UMDD",
+        "underlying": "MDY",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "SAA": {
+        "symbol": "SAA",
+        "underlying": "IJR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "BULZ": {
+        "symbol": "BULZ",
+        "underlying": "QQQ",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "OOTO": {
+        "symbol": "OOTO",
+        "underlying": "Travel",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "URAA": {
+        "symbol": "URAA",
+        "underlying": "Uranium",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UPV": {
+        "symbol": "UPV",
+        "underlying": "VGK",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UVIX": {
+        "symbol": "UVIX",
+        "underlying": "VIX",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UYM": {
+        "symbol": "UYM",
+        "underlying": "XLB",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "WTIU": {
+        "symbol": "WTIU",
+        "underlying": "XLE",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "DUSL": {
+        "symbol": "DUSL",
+        "underlying": "XLI",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UGE": {
+        "symbol": "UGE",
+        "underlying": "XLP",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UTSL": {
+        "symbol": "UTSL",
+        "underlying": "XLU",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CURE": {
+        "symbol": "CURE",
+        "underlying": "XLV",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "WANT": {
+        "symbol": "WANT",
+        "underlying": "XLY",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NRGU": {
+        "symbol": "NRGU",
+        "underlying": "XOP",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "RETL": {
+        "symbol": "RETL",
+        "underlying": "XRT",
+        "leverage": 3,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "BTCZ": {
+        "symbol": "BTCZ",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": true,
+        "margin_long": 1.0585,
+        "margin_short": 2.3286
+      },
+      "SBIT": {
+        "symbol": "SBIT",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": true,
+        "margin_long": 1.0514,
+        "margin_short": 1.1566
+      },
+      "BITU": {
+        "symbol": "BITU",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9532,
+        "margin_short": 1.1629
+      },
+      "BITX": {
+        "symbol": "BITX",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9527,
+        "margin_short": 1.1623
+      },
+      "BTCL": {
+        "symbol": "BTCL",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9519,
+        "margin_short": 3.8838
+      },
+      "BTFX": {
+        "symbol": "BTFX",
+        "underlying": "BTC",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "ETHD": {
+        "symbol": "ETHD",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": true,
+        "margin_long": 1.013,
+        "margin_short": 1.1143
+      },
+      "ETH": {
+        "symbol": "ETH",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9891,
+        "margin_short": 0.6034
+      },
+      "ETHT": {
+        "symbol": "ETHT",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.981,
+        "margin_short": 1.1969
+      },
+      "ETHU": {
+        "symbol": "ETHU",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9813,
+        "margin_short": 4.0038
+      },
+      "ETU": {
+        "symbol": "ETU",
+        "underlying": "ETH",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9776,
+        "margin_short": 3.9887
+      },
+      "SOLT": {
+        "symbol": "SOLT",
+        "underlying": "SOL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9637,
+        "margin_short": 1.1757
+      },
+      "XRPT": {
+        "symbol": "XRPT",
+        "underlying": "XRP",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9357,
+        "margin_short": 1.1416
+      },
+      "UXRP": {
+        "symbol": "UXRP",
+        "underlying": "XRP",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9652,
+        "margin_short": 1.1775
+      },
+      "AAPB": {
+        "symbol": "AAPB",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AAPU": {
+        "symbol": "AAPU",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AAPW": {
+        "symbol": "AAPW",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AAPX": {
+        "symbol": "AAPX",
+        "underlying": "AAPL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "ADBG": {
+        "symbol": "ADBG",
+        "underlying": "ADBE",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AMDG": {
+        "symbol": "AMDG",
+        "underlying": "AMD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AMDL": {
+        "symbol": "AMDL",
+        "underlying": "AMD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.7888,
+        "margin_short": 0.7076
+      },
+      "AMUU": {
+        "symbol": "AMUU",
+        "underlying": "AMD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AMZZ": {
+        "symbol": "AMZZ",
+        "underlying": "AMZN",
+        "leverage": 2,
+        "inverse": true,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AMZA": {
+        "symbol": "AMZA",
+        "underlying": "AMZN",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AMZU": {
+        "symbol": "AMZU",
+        "underlying": "AMZN",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "APPX": {
+        "symbol": "APPX",
+        "underlying": "APP",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "ARMG": {
+        "symbol": "ARMG",
+        "underlying": "ARM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "ARMU": {
+        "symbol": "ARMU",
+        "underlying": "ARM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "ASMG": {
+        "symbol": "ASMG",
+        "underlying": "ASML",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AVGG": {
+        "symbol": "AVGG",
+        "underlying": "AVGO",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AVGX": {
+        "symbol": "AVGX",
+        "underlying": "AVGO",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "AVL": {
+        "symbol": "AVL",
+        "underlying": "AVGO",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "BOEU": {
+        "symbol": "BOEU",
+        "underlying": "BA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "BABX": {
+        "symbol": "BABX",
+        "underlying": "BABA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "KBAB": {
+        "symbol": "KBAB",
+        "underlying": "BABA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "BRKU": {
+        "symbol": "BRKU",
+        "underlying": "BRK-B",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "COIG": {
+        "symbol": "COIG",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "COIW": {
+        "symbol": "COIW",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CONL": {
+        "symbol": "CONL",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CONX": {
+        "symbol": "CONX",
+        "underlying": "COIN",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CRMG": {
+        "symbol": "CRMG",
+        "underlying": "CRM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "CRWL": {
+        "symbol": "CRWL",
+        "underlying": "CRWD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "DLLL": {
+        "symbol": "DLLL",
+        "underlying": "DELL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "DJTU": {
+        "symbol": "DJTU",
+        "underlying": "DJT",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "GGLL": {
+        "symbol": "GGLL",
+        "underlying": "GOOGL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "GOOX": {
+        "symbol": "GOOX",
+        "underlying": "GOOGL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "HOOG": {
+        "symbol": "HOOG",
+        "underlying": "HOOD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "HOOX": {
+        "symbol": "HOOX",
+        "underlying": "HOOD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "ROBN": {
+        "symbol": "ROBN",
+        "underlying": "HOOD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "INTW": {
+        "symbol": "INTW",
+        "underlying": "INTC",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "IONL": {
+        "symbol": "IONL",
+        "underlying": "IONQ",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "ELIL": {
+        "symbol": "ELIL",
+        "underlying": "LLY",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "LLYX": {
+        "symbol": "LLYX",
+        "underlying": "LLY",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MRAL": {
+        "symbol": "MRAL",
+        "underlying": "MARA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "FBL": {
+        "symbol": "FBL",
+        "underlying": "META",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "METU": {
+        "symbol": "METU",
+        "underlying": "META",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MVLL": {
+        "symbol": "MVLL",
+        "underlying": "MRVL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "USML": {
+        "symbol": "USML",
+        "underlying": "MSCI",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MSFL": {
+        "symbol": "MSFL",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MSFO": {
+        "symbol": "MSFO",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MSFU": {
+        "symbol": "MSFU",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MSFX": {
+        "symbol": "MSFX",
+        "underlying": "MSFT",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MSTU": {
+        "symbol": "MSTU",
+        "underlying": "MSTR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MSTX": {
+        "symbol": "MSTX",
+        "underlying": "MSTR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MULL": {
+        "symbol": "MULL",
+        "underlying": "MU",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "MUU": {
+        "symbol": "MUU",
+        "underlying": "MU",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NFLU": {
+        "symbol": "NFLU",
+        "underlying": "NFLX",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NFXL": {
+        "symbol": "NFXL",
+        "underlying": "NFLX",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NVDG": {
+        "symbol": "NVDG",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NVDL": {
+        "symbol": "NVDL",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NVDU": {
+        "symbol": "NVDU",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.657,
+        "margin_short": 0.7167
+      },
+      "NVDW": {
+        "symbol": "NVDW",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "NVDX": {
+        "symbol": "NVDX",
+        "underlying": "NVDA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "PALU": {
+        "symbol": "PALU",
+        "underlying": "PANW",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "KPDD": {
+        "symbol": "KPDD",
+        "underlying": "PDD",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "PLTG": {
+        "symbol": "PLTG",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "PLTU": {
+        "symbol": "PLTU",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "PLTW": {
+        "symbol": "PLTW",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "PTIR": {
+        "symbol": "PTIR",
+        "underlying": "PLTR",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "PYPG": {
+        "symbol": "PYPG",
+        "underlying": "PYPL",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "QCML": {
+        "symbol": "QCML",
+        "underlying": "QCOM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "RBLU": {
+        "symbol": "RBLU",
+        "underlying": "RBLX",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "RDTL": {
+        "symbol": "RDTL",
+        "underlying": "RDDT",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "RKLX": {
+        "symbol": "RKLX",
+        "underlying": "RKLB",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "SMCL": {
+        "symbol": "SMCL",
+        "underlying": "SMCI",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "SMCX": {
+        "symbol": "SMCX",
+        "underlying": "SMCI",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "SNPX": {
+        "symbol": "SNPX",
+        "underlying": "SNPS",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSL": {
+        "symbol": "TSL",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSLG": {
+        "symbol": "TSLG",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSLI": {
+        "symbol": "TSLI",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSLL": {
+        "symbol": "TSLL",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": 0.9955,
+        "margin_short": 0.7168
+      },
+      "TSLR": {
+        "symbol": "TSLR",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSLT": {
+        "symbol": "TSLT",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSLW": {
+        "symbol": "TSLW",
+        "underlying": "TSLA",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSMG": {
+        "symbol": "TSMG",
+        "underlying": "TSM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSMU": {
+        "symbol": "TSMU",
+        "underlying": "TSM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "TSMX": {
+        "symbol": "TSMX",
+        "underlying": "TSM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "UBRL": {
+        "symbol": "UBRL",
+        "underlying": "UBER",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "VRTL": {
+        "symbol": "VRTL",
+        "underlying": "VRT",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "XOMX": {
+        "symbol": "XOMX",
+        "underlying": "XOM",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "KOLD": {
+        "symbol": "KOLD",
+        "underlying": "UNG",
+        "leverage": 2,
+        "inverse": true,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "BOIL": {
+        "symbol": "BOIL",
+        "underlying": "UNG",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      },
+      "GUSH": {
+        "symbol": "GUSH",
+        "underlying": "XOP",
+        "leverage": 2,
+        "inverse": false,
+        "margin_long": null,
+        "margin_short": null
+      }
+    },
+    "sigmas": {
+      "AAPL": 0.018028762238238,
+      "ADBE": 0.0224590025542639,
+      "AMD": 0.0283947312366271,
+      "AMZN": 0.0240899566940974,
+      "APP": 0.0356612788278368,
+      "ARKK": 0.0167048488973917,
+      "ARM": 0.0359578721413495,
+      "ASHR": 0.0131425468088394,
+      "ASML": 0.0219078209864609,
+      "AVGO": 0.0173258191459365,
+      "BA": 0.0153686864710041,
+      "BABA": 0.0191485366981108,
+      "BRK-B": 0.0104489829624501,
+      "BTC": 0.0262174909609658,
+      "COIN": 0.0360082714777579,
+      "CRM": 0.0192719599292409,
+      "CRWD": 0.0241860033098445,
+      "DELL": 0.0219410317924403,
+      "DIA": 0.0087320431027922,
+      "DJT": 0.1189927509878705,
+      "EEM": 0.0127871718446452,
+      "ETH": 0.0323865031877393,
+      "EWJ": 0.0095101230078796,
+      "EWW": 0.0124630017129413,
+      "EWY": 0.0154491823970506,
+      "EWZ": 0.0167000590802249,
+      "FEZ": 0.0118144592957553,
+      "FXI": 0.0152753640393168,
+      "GDX": 0.0181280844216341,
+      "GDXJ": 0.0196020574035616,
+      "GOOGL": 0.0141445007499298,
+      "HOOD": 0.0334990218372516,
+      "IBB": 0.011161774742484,
+      "IHE": 0.0097378014502988,
+      "IJR": 0.0101640897175416,
+      "INDY": 0.0100812788068153,
+      "INTC": 0.0188021372747601,
+      "IONQ": 0.043984941676679,
+      "ITA": 0.0121080949514554,
+      "ITB": 0.0161272838874977,
+      "IWM": 0.0104991780814221,
+      "IYR": 0.0129722953415081,
+      "JETS": 0.015622960517934,
+      "KBE": 0.0169021311850091,
+      "KRE": 0.0156084566865516,
+      "KWEB": 0.0170710154192427,
+      "LLY": 0.0124881314356466,
+      "MARA": 0.0887275743545635,
+      "MDY": 0.0101326028957157,
+      "META": 0.0190222769159348,
+      "MRVL": 0.0265839662577894,
+      "MSCI": 0.0167133964049109,
+      "MSFT": 0.0140652257619405,
+      "MSOS": 0.0344425583016486,
+      "MSTR": 0.0378786535473303,
+      "MU": 0.0266710104928402,
+      "NFLX": 0.0264705588474793,
+      "NVDA": 0.0277240431711988,
+      "NYFANG": 0.0123392676794319,
+      "PANW": 0.0181297417476275,
+      "PDD": 0.0328590774933395,
+      "PLTR": 0.0322415159594895,
+      "PYPL": 0.0176159948692693,
+      "QCOM": 0.0227346637800087,
+      "QQQ": 0.012566159568669,
+      "RBLX": 0.0329489106384568,
+      "RDDT": 0.0367695594683895,
+      "RKLB": 0.0361922744522708,
+      "SMCI": 0.0309205528398222,
+      "SNPS": 0.0190394760480481,
+      "SOL": 0.0451704894929411,
+      "SOXX": 0.0147809794878326,
+      "SPHB": 0.0123483110213752,
+      "SPY": 0.0087241244908533,
+      "TSLA": 0.025976372893118,
+      "TSM": 0.0189131892720306,
+      "UBER": 0.022962580707197,
+      "UNG": 0.0207978432925421,
+      "VGK": 0.0107627273550665,
+      "VIX": 0.0520977344234194,
+      "VRT": 0.0271354283093325,
+      "XLB": 0.0104644119069272,
+      "XLC": 0.0100948333912235,
+      "XLE": 0.0129352910125383,
+      "XLF": 0.0138777832078129,
+      "XLI": 0.0097115707964189,
+      "XLK": 0.0119300161702896,
+      "XLP": 0.0068823847406116,
+      "XLU": 0.0088818603850852,
+      "XLV": 0.0082407610316145,
+      "XLY": 0.0103281524026713,
+      "XOM": 0.0103264607212964,
+      "XOP": 0.0180424482886679,
+      "XRP": 0.0480252216664079,
+      "XRT": 0.0118846360060167
+    },
+    "overnight_gaps": {},
+    "prior_two_closes": {},
+    "prior_etf_close": {
+      "AMDL": 48.68,
+      "BITU": 11.91,
+      "BITX": 15.36,
+      "BOIL": 18.95,
+      "BRZU": 85.83,
+      "BTCL": 15.71,
+      "BTCZ": 4.13,
+      "DUST": 32.54,
+      "EDC": 78.25,
+      "EDZ": 14.93,
+      "ETH": 22.18,
+      "ETHD": 35.5,
+      "ETHT": 15.2,
+      "ETHU": 23.61,
+      "ETU": 6.23,
+      "EURL": 50.76,
+      "FAS": 172.89,
+      "FAZ": 32.99,
+      "FNGD": 28.33,
+      "FNGU": 31.08,
+      "GDXU": 170.52,
+      "GUSH": 44.48,
+      "INDL": 45.04,
+      "JDST": 21.11,
+      "JNUG": 198.09,
+      "KOLD": 30.93,
+      "KORU": 20.33,
+      "LABD": 6.56,
+      "LABU": 304.91,
+      "MSOX": 2.77,
+      "NUGT": 196.06,
+      "NVDU": 135.28,
+      "PILL": 22.44,
+      "SBIT": 42.7,
+      "SDOW": 23.64,
+      "SOLT": 43.88,
+      "SOXL": 122.21,
+      "SOXS": 46.25,
+      "SPXL": 283.43,
+      "SPXS": 25.04,
+      "SQQQ": 39.37,
+      "SRTY": 22.03,
+      "TECL": 194.13,
+      "TECS": 65.01,
+      "TNA": 71.59,
+      "TQQQ": 70.48,
+      "TSLL": 8.88,
+      "TZA": 39.08,
+      "UDOW": 70.86,
+      "UPRO": 148.28,
+      "URTY": 83.26,
+      "UXRP": 13.09,
+      "WEBL": 27.55,
+      "WEBS": 15.31,
+      "XRPT": 28.75,
+      "YANG": 28.07,
+      "YINN": 29.94
+    },
+    "raw": {
+      "symbols": [
+        "AMDL",
+        "BITU",
+        "BITX",
+        "BOIL",
+        "BRZU",
+        "BTCL",
+        "BTCZ",
+        "DUST",
+        "EDC",
+        "EDZ",
+        "ETH",
+        "ETHD",
+        "ETHT",
+        "ETHU",
+        "ETU",
+        "EURL",
+        "FAS",
+        "FAZ",
+        "FNGD",
+        "FNGU",
+        "GDXU",
+        "GUSH",
+        "INDL",
+        "JDST",
+        "JNUG",
+        "KOLD",
+        "KORU",
+        "LABD",
+        "LABU",
+        "MEXX",
+        "MSOX",
+        "NUGT",
+        "NVDU",
+        "PILL",
+        "SBIT",
+        "SDOW",
+        "SOLT",
+        "SOXL",
+        "SOXS",
+        "SPXL",
+        "SPXS",
+        "SQQQ",
+        "SRTY",
+        "TECL",
+        "TECS",
+        "TNA",
+        "TQQQ",
+        "TSLL",
+        "TZA",
+        "UDOW",
+        "UPRO",
+        "URTY",
+        "UXRP",
+        "WEBL",
+        "WEBS",
+        "XRPT",
+        "YANG",
+        "YINN"
+      ],
+      "ref_prices": {
+        "AMDL": 50.0,
+        "BITU": 13.29,
+        "BITX": 17.15,
+        "BOIL": 19.21,
+        "BRZU": 87.88,
+        "BTCL": 17.47,
+        "BTCZ": 3.65,
+        "DUST": 30.57,
+        "EDC": 81.01,
+        "EDZ": 14.44,
+        "ETH": 22.72,
+        "ETHD": 34.2,
+        "ETHT": 15.94,
+        "ETHU": 24.74,
+        "ETU": 6.5,
+        "EURL": 51.57,
+        "FAS": 175.67,
+        "FAZ": 32.37,
+        "FNGD": 28.11,
+        "FNGU": 31.24,
+        "GDXU": 185.99,
+        "GUSH": 45.07,
+        "INDL": 45.24,
+        "JDST": 19.84,
+        "JNUG": 210.06,
+        "KOLD": 30.54,
+        "KORU": 21.05,
+        "LABD": 6.45,
+        "LABU": 310.44,
+        "MEXX": null,
+        "MSOX": 2.8,
+        "NUGT": 208.24,
+        "NVDU": 136.34,
+        "PILL": 22.87,
+        "SBIT": 37.79,
+        "SDOW": 23.3,
+        "SOLT": 47.12,
+        "SOXL": 126.0,
+        "SOXS": 45.0,
+        "SPXL": 286.55,
+        "SPXS": 24.8,
+        "SQQQ": 38.9,
+        "SRTY": 21.61,
+        "TECL": 196.5,
+        "TECS": 64.01,
+        "TNA": 73.03,
+        "TQQQ": 71.39,
+        "TSLL": 9.13,
+        "TZA": 38.32,
+        "UDOW": 71.91,
+        "UPRO": 149.77,
+        "URTY": 85.01,
+        "UXRP": 16.38,
+        "WEBL": 27.66,
+        "WEBS": 15.06,
+        "XRPT": 36.0,
+        "YANG": 27.11,
+        "YINN": 30.9
+      },
+      "etf_daily": {
+        "AMDL": [
+          [
+            "2026-08-19",
+            48.14
+          ],
+          [
+            "2026-08-20",
+            48.68
+          ],
+          [
+            "2026-08-21",
+            50.0
+          ]
+        ],
+        "BITU": [
+          [
+            "2026-08-19",
+            10.6
+          ],
+          [
+            "2026-08-20",
+            11.91
+          ],
+          [
+            "2026-08-21",
+            13.28
+          ]
+        ],
+        "BITX": [
+          [
+            "2026-08-19",
+            13.66
+          ],
+          [
+            "2026-08-20",
+            15.36
+          ],
+          [
+            "2026-08-21",
+            17.15
+          ]
+        ],
+        "BOIL": [
+          [
+            "2026-08-19",
+            19.19
+          ],
+          [
+            "2026-08-20",
+            18.95
+          ],
+          [
+            "2026-08-21",
+            19.21
+          ]
+        ],
+        "BRZU": [
+          [
+            "2026-08-19",
+            86.6
+          ],
+          [
+            "2026-08-20",
+            85.83
+          ],
+          [
+            "2026-08-21",
+            87.88
+          ]
+        ],
+        "BTCL": [
+          [
+            "2026-08-19",
+            13.96
+          ],
+          [
+            "2026-08-20",
+            15.71
+          ],
+          [
+            "2026-08-21",
+            17.47
+          ]
+        ],
+        "BTCZ": [
+          [
+            "2026-08-19",
+            4.72
+          ],
+          [
+            "2026-08-20",
+            4.13
+          ],
+          [
+            "2026-08-21",
+            3.65
+          ]
+        ],
+        "DUST": [
+          [
+            "2026-08-19",
+            34.29
+          ],
+          [
+            "2026-08-20",
+            32.54
+          ],
+          [
+            "2026-08-21",
+            30.57
+          ]
+        ],
+        "EDC": [
+          [
+            "2026-08-19",
+            76.37
+          ],
+          [
+            "2026-08-20",
+            78.25
+          ],
+          [
+            "2026-08-21",
+            81.01
+          ]
+        ],
+        "EDZ": [
+          [
+            "2026-08-19",
+            15.33
+          ],
+          [
+            "2026-08-20",
+            14.93
+          ],
+          [
+            "2026-08-21",
+            14.44
+          ]
+        ],
+        "ETH": [
+          [
+            "2026-08-19",
+            20.07
+          ],
+          [
+            "2026-08-20",
+            22.18
+          ],
+          [
+            "2026-08-21",
+            22.72
+          ]
+        ],
+        "ETHD": [
+          [
+            "2026-08-19",
+            45.62
+          ],
+          [
+            "2026-08-20",
+            35.5
+          ],
+          [
+            "2026-08-21",
+            34.2
+          ]
+        ],
+        "ETHT": [
+          [
+            "2026-08-19",
+            12.57
+          ],
+          [
+            "2026-08-20",
+            15.2
+          ],
+          [
+            "2026-08-21",
+            15.94
+          ]
+        ],
+        "ETHU": [
+          [
+            "2026-08-19",
+            19.48
+          ],
+          [
+            "2026-08-20",
+            23.61
+          ],
+          [
+            "2026-08-21",
+            24.71
+          ]
+        ],
+        "ETU": [
+          [
+            "2026-08-19",
+            5.14
+          ],
+          [
+            "2026-08-20",
+            6.23
+          ],
+          [
+            "2026-08-21",
+            6.5
+          ]
+        ],
+        "EURL": [
+          [
+            "2026-08-19",
+            51.27
+          ],
+          [
+            "2026-08-20",
+            50.76
+          ],
+          [
+            "2026-08-21",
+            51.57
+          ]
+        ],
+        "FAS": [
+          [
+            "2026-08-19",
+            178.0
+          ],
+          [
+            "2026-08-20",
+            172.89
+          ],
+          [
+            "2026-08-21",
+            175.67
+          ]
+        ],
+        "FAZ": [
+          [
+            "2026-08-19",
+            32.04
+          ],
+          [
+            "2026-08-20",
+            32.99
+          ],
+          [
+            "2026-08-21",
+            32.37
+          ]
+        ],
+        "FNGD": [
+          [
+            "2026-08-19",
+            28.06
+          ],
+          [
+            "2026-08-20",
+            28.33
+          ],
+          [
+            "2026-08-21",
+            28.19
+          ]
+        ],
+        "FNGU": [
+          [
+            "2026-08-19",
+            31.38
+          ],
+          [
+            "2026-08-20",
+            31.08
+          ],
+          [
+            "2026-08-21",
+            31.16
+          ]
+        ],
+        "GDXU": [
+          [
+            "2026-08-19",
+            158.63
+          ],
+          [
+            "2026-08-20",
+            170.52
+          ],
+          [
+            "2026-08-21",
+            186.0
+          ]
+        ],
+        "GUSH": [
+          [
+            "2026-08-19",
+            43.93
+          ],
+          [
+            "2026-08-20",
+            44.48
+          ],
+          [
+            "2026-08-21",
+            45.07
+          ]
+        ],
+        "INDL": [
+          [
+            "2026-08-19",
+            45.05
+          ],
+          [
+            "2026-08-20",
+            45.04
+          ],
+          [
+            "2026-08-21",
+            45.24
+          ]
+        ],
+        "JDST": [
+          [
+            "2026-08-19",
+            22.09
+          ],
+          [
+            "2026-08-20",
+            21.11
+          ],
+          [
+            "2026-08-21",
+            19.84
+          ]
+        ],
+        "JNUG": [
+          [
+            "2026-08-19",
+            189.87
+          ],
+          [
+            "2026-08-20",
+            198.09
+          ],
+          [
+            "2026-08-21",
+            210.06
+          ]
+        ],
+        "KOLD": [
+          [
+            "2026-08-19",
+            30.6
+          ],
+          [
+            "2026-08-20",
+            30.93
+          ],
+          [
+            "2026-08-21",
+            30.5
+          ]
+        ],
+        "KORU": [
+          [
+            "2026-08-19",
+            19.11
+          ],
+          [
+            "2026-08-20",
+            20.33
+          ],
+          [
+            "2026-08-21",
+            21.13
+          ]
+        ],
+        "LABD": [
+          [
+            "2026-08-19",
+            5.93
+          ],
+          [
+            "2026-08-20",
+            6.56
+          ],
+          [
+            "2026-08-21",
+            6.52
+          ]
+        ],
+        "LABU": [
+          [
+            "2026-08-19",
+            341.55
+          ],
+          [
+            "2026-08-20",
+            304.91
+          ],
+          [
+            "2026-08-21",
+            306.41
+          ]
+        ],
+        "MEXX": [
+          [
+            "2026-08-18",
+            27.02
+          ],
+          [
+            "2026-08-19",
+            27.58
+          ],
+          [
+            "2026-08-20",
+            27.98
+          ]
+        ],
+        "MSOX": [
+          [
+            "2026-08-19",
+            2.8
+          ],
+          [
+            "2026-08-20",
+            2.77
+          ],
+          [
+            "2026-08-21",
+            2.8
+          ]
+        ],
+        "NUGT": [
+          [
+            "2026-08-19",
+            186.39
+          ],
+          [
+            "2026-08-20",
+            196.06
+          ],
+          [
+            "2026-08-21",
+            208.34
+          ]
+        ],
+        "NVDU": [
+          [
+            "2026-08-19",
+            136.42
+          ],
+          [
+            "2026-08-20",
+            135.28
+          ],
+          [
+            "2026-08-21",
+            136.34
+          ]
+        ],
+        "PILL": [
+          [
+            "2026-08-19",
+            23.88
+          ],
+          [
+            "2026-08-20",
+            22.44
+          ],
+          [
+            "2026-08-21",
+            22.87
+          ]
+        ],
+        "SBIT": [
+          [
+            "2026-08-19",
+            48.77
+          ],
+          [
+            "2026-08-20",
+            42.7
+          ],
+          [
+            "2026-08-21",
+            37.79
+          ]
+        ],
+        "SDOW": [
+          [
+            "2026-08-19",
+            22.75
+          ],
+          [
+            "2026-08-20",
+            23.64
+          ],
+          [
+            "2026-08-21",
+            23.29
+          ]
+        ],
+        "SOLT": [
+          [
+            "2026-08-19",
+            39.22
+          ],
+          [
+            "2026-08-20",
+            43.88
+          ],
+          [
+            "2026-08-21",
+            47.12
+          ]
+        ],
+        "SOXL": [
+          [
+            "2026-08-19",
+            120.74
+          ],
+          [
+            "2026-08-20",
+            122.21
+          ],
+          [
+            "2026-08-21",
+            126.45
+          ]
+        ],
+        "SOXS": [
+          [
+            "2026-08-19",
+            47.05
+          ],
+          [
+            "2026-08-20",
+            46.25
+          ],
+          [
+            "2026-08-21",
+            44.74
+          ]
+        ],
+        "SPXL": [
+          [
+            "2026-08-19",
+            290.86
+          ],
+          [
+            "2026-08-20",
+            283.43
+          ],
+          [
+            "2026-08-21",
+            286.0
+          ]
+        ],
+        "SPXS": [
+          [
+            "2026-08-19",
+            24.41
+          ],
+          [
+            "2026-08-20",
+            25.04
+          ],
+          [
+            "2026-08-21",
+            24.81
+          ]
+        ],
+        "SQQQ": [
+          [
+            "2026-08-19",
+            38.53
+          ],
+          [
+            "2026-08-20",
+            39.37
+          ],
+          [
+            "2026-08-21",
+            38.91
+          ]
+        ],
+        "SRTY": [
+          [
+            "2026-08-19",
+            21.19
+          ],
+          [
+            "2026-08-20",
+            22.03
+          ],
+          [
+            "2026-08-21",
+            21.65
+          ]
+        ],
+        "TECL": [
+          [
+            "2026-08-19",
+            195.39
+          ],
+          [
+            "2026-08-20",
+            194.13
+          ],
+          [
+            "2026-08-21",
+            196.5
+          ]
+        ],
+        "TECS": [
+          [
+            "2026-08-19",
+            64.37
+          ],
+          [
+            "2026-08-20",
+            65.01
+          ],
+          [
+            "2026-08-21",
+            64.01
+          ]
+        ],
+        "TNA": [
+          [
+            "2026-08-19",
+            74.54
+          ],
+          [
+            "2026-08-20",
+            71.59
+          ],
+          [
+            "2026-08-21",
+            72.86
+          ]
+        ],
+        "TQQQ": [
+          [
+            "2026-08-19",
+            72.06
+          ],
+          [
+            "2026-08-20",
+            70.48
+          ],
+          [
+            "2026-08-21",
+            71.36
+          ]
+        ],
+        "TSLL": [
+          [
+            "2026-08-19",
+            9.19
+          ],
+          [
+            "2026-08-20",
+            8.88
+          ],
+          [
+            "2026-08-21",
+            9.05
+          ]
+        ],
+        "TZA": [
+          [
+            "2026-08-19",
+            37.58
+          ],
+          [
+            "2026-08-20",
+            39.08
+          ],
+          [
+            "2026-08-21",
+            38.41
+          ]
+        ],
+        "UDOW": [
+          [
+            "2026-08-19",
+            73.67
+          ],
+          [
+            "2026-08-20",
+            70.86
+          ],
+          [
+            "2026-08-21",
+            71.86
+          ]
+        ],
+        "UPRO": [
+          [
+            "2026-08-19",
+            152.16
+          ],
+          [
+            "2026-08-20",
+            148.28
+          ],
+          [
+            "2026-08-21",
+            149.68
+          ]
+        ],
+        "URTY": [
+          [
+            "2026-08-19",
+            86.71
+          ],
+          [
+            "2026-08-20",
+            83.26
+          ],
+          [
+            "2026-08-21",
+            84.75
+          ]
+        ],
+        "UXRP": [
+          [
+            "2026-08-19",
+            9.94
+          ],
+          [
+            "2026-08-20",
+            13.09
+          ],
+          [
+            "2026-08-21",
+            16.35
+          ]
+        ],
+        "WEBL": [
+          [
+            "2026-08-19",
+            28.27
+          ],
+          [
+            "2026-08-20",
+            27.55
+          ],
+          [
+            "2026-08-21",
+            27.66
+          ]
+        ],
+        "WEBS": [
+          [
+            "2026-08-19",
+            14.96
+          ],
+          [
+            "2026-08-20",
+            15.31
+          ],
+          [
+            "2026-08-21",
+            15.06
+          ]
+        ],
+        "XRPT": [
+          [
+            "2026-08-19",
+            21.89
+          ],
+          [
+            "2026-08-20",
+            28.75
+          ],
+          [
+            "2026-08-21",
+            35.94
+          ]
+        ],
+        "YANG": [
+          [
+            "2026-08-19",
+            27.98
+          ],
+          [
+            "2026-08-20",
+            28.07
+          ],
+          [
+            "2026-08-21",
+            27.09
+          ]
+        ],
+        "YINN": [
+          [
+            "2026-08-19",
+            30.02
+          ],
+          [
+            "2026-08-20",
+            29.94
+          ],
+          [
+            "2026-08-21",
+            31.0
+          ]
+        ]
+      },
+      "ul_daily": {
+        "AMD": [
+          [
+            "2026-08-18",
+            478.989990234375
+          ],
+          [
+            "2026-08-19",
+            466.42
+          ],
+          [
+            "2026-08-20",
+            465.43
+          ]
+        ],
+        "BTC": [
+          [
+            "2026-08-19",
+            64448.30078125
+          ],
+          [
+            "2026-08-20",
+            71677.5625
+          ],
+          [
+            "2026-08-21",
+            76668.3984375
+          ]
+        ],
+        "UNG": [
+          [
+            "2026-08-18",
+            9.876299858093262
+          ],
+          [
+            "2026-08-19",
+            10.01
+          ],
+          [
+            "2026-08-20",
+            9.88
+          ]
+        ],
+        "EWZ": [
+          [
+            "2026-08-18",
+            33.994998931884766
+          ],
+          [
+            "2026-08-19",
+            34.26
+          ],
+          [
+            "2026-08-20",
+            34.44
+          ]
+        ],
+        "GDX": [
+          [
+            "2026-08-18",
+            90.33000183105469
+          ],
+          [
+            "2026-08-19",
+            97.33
+          ],
+          [
+            "2026-08-20",
+            99.42
+          ]
+        ],
+        "EEM": [
+          [
+            "2026-08-18",
+            65.68499755859375
+          ],
+          [
+            "2026-08-19",
+            66.11
+          ],
+          [
+            "2026-08-20",
+            66.54
+          ]
+        ],
+        "ETH": [
+          [
+            "2026-08-19",
+            1922.280029296875
+          ],
+          [
+            "2026-08-20",
+            2275.35009765625
+          ],
+          [
+            "2026-08-21",
+            2374.489990234375
+          ]
+        ],
+        "FEZ": [
+          [
+            "2026-08-18",
+            71.42510223388672
+          ],
+          [
+            "2026-08-19",
+            71.6
+          ],
+          [
+            "2026-08-20",
+            71.48
+          ]
+        ],
+        "XLF": [
+          [
+            "2026-08-18",
+            57.90999984741211
+          ],
+          [
+            "2026-08-19",
+            57.48
+          ],
+          [
+            "2026-08-20",
+            57.55
+          ]
+        ],
+        "QQQ": [
+          [
+            "2026-08-18",
+            718.0150146484375
+          ],
+          [
+            "2026-08-19",
+            716.08
+          ],
+          [
+            "2026-08-20",
+            712.6
+          ]
+        ],
+        "XOP": [
+          [
+            "2026-08-18",
+            183.55999755859375
+          ],
+          [
+            "2026-08-19",
+            186.33
+          ],
+          [
+            "2026-08-20",
+            189.68
+          ]
+        ],
+        "INDY": [
+          [
+            "2026-08-18",
+            43.33000183105469
+          ],
+          [
+            "2026-08-19",
+            43.44
+          ],
+          [
+            "2026-08-20",
+            43.51
+          ]
+        ],
+        "GDXJ": [
+          [
+            "2026-08-18",
+            117.73999786376953
+          ],
+          [
+            "2026-08-19",
+            126.55
+          ],
+          [
+            "2026-08-20",
+            129.16
+          ]
+        ],
+        "EWY": [
+          [
+            "2026-08-18",
+            173.1300048828125
+          ],
+          [
+            "2026-08-19",
+            174.43
+          ],
+          [
+            "2026-08-20",
+            178.31
+          ]
+        ],
+        "IBB": [
+          [
+            "2026-08-18",
+            202.91000366210938
+          ],
+          [
+            "2026-08-19",
+            216.96
+          ],
+          [
+            "2026-08-20",
+            212.37
+          ]
+        ],
+        "EWW": [
+          [
+            "2026-08-18",
+            74.93499755859375
+          ],
+          [
+            "2026-08-19",
+            75.14
+          ],
+          [
+            "2026-08-20",
+            75.57
+          ]
+        ],
+        "MSOS": [
+          [
+            "2026-08-18",
+            4.469900131225586
+          ],
+          [
+            "2026-08-19",
+            4.76
+          ],
+          [
+            "2026-08-20",
+            4.695
+          ]
+        ],
+        "NVDA": [
+          [
+            "2026-08-18",
+            219.35000610351562
+          ],
+          [
+            "2026-08-19",
+            217.56
+          ],
+          [
+            "2026-08-20",
+            217.51
+          ]
+        ],
+        "IHE": [
+          [
+            "2026-08-18",
+            104.94999694824219
+          ],
+          [
+            "2026-08-19",
+            108.16
+          ],
+          [
+            "2026-08-20",
+            106.6
+          ]
+        ],
+        "DIA": [
+          [
+            "2026-08-18",
+            534.1900024414062
+          ],
+          [
+            "2026-08-19",
+            534.27
+          ],
+          [
+            "2026-08-20",
+            531.02
+          ]
+        ],
+        "SOL": [
+          [
+            "2026-08-19",
+            77.45999908447266
+          ],
+          [
+            "2026-08-20",
+            86.43000030517578
+          ],
+          [
+            "2026-08-21",
+            90.25
+          ]
+        ],
+        "SOXX": [
+          [
+            "2026-08-18",
+            527.760009765625
+          ],
+          [
+            "2026-08-19",
+            519.67
+          ],
+          [
+            "2026-08-20",
+            522.68
+          ]
+        ],
+        "SPY": [
+          [
+            "2026-08-18",
+            768.6950073242188
+          ],
+          [
+            "2026-08-19",
+            769.06
+          ],
+          [
+            "2026-08-20",
+            767.02
+          ]
+        ],
+        "IWM": [
+          [
+            "2026-08-18",
+            301.7799987792969
+          ],
+          [
+            "2026-08-19",
+            301.72
+          ],
+          [
+            "2026-08-20",
+            298.87
+          ]
+        ],
+        "XLK": [
+          [
+            "2026-08-18",
+            185.24000549316406
+          ],
+          [
+            "2026-08-19",
+            183.64
+          ],
+          [
+            "2026-08-20",
+            183.97
+          ]
+        ],
+        "TSLA": [
+          [
+            "2026-08-18",
+            336.3699951171875
+          ],
+          [
+            "2026-08-19",
+            351.12
+          ],
+          [
+            "2026-08-20",
+            339.8
+          ]
+        ],
+        "XRP": [
+          [
+            "2026-08-19",
+            1.0055999755859375
+          ],
+          [
+            "2026-08-20",
+            1.2237999439239502
+          ],
+          [
+            "2026-08-21",
+            1.361299991607666
+          ]
+        ],
+        "XLC": [
+          [
+            "2026-08-18",
+            111.19000244140625
+          ],
+          [
+            "2026-08-19",
+            111.32
+          ],
+          [
+            "2026-08-20",
+            110.6
+          ]
+        ],
+        "FXI": [
+          [
+            "2026-08-18",
+            35.16999816894531
+          ],
+          [
+            "2026-08-19",
+            35.68
+          ],
+          [
+            "2026-08-20",
+            35.59
+          ]
+        ]
+      },
+      "prior_session_filters": {
+        "AMDL": [
+          "AMD",
+          0.0283947312366271
+        ],
+        "BITU": [
+          "BTC",
+          0.0262174909609658
+        ],
+        "BITX": [
+          "BTC",
+          0.0262174909609658
+        ],
+        "BOIL": [
+          "UNG",
+          0.0207978432925421
+        ],
+        "BRZU": [
+          "EWZ",
+          0.0167000590802249
+        ],
+        "BTCL": [
+          "BTC",
+          0.0262174909609658
+        ],
+        "BTCZ": [
+          "BTC",
+          0.0262174909609658,
+          true
+        ],
+        "DUST": [
+          "GDX",
+          0.0181280844216341,
+          true
+        ],
+        "EDC": [
+          "EEM",
+          0.0127871718446452
+        ],
+        "EDZ": [
+          "EEM",
+          0.0127871718446452,
+          true
+        ],
+        "ETH": [
+          "ETH",
+          0.0323865031877393
+        ],
+        "ETHD": [
+          "ETH",
+          0.0323865031877393,
+          true
+        ],
+        "ETHT": [
+          "ETH",
+          0.0323865031877393
+        ],
+        "ETHU": [
+          "ETH",
+          0.0323865031877393
+        ],
+        "ETU": [
+          "ETH",
+          0.0323865031877393
+        ],
+        "EURL": [
+          "FEZ",
+          0.0118144592957553
+        ],
+        "FAS": [
+          "XLF",
+          0.0138777832078129
+        ],
+        "FAZ": [
+          "XLF",
+          0.0138777832078129,
+          true
+        ],
+        "FNGD": [
+          "QQQ",
+          0.012566159568669,
+          true
+        ],
+        "FNGU": [
+          "QQQ",
+          0.012566159568669
+        ],
+        "GDXU": [
+          "GDX",
+          0.0181280844216341
+        ],
+        "GUSH": [
+          "XOP",
+          0.0180424482886679
+        ],
+        "INDL": [
+          "INDY",
+          0.0100812788068153
+        ],
+        "JDST": [
+          "GDXJ",
+          0.0196020574035616,
+          true
+        ],
+        "JNUG": [
+          "GDXJ",
+          0.0196020574035616
+        ],
+        "KOLD": [
+          "UNG",
+          0.0207978432925421,
+          true
+        ],
+        "KORU": [
+          "EWY",
+          0.0154491823970506
+        ],
+        "LABD": [
+          "IBB",
+          0.011161774742484,
+          true
+        ],
+        "LABU": [
+          "IBB",
+          0.011161774742484
+        ],
+        "MEXX": [
+          "EWW",
+          0.0124630017129413
+        ],
+        "MSOX": [
+          "MSOS",
+          0.0344425583016486
+        ],
+        "NUGT": [
+          "GDX",
+          0.0181280844216341
+        ],
+        "NVDU": [
+          "NVDA",
+          0.0277240431711988
+        ],
+        "PILL": [
+          "IHE",
+          0.0097378014502988
+        ],
+        "SBIT": [
+          "BTC",
+          0.0262174909609658,
+          true
+        ],
+        "SDOW": [
+          "DIA",
+          0.0087320431027922,
+          true
+        ],
+        "SOLT": [
+          "SOL",
+          0.0451704894929411
+        ],
+        "SOXL": [
+          "SOXX",
+          0.0147809794878326
+        ],
+        "SOXS": [
+          "SOXX",
+          0.0147809794878326,
+          true
+        ],
+        "SPXL": [
+          "SPY",
+          0.0087241244908533
+        ],
+        "SPXS": [
+          "SPY",
+          0.0087241244908533,
+          true
+        ],
+        "SQQQ": [
+          "QQQ",
+          0.012566159568669,
+          true
+        ],
+        "SRTY": [
+          "IWM",
+          0.0104991780814221,
+          true
+        ],
+        "TECL": [
+          "XLK",
+          0.0119300161702896
+        ],
+        "TECS": [
+          "XLK",
+          0.0119300161702896,
+          true
+        ],
+        "TNA": [
+          "IWM",
+          0.0104991780814221
+        ],
+        "TQQQ": [
+          "QQQ",
+          0.012566159568669
+        ],
+        "TSLL": [
+          "TSLA",
+          0.025976372893118
+        ],
+        "TZA": [
+          "IWM",
+          0.0104991780814221,
+          true
+        ],
+        "UDOW": [
+          "DIA",
+          0.0087320431027922
+        ],
+        "UPRO": [
+          "SPY",
+          0.0087241244908533
+        ],
+        "URTY": [
+          "IWM",
+          0.0104991780814221
+        ],
+        "UXRP": [
+          "XRP",
+          0.0480252216664079
+        ],
+        "WEBL": [
+          "XLC",
+          0.0100948333912235
+        ],
+        "WEBS": [
+          "XLC",
+          0.0100948333912235,
+          true
+        ],
+        "XRPT": [
+          "XRP",
+          0.0480252216664079
+        ],
+        "YANG": [
+          "FXI",
+          0.0152753640393168,
+          true
+        ],
+        "YINN": [
+          "FXI",
+          0.0152753640393168
+        ]
+      }
+    }
+  },
+  "plan": {
+    "candidates": [],
+    "regime": "quiet",
+    "n_uls": 0,
+    "cap_factor": 0.0,
+    "multipliers": {}
+  }
+}

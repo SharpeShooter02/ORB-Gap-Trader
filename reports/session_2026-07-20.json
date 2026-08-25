@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-07-20",
+  "generated_at": "2026-07-20",
+  "date": "2026-07-20",
+  "n_trades": 2,
+  "n_wins": 1,
+  "win_rate": 0.5,
+  "total_pnl": 80.24000000000001,
+  "avg_pnl": 40.120000000000005,
+  "best_trade": {
+    "symbol": "SOLT",
+    "pnl": 82.45
+  },
+  "worst_trade": {
+    "symbol": "YANG",
+    "pnl": -2.21
+  }
+}

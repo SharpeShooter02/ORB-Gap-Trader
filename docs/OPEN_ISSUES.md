@@ -428,28 +428,51 @@ way neither the backtest nor the gate models.
 > Before removing any instrument, check both: score it unpruned, and check its
 > marginal contribution with the margin allowed to reflow.
 
-### P5. The per-class TP1 split is validated but stale
+### P5. Per-class TP1 -- MEASURED 2026-08-25, headline figures were wrong
 Live sets TP1 per class (`live_config.py:118`):
-`tp1_target_multiple_by_class = {"C1": 2.0, "C2": 1.0, "C3": 1.0}`, added
-2026-08-18 in `278b8d2`. It was validated at the time by
-`scripts/run_parity_tp_by_class.py`, which runs the backtest twice and merges
-C1 from the 2.0 arm with C2/C3 from the 1.0 arm -- `orb_backtester` has no
-by-class TP1, so two runs is the only way to express it.
+`{"C1": 2.0, "C2": 1.0, "C3": 1.0}`, added 2026-08-18 in `278b8d2` and
+validated then by `run_parity_tp_by_class.py`. `orb_backtester` has no
+by-class TP1, so the split is expressed by running twice and merging.
 
-The gap is that **nothing since has used that path**. Everything landed this
-week -- D7 repair, gold reclass, UVIX cut, shared allotment, SAMPLE_END, the
-15:58 exit -- flows through `_unpruned_trades.parquet`, which
-`regen_trade_caches.py` builds with `run_v1_at_k`'s scalar default of 2.0. So
-`current_config_backtest.py` and the stop sweep both run C2 and C3 to 2x ORB
-while live takes them at 1x.
+Nothing since used that path. Everything landed this week flows through
+`_unpruned_trades.parquet`, built at `run_v1_at_k`'s scalar default of 2.0, so
+every figure quoted ran C2 and C3 to 2x ORB while live takes them at 1x --
+1,641 of 1,945 trades. `scripts/current_config_tp_parity.py` measures it:
 
-C2 + C3 are **1,641 of 1,945 trades (84%)**, and cached `tp1_hit` is 13.4% at
-2.0 where it would be far higher at 1.0, so this moves hit rate, hold time and
-the exit mix -- not a rounding difference.
+                          trades      P&L   Sharpe    MaxDD  Calmar
+  global TP1 = 2.0         1,945   30,003    2.262   -8.60%    6.67
+  per-class (live)         1,945   27,293    2.326  -10.01%    5.13
 
-Staleness rather than an unvalidated change, but the effect is the same: the
-current-config figures (P&L 29,944, Sharpe 2.256, MaxDD -8.60%) and the stop
-sweep that rests on them describe the wrong TP1 for most of the book.
+tp1_hit goes 13.3% -> 37.4%. **The live configuration is 9.0% worse on P&L and
+23% worse on Calmar than every number quoted this week**, while being slightly
+better on Sharpe. Taking profit at 1x caps winners without capping losers: it
+lowers daily vol, which Sharpe rewards, and deepens drawdown episodes, which
+Calmar punishes.
+
+The corrected current-config figure -- the one that describes what is actually
+running -- is **1,945 trades, P&L 27,293, Sharpe 2.326, MaxDD -10.01%,
+Calmar 5.13**.
+
+`current_config_backtest.py` now carries a header pointing at the parity
+script. The stop sweep rests on the 2.0 arm and is provisional for the same
+reason.
+
+### R7. Is the per-class TP1 split still right?
+Raised by P5. The split was validated 2026-08-18 against the pre-repair
+universe. Under the current one it costs 9.0% of P&L and drops Calmar
+6.67 -> 5.13 for +0.064 Sharpe, and is worse in 4 of 7 years (2022 alone
+-1,696):
+
+              2020    2021    2022    2023    2024    2025    2026
+  global     8,681   1,271   4,112     896   5,830   6,229   2,984
+  per-class  7,828   1,646   2,416     878   5,831   5,907   2,787
+
+C2 and C3 composition changed materially after the split was set -- the gold
+miners moved from C2 to C3, UVIX and 12 single-stock clones left, GDX/GDXJ
+began sharing an allotment. Whether 1.0x still earns its place, or whether the
+right target differs again by class, is unmeasured. **Do not change live off
+this table**: it is one comparison of two hand-picked values on the sample
+every decision here has already been fitted to.
 
 ### R1. Does crypto earn its margin cost? — ANSWERED 2026-08-23: YES, decisively
 Drop a class from the candidate set and re-run the real allocation policy at the

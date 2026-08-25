@@ -119,22 +119,37 @@ Triage still owed. Three groups are already clear:
   - **Entry-price gaps up to 2%** (SOXL 08-18: live 125.87, modelled 128.49),
     well beyond the entry-buffer allowance. Unexplained.
 
-### L9. The SIGINT exit path books +/-100% P&L
+### L9. SIGINT booked +/-100% P&L -- ALREADY FIXED, residue remains
 `closed_trades` for 2026-08-05 holds two `EOD_sigint` rows with
-`exit_price = 0.0`, `realized_exit_price = 0.0`, and `pnl_pct` of exactly
--1.0 and +1.0. `dollar_pnl` is then computed off those sentinels:
-NVDU -426.30 (= 142.10 x 3) and AMDL +465.93 (= 51.77 x 9). Both are
-fabrications -- the full position notional booked as a total loss and a total
-gain.
+`exit_price = 0.0`, `realized_exit_price = 0.0` and `pnl_pct` of exactly
+-1.0 and +1.0. `dollar_pnl` came off those sentinels: NVDU -426.30
+(= 142.10 x 3) and AMDL +465.93 (= 51.77 x 9) -- the full position notional
+booked as a total loss and a total gain. `fills` records both entries and no
+exits; `equity_curve` shows start == end with 0.0 P&L.
 
-`fills` for that session records both entries and **no exit fills**, and
-`equity_curve` shows start == end == 10,773.59 with 0.0 P&L, so the DB does not
-actually know what happened to those positions or whether they were flattened
-at the broker at all.
+**The code was already fixed, the same afternoon.** `flatten_all` passes
+`ref_price=None`, which used to flow straight into `_trade_pnl`. Commit
+`30e2777` (2026-08-05 16:29 ET, ~30 minutes after that session closed at
+16:00) added `_resolve_exit_price`: actual fill -> quote mid -> broker mark ->
+entry price. The last rung books ~0 P&L, an honest "unknown" rather than a
+fabricated notional-sized move, and cannot return 0.
 
-Any P&L analysis that sums `dollar_pnl` across live sessions is polluted by
-these two rows. Found by the L8 reconciliation, which flagged them as
-`exit_price=0.00` divergences.
+Found again 2026-08-25 by the L8 reconciliation, which flagged the rows as
+`exit_price=0.00`. I reported it as a live defect that would recur on the next
+Ctrl-C -- wrong: I read the bad rows and did not check whether the code had
+moved. **Stale data is not evidence of a live bug; the code has to be read.**
+
+`orb_live/tests/test_flatten_exit_price.py` now pins every rung of the
+resolver, including the case where the broker returns 0s for everything, plus
+the end-to-end flatten. Writing it surfaced an adjacent behaviour worth
+knowing: when the broker reports NO position, `_exit_all` caps exit qty to 0
+and closes the tracking row without booking a trade at all, so the position
+leaves P&L silently rather than wrongly.
+
+**Residue, unresolved:** the two 2026-08-05 rows are still in `live.db` and
+still pollute any sum of live `dollar_pnl` (net +39.63 fabricated). Their true
+exits are unknowable -- no exit fills were recorded. Left in place rather than
+rewritten, since editing recorded trade history is the user's call.
 
 ### L5. `allow_partial_entries` defaults `True` and has never run live
 New in `206342c`. Watch for `entry_partially_sized`. Backtest partials book P&L

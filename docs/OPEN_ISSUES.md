@@ -51,33 +51,81 @@ If IB *does* apply a lower requirement intraday for a PDT-flagged account and
 the margin analysis needs redoing at a much looser constraint. **Worth asking IB
 directly.** This is the single highest-leverage open question.
 
-### L7. EOD flatten ran 3 minutes earlier than it was scheduled
+### L7. EOD flatten ran 3 minutes early -- RESOLVED 2026-08-25
 2026-08-24. The runner logged its intent clearly:
 
     waiting_for_eod  seconds=21235.7  close_et=16:00  flatten_lead_secs=60
     at 14:05:04Z -> wake 19:59:00Z = 15:59 ET
 
 But `closed_trades` records SBIT and SOLT closing at **19:56:06Z = 15:56 ET**,
-both `exit_reason=EOD`, three minutes before the scheduled wake. Something
-flattened the book early and it was not `_wait_until_eod`.
+three minutes before the scheduled wake.
 
-Candidates not yet ruled out: a second exit path in `position_manager`
-(`eod_time` at line 588 uses `cfg.eod_exit_hour`, which is the 16:00 sentinel
-and should never fire on an RTH bar); the daemon loop; or `_sleep` returning
-early. The shutdown handler also calls `flatten_all`, but the SIGINT is logged
-at 20:03:02Z, well after.
+**RESOLVED 2026-08-25.** There were two exit paths, and the one everybody
+documented was the one that never ran.
 
-Matters because exit timing is worth 5.5% of total P&L between 15:55 and 15:59,
-so an unexplained 3-minute drift is not cosmetic. It also means the new
-`eod_flatten_lead_secs=120` may land at 15:55 in practice rather than 15:58.
-**Verify against the next session's `closed_at` before trusting the setting.**
+`LivePositionManager` is constructed with `cfg.strategy_config`
+(`runner/main.py:162`), not `LiveConfig`. Its bar-driven EOD check
+(`position_manager.py:588`) therefore reads `StrategyConfig.eod_exit_*`, which
+defaulted to **15:55** -- not the 16:00 sentinel on `LiveConfig` that the
+docstring named. The 15:55 bar is delivered ~15:56:05, the exit fired there,
+and `_wait_until_eod` arrived at 15:59 to an already-empty book. The pattern is
+exact across every session in `live.db`: EOD rows at 19:56:0X, `day_state`
+closed at 19:59:00.2.
 
-### L8. Exit timing is invisible to the golden gate
+`test_eod_timing_parity.py` asserted `LiveConfig.eod_exit_hour == 16` was a
+"never-fires sentinel" and passed throughout -- true of that field, and
+irrelevant, because nothing read it. **A parity test that asserts on a
+different object than the running code reads is worse than no test: it
+certifies the property it fails to check.** Same shape as `prewarm_margin` and
+`position_multiplier(cands)`.
+
+Fixed by moving `StrategyConfig.eod_exit_*` to 15:58 (live and backtester),
+and dropping `eod_flatten_lead_secs` 120 -> 30 so the safety net lands at
+15:59:30, *after* the 15:58 bar's ~15:59:05 delivery. At 120 it would have
+fired at 15:58:00 and silently become the real exit path at a different price.
+
+### L8. Exit timing is invisible to the golden gate -- CLOSED 2026-08-25
 The fixture records the plan -- candidates, regime, cap_factor, multipliers --
-and `diff_plan` replays it. Nothing records or replays the *exit* path: stops,
-targets, or EOD handling. The 16:00-vs-15:59 divergence that cost 5.5% predates
-this week's work and no replay could have caught it; it surfaced only because a
-position was seen closing early on a live screen.
+and `diff_plan` replays it. Nothing recorded or replayed the *exit* path. The
+15:55-vs-15:58 divergence surfaced only because a position was seen closing
+early on a live screen (see L7).
+
+`BacktestingGaps/scripts/reconcile_live_session.py` closes it: it rebuilds each
+live trade from the same minute bars under the backtest's exit rule and diffs
+reason, entry and exit against `closed_trades`, exiting 1 on any divergence so
+it can gate a post-session job. Bars come from `cache/intraday` when present
+and IB otherwise, since the cache lags live by weeks.
+
+First full run (72 trades, 2026-07-01..08-24): **42 match, 30 diverge.** The
+replay is a reimplementation, not the backtester itself, so some divergences
+are its own simplifications -- same-bar stop/target ordering in particular.
+Triage still owed. Three groups are already clear:
+
+  - **KORU 07-01 and 07-06**: live traded at 621.55/642.92, IB's history for
+    those dates now shows 31.20/32.12 -- a ~20:1 ratio. A split, and confirmation
+    that D2 reaches recent live sessions rather than only old cache.
+  - **9 reason-level mismatches** (EOD-vs-TP1, TP1-vs-STOP, STOP-vs-NO_ENTRY).
+    These are the ones worth triaging; BRZU 08-19 says live entered where the
+    replay finds no boundary break at all.
+  - **Entry-price gaps up to 2%** (SOXL 08-18: live 125.87, modelled 128.49),
+    well beyond the entry-buffer allowance. Unexplained.
+
+### L9. The SIGINT exit path books +/-100% P&L
+`closed_trades` for 2026-08-05 holds two `EOD_sigint` rows with
+`exit_price = 0.0`, `realized_exit_price = 0.0`, and `pnl_pct` of exactly
+-1.0 and +1.0. `dollar_pnl` is then computed off those sentinels:
+NVDU -426.30 (= 142.10 x 3) and AMDL +465.93 (= 51.77 x 9). Both are
+fabrications -- the full position notional booked as a total loss and a total
+gain.
+
+`fills` for that session records both entries and **no exit fills**, and
+`equity_curve` shows start == end == 10,773.59 with 0.0 P&L, so the DB does not
+actually know what happened to those positions or whether they were flattened
+at the broker at all.
+
+Any P&L analysis that sums `dollar_pnl` across live sessions is polluted by
+these two rows. Found by the L8 reconciliation, which flagged them as
+`exit_price=0.00` divergences.
 
 ### L5. `allow_partial_entries` defaults `True` and has never run live
 New in `206342c`. Watch for `entry_partially_sized`. Backtest partials book P&L

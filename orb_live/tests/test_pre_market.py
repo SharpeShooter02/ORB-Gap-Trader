@@ -16,11 +16,19 @@ ET = ZoneInfo("America/New_York")
 TDATE = date(2026, 1, 7)
 
 
-def test_phase2_tp1_mult_is_class_based():
-    """Phase-2 sets tp1_mult per the class map: C1 (crypto) → 2× ORB, C2/C3 → 1×.
-    Regression guard: tp1_mult must NOT be hardcoded — it is passed to
-    compute_entry as an override and so silently beats config if wrong (was once
-    pinned to 1.0, cutting every winner to 1× ORB). Uses the REAL config."""
+def test_phase2_tp1_mult_is_global_2x():
+    """Every class takes TP1 at 2x ORB range. Uses the REAL config.
+
+    Regression guard: tp1_mult must NOT be hardcoded -- it is passed to
+    compute_entry as an override and so silently beats config if wrong (was
+    once pinned to 1.0, cutting every winner to 1x ORB).
+
+    The per-class split {C1: 2.0, C2: 1.0, C3: 1.0} was in force 2026-08-18 to
+    2026-08-25. Measured over the current universe it cost 9.0% of P&L and
+    dropped Calmar 6.67 -> 5.13, buying +0.064 Sharpe: capping C2/C3 winners
+    at 1x lowered daily vol but deepened drawdowns. Reverted to global 2.0 to
+    keep the momentum on large days. See P5/R7 in docs/OPEN_ISSUES.md.
+    """
     from orb_live.config.live_config import load_live_config
     from orb_live.signals.pre_market import PreMarketJob, Phase1Result
 
@@ -34,9 +42,25 @@ def test_phase2_tp1_mult_is_class_based():
         return job._make_p2(p1, orb=orb, first_open=153.0, size_mult=1.0,
                             preflight=None, is_candidate=True).tp1_mult
 
-    assert _tp1("BITX") == 2.0, "C1 (crypto) TP1 must be 2× ORB range"
-    assert _tp1("NUGT") == 1.0, "C2 (gold) TP1 must be 1× ORB range"
-    assert _tp1("TQQQ") == 1.0, "C3 (broad leveraged) TP1 must be 1× ORB range"
+    assert _tp1("BITX") == 2.0, "C1 (crypto)"
+    assert _tp1("NUGT") == 2.0, "C2 (gold)"
+    assert _tp1("TQQQ") == 2.0, "C3 (broad leveraged)"
+
+
+def test_tp1_matches_the_backtest_default():
+    """Live and the backtest must take profit at the same multiple, or every
+    backtest figure describes a different strategy. This is what P5 was: the
+    split ran live for a week while every quoted number used the scalar 2.0."""
+    import sys
+    sys.path.insert(0, r"c:/Users/buttn/Documents/Projects/BacktestingGaps")
+    from orb_backtester import StrategyConfig as BTConfig
+    from orb_live.config.live_config import load_live_config
+
+    scfg = load_live_config().strategy_config
+    assert not scfg.tp1_target_multiple_by_class, (
+        "a per-class TP1 map is set, but orb_backtester has no by-class TP1 -- "
+        "no single backtest run can reproduce live")
+    assert scfg.tp1_target_multiple == BTConfig().tp1_target_multiple
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

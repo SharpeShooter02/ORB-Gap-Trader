@@ -112,10 +112,19 @@ def _make_v1_strategy_config(
         exit_ratio_tp1=1.0,          # v1: TP1-only (full position)
         exit_ratio_tp2=0.0,
         exit_ratio_tp3=0.0,
-        tp1_target_multiple=2.0,     # 2× ORB range (scalar fallback)
-        # Per-class TP1 target: crypto (C1) runs to 2× ORB; C2/C3 take profit at
-        # 1× ORB. Overrides the scalar above per candidate via its v1 class.
-        tp1_target_multiple_by_class={"C1": 2.0, "C2": 1.0, "C3": 1.0},
+        tp1_target_multiple=2.0,     # 2× ORB range, every class
+        # Empty = no per-class override; every candidate takes the scalar above.
+        #
+        # A split {C1: 2.0, C2: 1.0, C3: 1.0} ran 2026-08-18 to 2026-08-25.
+        # Measured over the current universe it cost 9.0% of P&L and dropped
+        # Calmar 6.67 -> 5.13 for +0.064 Sharpe -- capping C2/C3 winners at 1×
+        # lowers daily vol but deepens drawdowns, and it gave up the large
+        # momentum days the strategy depends on. It was also unreproducible:
+        # orb_backtester has no by-class TP1, so no single backtest run could
+        # express it, and for a week every quoted figure used the scalar while
+        # live used the split (P5). Reverted; R7 tracks whether a per-class
+        # target deserves another look on evidence that is not this sample.
+        tp1_target_multiple_by_class={},
         require_ema_confirmation=False,   # v1 boundary-fill variant
         entry_at_boundary=True,           # v1 boundary-fill variant
         instrument_exit_overrides={},

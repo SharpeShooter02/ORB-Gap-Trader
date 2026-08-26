@@ -42,3 +42,9 @@ env/
 # macOS
 .DS_Store
 .claude/worktrees/
+# Live trading state. Paper-account trades, equity curve and P&L; it
+# changes every session, so tracking it churned a ~600KB binary daily and
+# put run artifacts in the code history. Existing history is untouched.
+orb_live/state/*.db
+orb_live/state/*.db-wal
+orb_live/state/*.db-shm

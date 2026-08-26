@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-08-26",
+  "generated_at": "2026-08-26",
+  "date": "2026-08-26",
+  "n_trades": 1,
+  "n_wins": 0,
+  "win_rate": 0.0,
+  "total_pnl": -29.15,
+  "avg_pnl": -29.15,
+  "best_trade": {
+    "symbol": "XRPT",
+    "pnl": -29.15
+  },
+  "worst_trade": {
+    "symbol": "XRPT",
+    "pnl": -29.15
+  }
+}

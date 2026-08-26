@@ -3,7 +3,7 @@ config/strategy_config.py — StrategyConfig dataclass (moved from orb_backteste
 
 Defines all per-run strategy parameters.  In the live system, _make_v1_strategy_config
 in live_config.py overrides the v1-specific fields; the defaults here only matter for
-fields NOT overridden there (ema_length, sl_method, tp2_target_multiple, etc.).
+fields NOT overridden there (sl_method, tp2_target_multiple, etc.).
 """
 
 from __future__ import annotations
@@ -44,9 +44,6 @@ class StrategyConfig:
     min_orb_bars_sparse: int = 10
     sparse_data_symbols: list = field(default_factory=lambda: ["BOIL", "KOLD"])
 
-    # ── EMA filter ────────────────────────────────────────────────────────────
-    ema_length: int = 30
-    require_ema_confirmation: bool = True
     entry_at_boundary: bool = False
 
     # ── Minimum trade quality filters ─────────────────────────────────────────
@@ -60,7 +57,6 @@ class StrategyConfig:
     exit_ratio_tp3: float = 0.60
 
     # ── TP3 exit mode ────────────────────────────────────────────────────────
-    tp3_mode: str = "ema_crossback"
     atr_length: int = 14
     atr_mult: float = 2.0
 

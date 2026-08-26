@@ -39,7 +39,7 @@ def _minimal_orb(high: float = 101.0, low: float = 99.0) -> dict:
     return {
         "high": high, "low": low, "midpoint": mid,
         "size_pct": (high - low) / mid,
-        "n_bars": 30, "ema": mid,
+        "n_bars": 30,
     }
 
 
@@ -138,7 +138,6 @@ def _make_p2(symbol, is_candidate=True, rtg_excluded=False, size_mult=1.0,
 
 def _build_engine(mock_broker, tmp_store):
     from orb_live.config.live_config import load_live_config
-    from orb_live.execution.indicators import RollingIndicators
     from orb_live.execution.order_policy import MarketableLimitPolicy
     from orb_live.execution.position_manager import LivePositionManager
     from orb_live.execution.risk_gate import RiskGate
@@ -157,14 +156,12 @@ def _build_engine(mock_broker, tmp_store):
     policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
     gate   = RiskGate(exc, tmp_store, mock_broker)
     gate.session_start(100_000.0, TDATE)
-    indicators_store = {}
-
     mgr = LivePositionManager(
         broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store=indicators_store, config=scfg,
+        risk_gate=gate, config=scfg,
     )
     engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
-    return engine, mgr, indicators_store, cfg
+    return engine, mgr, cfg
 
 
 # ── Tests: StrategyEngine state machine ───────────────────────────────────────
@@ -172,7 +169,7 @@ def _build_engine(mock_broker, tmp_store):
 def test_a_waiting_for_orb_is_default_state(mock_broker, tmp_store):
     """A freshly constructed engine has WAITING_FOR_ORB for any symbol."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, cfg = _build_engine(mock_broker, tmp_store)
+    engine, _, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     assert engine.get_state("TQQQ") == SymbolState.WAITING_FOR_ORB
 
@@ -180,7 +177,7 @@ def test_a_waiting_for_orb_is_default_state(mock_broker, tmp_store):
 def test_b_not_candidate_skips_immediately(mock_broker, tmp_store):
     """on_orb_complete with is_candidate=False → EXITED_OR_SKIPPED."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
+    engine, _, _ = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     p2 = _make_p2("TQQQ", is_candidate=False)
     engine.on_orb_complete("TQQQ", p2, None)
@@ -191,7 +188,7 @@ def test_b_not_candidate_skips_immediately(mock_broker, tmp_store):
 def test_d_routing_skip_skips(mock_broker, tmp_store):
     """on_orb_complete with size_mult=0.0 → EXITED_OR_SKIPPED."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
+    engine, _, _ = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     p2 = _make_p2("TQQQ", size_mult=0.0)
     engine.on_orb_complete("TQQQ", p2, None)
@@ -201,7 +198,7 @@ def test_d_routing_skip_skips(mock_broker, tmp_store):
 def test_e_valid_p2_transitions_to_orb_complete(mock_broker, tmp_store):
     """A valid Phase2Result with is_candidate=True → ORB_COMPLETE."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, _ = _build_engine(mock_broker, tmp_store)
+    engine, _, _ = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
     p2 = _make_p2("TQQQ")
     engine.on_orb_complete("TQQQ", p2, None)
@@ -214,23 +211,12 @@ def test_f_breakout_bar_transitions_to_in_position(mock_broker, tmp_store):
     ORB: high=101, low=99.  Breakout long: close > 101.
     """
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, indicators_store, cfg = _build_engine(mock_broker, tmp_store)
+    engine, _, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
 
-    orb = _minimal_orb(high=101.0, low=99.0)  # ema=100
+    orb = _minimal_orb(high=101.0, low=99.0)
     p2  = _make_p2("TQQQ", orb=orb)
     engine.on_orb_complete("TQQQ", p2, None)
-
-    # Seed indicator before calling on_bar
-    from orb_live.execution.indicators import RollingIndicators
-    ind = RollingIndicators("TQQQ", cfg.strategy_config)
-    orb_df = pd.DataFrame(
-        [{"high": 101.0, "low": 99.0, "close": 100.5}],
-        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
-    )
-    ind.seed_from_orb_bars(orb_df)
-    indicators_store["TQQQ"] = ind
-
     # Breakout bar: close=102.0 > orb_high=101 AND > ema≈100
     bar = _bar(_et(10, 1), close=102.0, hi=102.5, lo=101.5)
     engine.on_bar("TQQQ", bar, _et(10, 1))
@@ -241,7 +227,7 @@ def test_f_breakout_bar_transitions_to_in_position(mock_broker, tmp_store):
 def test_g_latest_entry_minute_cutoff(mock_broker, tmp_store):
     """Bars arriving after latest_entry_minute transition to EXITED_OR_SKIPPED."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, _, _, cfg = _build_engine(mock_broker, tmp_store)
+    engine, _, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
 
     # Temporarily patch latest_entry_minute to 30 (only bars up to 10:00 ET)
@@ -264,22 +250,12 @@ def test_g_latest_entry_minute_cutoff(mock_broker, tmp_store):
 def test_h_in_position_state_does_not_try_second_entry(mock_broker, tmp_store):
     """Once IN_POSITION, on_bar is a no-op for entry detection."""
     from orb_live.runner.strategy_engine import StrategyEngine, SymbolState
-    engine, mgr, indicators_store, cfg = _build_engine(mock_broker, tmp_store)
+    engine, mgr, cfg = _build_engine(mock_broker, tmp_store)
     engine.new_session(TDATE)
 
     orb = _minimal_orb(high=101.0, low=99.0)
     p2  = _make_p2("TQQQ", orb=orb)
     engine.on_orb_complete("TQQQ", p2, None)
-
-    from orb_live.execution.indicators import RollingIndicators
-    ind = RollingIndicators("TQQQ", cfg.strategy_config)
-    orb_df = pd.DataFrame(
-        [{"high": 101.0, "low": 99.0, "close": 100.5}],
-        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
-    )
-    ind.seed_from_orb_bars(orb_df)
-    indicators_store["TQQQ"] = ind
-
     # First breakout → IN_POSITION
     bar1 = _bar(_et(10, 1), close=102.0, hi=102.5, lo=101.5)
     engine.on_bar("TQQQ", bar1, _et(10, 1))
@@ -298,86 +274,6 @@ def test_h_in_position_state_does_not_try_second_entry(mock_broker, tmp_store):
 
 # ── Tests: SessionRunner bar dispatch order ───────────────────────────────────
 
-def test_i_indicator_updated_before_position_manager(mock_broker, tmp_store):
-    """
-    LOAD-BEARING ORDER TEST: indicators[symbol].on_bar must be called before
-    position_manager.on_bar so that position_manager reads the current EMA.
-
-    Verify by recording call timestamps via side-effect ordering.
-    """
-    from orb_live.config.live_config import load_live_config
-    from orb_live.execution.indicators import RollingIndicators
-    from orb_live.execution.order_policy import MarketableLimitPolicy
-    from orb_live.execution.position_manager import LivePositionManager
-    from orb_live.execution.risk_gate import RiskGate
-    from orb_live.runner.bar_router import BarRouter
-    from orb_live.runner.session_runner import SessionRunner
-    from orb_live.runner.strategy_engine import StrategyEngine
-
-    cfg  = load_live_config()
-    scfg = cfg.strategy_config
-
-    exc = SimpleNamespace(
-        entry_slippage_bps=10, stop_order_type="market",
-        session_kill_loss_pct=0.03, max_concurrent_positions=0,
-        max_gross_exposure_pct=2.0, max_position_pct=0.50,
-    )
-    policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
-    gate   = RiskGate(exc, tmp_store, mock_broker)
-    gate.session_start(100_000.0, TDATE)
-    indicators_store = {}
-
-    mgr = LivePositionManager(
-        broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store=indicators_store, config=scfg,
-    )
-
-    router = _StubBarRouter()
-    pre    = _StubPreMarket()
-    engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
-
-    # Seed indicator for TQQQ
-    ind = RollingIndicators("TQQQ", scfg)
-    orb_df = pd.DataFrame(
-        [{"high": 101.0, "low": 99.0, "close": 100.0}],
-        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
-    )
-    ind.seed_from_orb_bars(orb_df)
-    indicators_store["TQQQ"] = ind
-
-    call_order = []
-    original_ind_on_bar = ind.on_bar
-    original_mgr_on_bar = mgr.on_bar
-
-    def _track_ind(bar):
-        call_order.append("indicator")
-        return original_ind_on_bar(bar)
-
-    def _track_mgr(symbol, bar, ts):
-        call_order.append("position_manager")
-        return original_mgr_on_bar(symbol, bar, ts)
-
-    ind.on_bar = _track_ind
-    mgr.on_bar = _track_mgr
-
-    runner = SessionRunner(
-        config=cfg, broker=mock_broker, state_store=tmp_store,
-        bar_cache=_StubBarCache(), bar_router=router,
-        pre_market_job=pre, strategy_engine=engine,
-        position_manager=mgr, risk_gate=gate,
-        indicators_store=indicators_store,
-        underlying_store=SimpleNamespace(),
-        clock=_StubClock(), _sleep=lambda _: None,
-    )
-
-    # Dispatch a post-ORB bar (10:05 > orb_end=10:00)
-    post_orb_bar = _bar(_et(10, 5), close=100.5)
-    runner._on_bar_dispatch("TQQQ", post_orb_bar)
-
-    # indicator must appear before position_manager
-    assert "indicator" in call_order
-    assert "position_manager" in call_order
-    assert call_order.index("indicator") < call_order.index("position_manager")
 
 
 def test_j_orb_window_bars_not_dispatched_to_engine(mock_broker, tmp_store):
@@ -401,7 +297,7 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_broker, tmp_store):
 
     mgr = LivePositionManager(
         broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store={}, config=cfg.strategy_config,
+        risk_gate=gate, config=cfg.strategy_config,
     )
     engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
     engine.new_session(TDATE)
@@ -416,7 +312,7 @@ def test_j_orb_window_bars_not_dispatched_to_engine(mock_broker, tmp_store):
         bar_cache=cache, bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,
-        indicators_store={}, underlying_store=SimpleNamespace(),
+        underlying_store=SimpleNamespace(),
         clock=_StubClock(), _sleep=lambda _: None,
     )
 
@@ -438,7 +334,6 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
     because subscribing all 59 symbols exceeded IB's market-data line cap).
     """
     from orb_live.config.live_config import load_live_config
-    from orb_live.execution.indicators import RollingIndicators
     from orb_live.execution.order_policy import MarketableLimitPolicy
     from orb_live.execution.position_manager import LivePositionManager
     from orb_live.execution.risk_gate import RiskGate
@@ -456,36 +351,24 @@ def test_k_dispatch_path_places_order_on_breakout(mock_broker, tmp_store):
     policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
     gate   = RiskGate(exc, tmp_store, mock_broker)
     gate.session_start(100_000.0, TDATE)
-    indicators_store: dict = {}
 
     mgr = LivePositionManager(
         broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store=indicators_store, config=scfg,
+        risk_gate=gate, config=scfg,
     )
     engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
     engine.new_session(TDATE)
 
-    # Seed TQQQ as ORB_COMPLETE candidate (high=101, low=99, ema=100)
+    # Seed TQQQ as ORB_COMPLETE candidate (high=101, low=99)
     orb = _minimal_orb(high=101.0, low=99.0)
     p2  = _make_p2("TQQQ", orb=orb)
     engine.on_orb_complete("TQQQ", p2, None)
-
-    # Seed rolling indicator so check_breakout has a live EMA
-    ind = RollingIndicators("TQQQ", scfg)
-    orb_df = pd.DataFrame(
-        [{"high": 101.0, "low": 99.0, "close": 100.0}],
-        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
-    )
-    ind.seed_from_orb_bars(orb_df)
-    indicators_store["TQQQ"] = ind
-
     from orb_live.core.logger import get_logger
     runner = SessionRunner(
         config=cfg, broker=mock_broker, state_store=tmp_store,
         bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,
-        indicators_store=indicators_store,
         underlying_store=SimpleNamespace(),
         clock=_StubClock(), _sleep=lambda _: None,
         logger=get_logger(__name__),  # exercise the debug-log branch (bar_time)
@@ -508,7 +391,6 @@ def test_k2_entry_path_places_order_on_5sec_breakout(mock_broker, tmp_store):
     place an order WITHOUT any 1-min bar being dispatched — proving entry no
     longer waits for minute close. A pre-ORB 5-sec bar must be ignored."""
     from orb_live.config.live_config import load_live_config
-    from orb_live.execution.indicators import RollingIndicators
     from orb_live.execution.order_policy import MarketableLimitPolicy
     from orb_live.execution.position_manager import LivePositionManager
     from orb_live.execution.risk_gate import RiskGate
@@ -526,11 +408,10 @@ def test_k2_entry_path_places_order_on_5sec_breakout(mock_broker, tmp_store):
     policy = MarketableLimitPolicy(mock_broker, exc, tmp_store, _sleep=lambda _: None)
     gate   = RiskGate(exc, tmp_store, mock_broker)
     gate.session_start(100_000.0, TDATE)
-    indicators_store: dict = {}
 
     mgr = LivePositionManager(
         broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store=indicators_store, config=scfg,
+        risk_gate=gate, config=scfg,
     )
     engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
     engine.new_session(TDATE)
@@ -538,21 +419,11 @@ def test_k2_entry_path_places_order_on_5sec_breakout(mock_broker, tmp_store):
     orb = _minimal_orb(high=101.0, low=99.0)
     p2  = _make_p2("TQQQ", orb=orb)
     engine.on_orb_complete("TQQQ", p2, None)
-
-    ind = RollingIndicators("TQQQ", scfg)
-    orb_df = pd.DataFrame(
-        [{"high": 101.0, "low": 99.0, "close": 100.0}],
-        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
-    )
-    ind.seed_from_orb_bars(orb_df)
-    indicators_store["TQQQ"] = ind
-
     runner = SessionRunner(
         config=cfg, broker=mock_broker, state_store=tmp_store,
         bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,
-        indicators_store=indicators_store,
         underlying_store=SimpleNamespace(),
         clock=_StubClock(), _sleep=lambda _: None,
     )
@@ -632,7 +503,7 @@ def test_l_broker_sleep_pumps_loop_for_bar_delivery(tmp_store):
     ind_store: dict = {}
     mgr = LivePositionManager(
         broker=broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store=ind_store, config=scfg,
+        risk_gate=gate, config=scfg,
     )
     engine = StrategyEngine(mgr, cfg, tmp_store, broker)
     engine.new_session(TDATE)
@@ -643,7 +514,7 @@ def test_l_broker_sleep_pumps_loop_for_bar_delivery(tmp_store):
         bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=gate,
-        indicators_store=ind_store, underlying_store=SimpleNamespace(),
+        underlying_store=SimpleNamespace(),
         clock=_StubClock(), _sleep=None,
     )
 
@@ -684,7 +555,7 @@ class _ClockAt:
 def _build_runner_for_eod(mock_broker, tmp_store, now, lead):
     from orb_live.runner.session_runner import SessionRunner
 
-    engine, mgr, ind_store, cfg = _build_engine(mock_broker, tmp_store)
+    engine, mgr, cfg = _build_engine(mock_broker, tmp_store)
     cfg.eod_flatten_lead_secs = lead
 
     sleeps: list[float] = []
@@ -693,7 +564,7 @@ def _build_runner_for_eod(mock_broker, tmp_store, now, lead):
         bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=SimpleNamespace(),
-        indicators_store=ind_store, underlying_store=SimpleNamespace(),
+        underlying_store=SimpleNamespace(),
         clock=_ClockAt(now), _sleep=lambda s: sleeps.append(s),
     )
     return runner, mgr, sleeps
@@ -803,16 +674,12 @@ def test_n_resting_entries_flag_places_order_and_skips_bar_watch(mock_broker, tm
     fire (no double entry)."""
     from orb_live.runner.strategy_engine import SymbolState
 
-    engine, mgr, _ind_store, cfg = _build_engine(mock_broker, tmp_store)
+    engine, mgr, cfg = _build_engine(mock_broker, tmp_store)
     cfg.use_resting_entries = True
     engine.new_session(TDATE)
 
     p2 = _make_p2("TQQQ")   # is_candidate, size_mult=1.0, gap_direction=1, orb set
-    orb_df = pd.DataFrame(
-        [{"high": 101.0, "low": 99.0, "close": 100.5}],
-        index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
-    )
-    engine.on_orb_complete("TQQQ", p2, orb_df)
+    engine.on_orb_complete("TQQQ", p2, None)
 
     assert engine.get_state("TQQQ") == SymbolState.RESTING
     assert "TQQQ" in mgr._resting_entries          # resting order placed at 10:00
@@ -826,13 +693,13 @@ def test_n_resting_entries_flag_places_order_and_skips_bar_watch(mock_broker, tm
 
 def _build_runner_with_sleep(mock_broker, tmp_store, sleep_fn):
     from orb_live.runner.session_runner import SessionRunner
-    engine, mgr, ind_store, cfg = _build_engine(mock_broker, tmp_store)
+    engine, mgr, cfg = _build_engine(mock_broker, tmp_store)
     runner = SessionRunner(
         config=cfg, broker=mock_broker, state_store=tmp_store,
         bar_cache=_StubBarCache(), bar_router=_StubBarRouter(),
         pre_market_job=_StubPreMarket(), strategy_engine=engine,
         position_manager=mgr, risk_gate=SimpleNamespace(),
-        indicators_store=ind_store, underlying_store=SimpleNamespace(),
+        underlying_store=SimpleNamespace(),
         clock=_ClockAt(_et(10, 5)), _sleep=sleep_fn,
     )
     return runner

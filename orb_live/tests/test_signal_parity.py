@@ -184,13 +184,12 @@ class TestComputeOpeningRange:
         live = live_fn(orb_bars, ref_cfg, symbol="TQQQ")
 
         assert live is not None
-        for key in ("high", "low", "midpoint", "size_pct", "n_bars", "ema"):
+        for key in ("high", "low", "midpoint", "size_pct", "n_bars"):
             assert key in live, f"Missing key '{key}'"
         assert live["n_bars"] == 30
         assert pytest.approx(live["high"], abs=0.01) == 111.9
         assert pytest.approx(live["low"],  abs=0.01) == 108.0
         assert pytest.approx(live["midpoint"], abs=0.01) == (111.9 + 108.0) / 2
-        assert live["ema"] > 108.0  # EMA is within the ORB price range
 
     def test_returns_none_for_insufficient_bars(self, ref_cfg):
         from orb_live.signals.strategy_signals import compute_opening_range as live_fn
@@ -211,7 +210,7 @@ class TestComputeOpeningRange:
         live = live_fn(tz_bars, ref_cfg)
 
         assert live is not None
-        for key in ("high", "low", "midpoint", "size_pct", "n_bars", "ema"):
+        for key in ("high", "low", "midpoint", "size_pct", "n_bars"):
             assert key in live
 
 
@@ -225,7 +224,6 @@ class TestCheckBreakout:
             "midpoint": 109.5,
             "size_pct": (111.0 - 108.0) / 109.5,
             "n_bars":   30,
-            "ema":      109.8,
         }
 
     def test_valid_breakout_long(self, ref_cfg):
@@ -257,7 +255,7 @@ class TestCheckBreakout:
             "high":     100.1, "low": 100.0,
             "midpoint": 100.05,
             "size_pct": 0.001,   # way below min_profit_pct
-            "n_bars":   30, "ema": 100.0,
+            "n_bars":   30,
         }
         bar = pd.Series({"close": 101.0}, name=datetime(2022, 1, 7, 10, 5))
         assert live_fn(bar, tiny_orb, 1, ref_cfg) is False
@@ -273,7 +271,6 @@ class TestComputeEntry:
             "midpoint": 105.5,
             "size_pct": (111.0 - 100.0) / 105.5,
             "n_bars":   30,
-            "ema":      109.0,
         }
 
     def test_long_entry_matches_reference(self, ref_cfg):
@@ -523,111 +520,7 @@ class TestInverseTupleConvention:
         )
 
 
-# ── Two-EMA parity: ORB close EMA vs full-session midpoint EMA ────────────────
 
-class TestIndicatorParity:
-    """
-    Verify to 1e-9 that the two EMA signals used by the strategy are:
-    (a) each computed correctly per their respective formula, and
-    (b) numerically distinct from each other.
-
-    orb["ema"]  — ORB window CLOSE EMA; seed = first ORB bar's close;
-                  30 bars (09:30–09:59); used for breakout detection.
-
-    Full-session midpoint EMA  — ALL session bars' (high+low)/2 from 09:30;
-                                  seed = first bar's midpoint;
-                                  used for TP3 trail crossback.
-    """
-
-    @pytest.fixture(scope="class")
-    def full_day_bars(self):
-        """390 one-minute bars 09:30–15:59 ET on 2022-01-07 (deterministic)."""
-        import math as _math
-        n   = 390
-        idx = pd.date_range("2022-01-07 09:30", periods=n, freq="1min")
-        closes = [100.0 + 0.05 * i + 0.30 * _math.sin(i * 0.10) for i in range(n)]
-        highs  = [c + 0.40 for c in closes]
-        lows   = [c - 0.30 for c in closes]
-        return pd.DataFrame({"close": closes, "high": highs, "low": lows}, index=idx)
-
-    @staticmethod
-    def _ema_from_closes(closes: list, k: float) -> float:
-        ema = float(closes[0])
-        for c in closes[1:]:
-            ema = float(c) * k + ema * (1.0 - k)
-        return ema
-
-    @staticmethod
-    def _ema_from_midpoints(highs: list, lows: list, k: float) -> float:
-        ema = (float(highs[0]) + float(lows[0])) / 2.0
-        for h, lo in zip(highs[1:], lows[1:]):
-            mid = (float(h) + float(lo)) / 2.0
-            ema = mid * k + ema * (1.0 - k)
-        return ema
-
-    def test_orb_ema_matches_manual(self, full_day_bars, ref_cfg):
-        """orb["ema"] must equal the manual close-EMA over the 30-bar ORB window."""
-        from orb_live.signals.strategy_signals import compute_opening_range as live_fn
-
-        orb_live = live_fn(full_day_bars, ref_cfg)
-        assert orb_live is not None
-
-        k         = 2.0 / (ref_cfg.ema_length + 1)
-        orb_bars  = full_day_bars.iloc[:30]
-        expected  = self._ema_from_closes(orb_bars["close"].tolist(), k)
-
-        assert pytest.approx(orb_live["ema"], rel=1e-9) == expected
-
-    def test_session_midpoint_ema_matches_manual(self, full_day_bars, ref_cfg):
-        """Full-session midpoint EMA formula must match manual computation to 1e-9."""
-        k           = 2.0 / (ref_cfg.ema_length + 1)
-        all_highs   = full_day_bars["high"].tolist()
-        all_lows    = full_day_bars["low"].tolist()
-        session_ema = self._ema_from_midpoints(all_highs, all_lows, k)
-
-        session_ema2 = self._ema_from_midpoints(all_highs, all_lows, k)
-        assert pytest.approx(session_ema, rel=1e-15) == session_ema2
-        assert 95.0 < session_ema < 125.0, "Session EMA out of expected price range"
-
-    def test_orb_ema_and_session_ema_are_distinct(self, full_day_bars, ref_cfg):
-        """
-        The two EMAs must be numerically different.
-
-        Reason: (1) different inputs — ORB uses CLOSE prices; session uses
-        MIDPOINTS; (2) different windows — 30 bars vs 390 bars.
-        """
-        from orb_live.signals.strategy_signals import compute_opening_range as live_fn
-
-        orb = live_fn(full_day_bars, ref_cfg)
-        assert orb is not None
-
-        k           = 2.0 / (ref_cfg.ema_length + 1)
-        session_ema = self._ema_from_midpoints(
-            full_day_bars["high"].tolist(),
-            full_day_bars["low"].tolist(),
-            k,
-        )
-
-        assert abs(orb["ema"] - session_ema) > 1e-6, (
-            f"orb['ema']={orb['ema']:.8f} must differ from "
-            f"full-session midpoint EMA={session_ema:.8f}"
-        )
-
-    def test_session_ema_seed_is_midpoint_not_close(self, full_day_bars, ref_cfg):
-        """
-        The full-session EMA seed is (hi+lo)/2 of the 9:30 bar — NOT its close.
-        """
-        k        = 2.0 / (ref_cfg.ema_length + 1)
-        first    = full_day_bars.iloc[0]
-
-        seed_mid   = (float(first["high"]) + float(first["low"])) / 2.0
-        seed_close = float(first["close"])
-
-        # Fixture: high = close+0.40, low = close-0.30 → midpoint = close+0.05
-        assert seed_mid != seed_close, (
-            "Fixture error: midpoint and close are the same — "
-            "cannot distinguish the two EMA seeds"
-        )
 
 
 # ── EOD exit hour=16 behavioral contract ─────────────────────────────────────
@@ -682,13 +575,13 @@ class TestEodExitHour16Contract:
         assert hits[0].time() < dtime(16, 0), "14:55 is a regular-session bar (< 16:00)"
 
 
-# ── boundary-fill / no-EMA variant (locked v1) ────────────────────────────────
+# ── boundary-fill variant (locked v1) ────────────────────────────────────────
 
 class TestBoundaryFillMode:
-    """Pin behavior for the locked v1 config: entry_at_boundary=True + require_ema_confirmation=False.
+    """Pin behavior for the locked v1 config: entry_at_boundary=True.
 
     This is what the live system runs in production. Regressions here mean the
-    live strategy has silently reverted to close-triggered / EMA-gated entries.
+    live strategy has silently reverted to close-triggered entries.
     """
 
     def _make_orb(self):
@@ -698,11 +591,10 @@ class TestBoundaryFillMode:
             "midpoint": 105.5,
             "size_pct": (111.0 - 100.0) / 105.5,
             "n_bars":   30,
-            "ema":      109.0,
         }
 
     def _boundary_cfg(self, ref_cfg):
-        return replace(ref_cfg, entry_at_boundary=True, require_ema_confirmation=False)
+        return replace(ref_cfg, entry_at_boundary=True)
 
     # check_breakout ----------------------------------------------------------
 
@@ -742,31 +634,7 @@ class TestBoundaryFillMode:
         )
         assert live_fn(bar, orb, 1, cfg) is False
 
-    def test_ema_gate_bypassed_long(self, ref_cfg):
-        """close below EMA must NOT block a boundary trigger when require_ema_confirmation=False."""
-        from orb_live.signals.strategy_signals import check_breakout as live_fn
 
-        orb = self._make_orb()  # ema = 109.0
-        cfg = self._boundary_cfg(ref_cfg)
-        bar = pd.Series(
-            {"open": 110.0, "high": 111.5, "low": 108.5, "close": 108.8},
-            name=datetime(2022, 1, 7, 10, 5),
-        )
-        assert bar["close"] < orb["ema"], "sanity: this bar would fail the EMA gate"
-        assert live_fn(bar, orb, 1, cfg) is True
-
-    def test_ema_gate_still_enforced_when_flag_on(self, ref_cfg):
-        """Regression guard: entry_at_boundary=True + require_ema_confirmation=True still gates on EMA."""
-        from orb_live.signals.strategy_signals import check_breakout as live_fn
-
-        orb = self._make_orb()
-        cfg = replace(ref_cfg, entry_at_boundary=True, require_ema_confirmation=True)
-        bar = pd.Series(
-            {"open": 110.0, "high": 111.5, "low": 108.5, "close": 108.8},
-            name=datetime(2022, 1, 7, 10, 5),
-        )
-        assert bar["close"] < orb["ema"]
-        assert live_fn(bar, orb, 1, cfg) is False
 
     # compute_entry -----------------------------------------------------------
 
@@ -837,5 +705,4 @@ class TestBoundaryFillMode:
         from orb_live.config.live_config import _make_v1_strategy_config
         cfg = _make_v1_strategy_config(universe=["TQQQ"], ps_filters={})
         assert cfg.entry_at_boundary is True, "live must trade with boundary fills"
-        assert cfg.require_ema_confirmation is False, "live must NOT gate on EMA"
         assert cfg.tp1_target_multiple == 2.0, "v1 lock: TP1 = 2x ORB range"

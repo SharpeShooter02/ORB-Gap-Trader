@@ -43,7 +43,6 @@ def _exe_cfg(**overrides):
 
 def _strategy_cfg(**overrides):
     ns = SimpleNamespace(
-        tp3_mode="ema_crossback",
         eod_exit_hour=16,
         eod_exit_minute=0,
         exit_ratio_tp1=1.0,
@@ -66,7 +65,7 @@ def _build_mgr(mock_broker, tmp_store, strategy_cfg=None, exe_cfg=None):
     gate.session_start(100_000.0, TRADE_DATE)
     return LivePositionManager(
         broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store={}, config=scfg,
+        risk_gate=gate, config=scfg,
     )
 
 
@@ -305,7 +304,7 @@ def test_margin_is_prewarmed_from_ib_even_with_an_empty_bar_cache(
         pre_market_job=_StubPreMarket([_make_p1("TQQQ")], [_make_p2("TQQQ")]),
         strategy_engine=SimpleNamespace(on_orb_complete=lambda *a, **kw: None),
         position_manager=_Mgr(), risk_gate=SimpleNamespace(),
-        indicators_store={}, underlying_store=SimpleNamespace(),
+        underlying_store=SimpleNamespace(),
         clock=_StubClock(), _sleep=lambda _: None,
     )
     runner._phase1_results = [_make_p1("TQQQ")]

@@ -11,7 +11,6 @@ On-bar order-of-operations (mirrors simulate_trade exactly):
   3. TP1 check  → moves current_stop to breakeven; if tp2_shares==0 sets tp2_hit
   4. trail_after_tp1 peak update
   5. TP2 check  ("if", not "elif")
-  6. TP3 EMA-crossback check
   7. Stop-loss check
 """
 
@@ -49,7 +48,6 @@ def _exe_cfg(**overrides):
 def _strategy_cfg(**overrides):
     """Minimal strategy config for LivePositionManager."""
     ns = SimpleNamespace(
-        tp3_mode="ema_crossback",
         eod_exit_hour=16,
         eod_exit_minute=0,
         exit_ratio_tp1=0.35,
@@ -79,7 +77,6 @@ def _build_mgr(mock_broker, tmp_store,
         policy=policy,
         state_store=tmp_store,
         risk_gate=gate,
-        indicators_store=indicators if indicators is not None else {},
         config=scfg,
     )
 
@@ -119,23 +116,6 @@ def _ts(hour=10, minute=30):
     return datetime(2026, 1, 5, hour, minute, tzinfo=UTC)
 
 
-def _seeded_indicator(ema_value: float):
-    """
-    Return a RollingIndicators pre-seeded so that self.ema == ema_value.
-
-    Uses a single ORB bar with hi = ema_value + 0.5, lo = ema_value - 0.5,
-    so mid = ema_value.  With one bar the seed formula sets ema = mid[0].
-    """
-    from orb_live.execution.indicators import RollingIndicators
-    cfg = SimpleNamespace(ema_length=30)
-    ind = RollingIndicators(SYMBOL, cfg)
-    orb_bars = pd.DataFrame(
-        {"high": [ema_value + 0.5], "low": [ema_value - 0.5]},
-        index=pd.date_range("2022-01-07 09:30", periods=1, freq="1min"),
-    )
-    ind.seed_from_orb_bars(orb_bars)
-    assert abs(ind.ema - ema_value) < 1e-9
-    return ind
 
 
 # ── a. Risk gate reject ────────────────────────────────────────────────────────
@@ -238,9 +218,6 @@ def test_f_tp1_fires_with_no_tp2_shares_sets_tp2_hit(mock_broker, tmp_store):
     })
     tp1_bar = _bar(hi=101.5, lo=100.0)
     # TP3 check will reach indicator lookup; provide a seeded indicator
-    ind = _seeded_indicator(ema_value=200.0)   # ema >> entry, crossback always True
-    mgr._indicators[SYMBOL] = ind
-
     mgr.on_bar(SYMBOL, tp1_bar, _ts())
 
     assert pos.tp1_hit  is True
@@ -251,10 +228,8 @@ def test_f_tp1_fires_with_no_tp2_shares_sets_tp2_hit(mock_broker, tmp_store):
 
 def test_g_tp1_and_tp2_fire_same_bar(mock_broker, tmp_store):
     """Both TP1 and TP2 fire in one on_bar call (step 3 and step 5 use 'if')."""
-    # ema=100.5 is just above breakeven (100.10); close=102.0 > ema → no TP3 crossback.
     # lo=100.2 is above breakeven so stop doesn't fire.
-    ind = _seeded_indicator(ema_value=100.5)
-    mgr = _build_mgr(mock_broker, tmp_store, indicators={SYMBOL: ind})
+    mgr = _build_mgr(mock_broker, tmp_store)
     pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
     assert pos is not None
 
@@ -263,7 +238,6 @@ def test_g_tp1_and_tp2_fire_same_bar(mock_broker, tmp_store):
         "status": "filled", "filled_qty": "35", "filled_avg_price": "102.0",
     })
     both_bar = _bar(hi=102.5, lo=100.2, cl=102.0)
-    ind.on_bar({"high": 102.5, "low": 100.2, "close": 102.0})
     mgr.on_bar(SYMBOL, both_bar, _ts())
 
     assert pos.tp1_hit is True
@@ -271,63 +245,10 @@ def test_g_tp1_and_tp2_fire_same_bar(mock_broker, tmp_store):
     assert pos.remaining == 100 - 35 - 5   # TP1 (35) and TP2 (5) lots sold, TP3 (60) open
 
 
-# ── h. TP3 EMA-crossback fires ────────────────────────────────────────────────
-
-def test_h_tp3_ema_crossback_fires(mock_broker, tmp_store):
-    """TP3 fires when close crosses below EMA while EMA is above entry (profitable)."""
-    # ema=101.0 → just above entry=100.0 (is_profitable=True)
-    ind = _seeded_indicator(ema_value=101.0)
-    mgr = _build_mgr(mock_broker, tmp_store, indicators={SYMBOL: ind})
-    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
-    assert pos is not None
-
-    # Bar 1: TP1 fires via OCA; TP2 fires via bar price.
-    mock_broker._orders[pos.tp1_order_id].update({
-        "status": "filled", "filled_qty": "35", "filled_avg_price": "101.0",
-    })
-    # lo=100.2 > breakeven so fresh stop doesn't immediately fire.
-    ind.on_bar({"high": 102.5, "low": 100.2, "close": 102.0})
-    mgr.on_bar(SYMBOL, _bar(hi=102.5, lo=100.2, cl=102.0), _ts(10, 31))
-    assert pos.tp2_hit is True
-    assert pos.remaining == 60   # only TP3 shares remain
-
-    # Bar 2: close crosses below ema → TP3 fires.
-    # lo=100.5 stays above current_stop (breakeven≈100.10) so stop doesn't pre-empt.
-    current_ema = ind.ema
-    crossback_close = current_ema - 0.10
-    ind.on_bar({"high": 101.5, "low": 100.5, "close": crossback_close})
-    mgr.on_bar(SYMBOL, _bar(hi=101.5, lo=100.5, cl=crossback_close), _ts(10, 32))
-
-    assert pos.tp3_hit is True
-    assert pos.status  == "closed"
-    assert mgr._positions.get(SYMBOL) is None
 
 
-# ── i. TP3 does not fire when ema is below entry ──────────────────────────────
 
-def test_i_tp3_no_fire_when_ema_below_entry(mock_broker, tmp_store):
-    """TP3 is skipped when ema < actual_entry_price (trade not profitable at ema)."""
-    # ema=95.0 < entry=100.0 → is_profitable=False for a long
-    ind = _seeded_indicator(ema_value=95.0)
-    mgr = _build_mgr(mock_broker, tmp_store, indicators={SYMBOL: ind})
-    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
-    assert pos is not None
 
-    # Bar 1: TP1 fires via OCA; TP2 fires via bar price.
-    mock_broker._orders[pos.tp1_order_id].update({
-        "status": "filled", "filled_qty": "35", "filled_avg_price": "101.0",
-    })
-    ind.on_bar({"high": 102.5, "low": 100.2, "close": 102.0})
-    mgr.on_bar(SYMBOL, _bar(hi=102.5, lo=100.2, cl=102.0), _ts())
-    assert pos.tp2_hit is True
-
-    # Bar 2: close above ema (ema≈95 << close=100.9) → crossed_back=False → no TP3.
-    # lo=100.2 > current_stop (breakeven≈100.10) → stop doesn't fire either.
-    ind.on_bar({"high": 101.0, "low": 100.2, "close": 100.9})
-    mgr.on_bar(SYMBOL, _bar(hi=101.0, lo=100.2, cl=100.9), _ts(10, 31))
-
-    assert pos.tp3_hit is False
-    assert pos.status  != "closed"
 
 
 # ── j. Stop fires → position closed with exit_reason='STOP' ──────────────────
@@ -585,23 +506,6 @@ def test_p_on_bar_ignores_non_open_status(mock_broker, tmp_store):
 
 # ── q. TP3 check with unseeded indicator → RuntimeError ───────────────────────
 
-def test_q_tp3_unseeded_indicator_raises(mock_broker, tmp_store):
-    """RuntimeError raised if TP3 check fires against an unseeded RollingIndicators."""
-    from orb_live.execution.indicators import RollingIndicators
-    ind = RollingIndicators(SYMBOL, SimpleNamespace(ema_length=30))
-    # ind.is_seeded == False
-
-    mgr = _build_mgr(mock_broker, tmp_store, indicators={SYMBOL: ind})
-    pos = mgr.open_position(_make_entry(), SYMBOL, +1, TRADE_DATE)
-    assert pos is not None
-
-    # Manually advance state to the TP3 check path
-    pos.tp1_hit = True
-    pos.tp2_hit = True
-
-    bar = _bar(hi=101.0, lo=100.0, cl=100.5)
-    with pytest.raises(RuntimeError, match="is not seeded"):
-        mgr.on_bar(SYMBOL, bar, _ts())
 
 
 # ── r. EOD branch dead for production eod_exit_hour=16 on any RTH bar ────────

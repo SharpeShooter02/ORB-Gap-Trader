@@ -12,7 +12,6 @@ orb_backtester.py:simulate_trade (lines 1376-1487):
           → if tp2_shares==0: sets tp2_hit=True (TP3 fires on next bar)
       4.  trail_after_tp1 peak/stop update         (lines 1413-1419)
       5.  TP2 fixed-price check ("if" not "elif")  (lines 1421-1426)
-      6.  TP3 EMA-crossback check                  (lines 1462-1473)
       7.  Stop-loss check                          (lines 1475-1486)
 
 PRODUCTION NOTES:
@@ -32,9 +31,6 @@ PRODUCTION NOTES:
     so a crash mid-bar leaves a recoverable state.
 
 KEY DISTINCTION — TWO DIFFERENT EMAs:
-  on_bar reads indicators_store[symbol].ema for TP3 decisions.  This is the
-  full-session MIDPOINT EMA (EMA #2), NOT orb["ema"] (EMA #1, the frozen
-  close-EMA used by check_breakout).  The runner owns the indicators_store
   and seeds / updates it; position_manager only reads it.
 """
 
@@ -50,7 +46,6 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from orb_live.execution.order_policy import Fill, MarketableLimitPolicy
-    from orb_live.execution.indicators import RollingIndicators
     from orb_live.execution.risk_gate import RiskGate
     from orb_live.core.state_store import StateStore
 
@@ -140,9 +135,7 @@ class LivePositionManager:
     """
     Manages open positions for a single trading session.
 
-    indicators_store — dict[symbol → RollingIndicators], owned by the runner.
     The runner seeds each indicator at 10:00 ET and calls indicator.on_bar()
-    BEFORE calling this manager's on_bar(), so the EMA is always current when
     TP3 is evaluated.
     """
 
@@ -152,22 +145,14 @@ class LivePositionManager:
         policy: "MarketableLimitPolicy",
         state_store: "StateStore",
         risk_gate: "RiskGate",
-        indicators_store: dict,
         config,                  # StrategyConfig
         logger=None,
         universe: Optional[list] = None,
     ):
-        if config.tp3_mode != "ema_crossback":
-            raise NotImplementedError(
-                f"tp3_mode={config.tp3_mode!r} is not implemented in live execution. "
-                "Production uses 'ema_crossback'."
-            )
-
         self._broker     = broker
         self._policy     = policy
         self._store      = state_store
         self._gate       = risk_gate
-        self._indicators = indicators_store
         self._config     = config
         self._log        = logger
 
@@ -543,7 +528,6 @@ class LivePositionManager:
         ts  — bar's opening timestamp (start-of-bar convention, per
               HANDOFF_PROMPT_2.md §6).
 
-        The runner MUST call indicators_store[symbol].on_bar(bar) BEFORE
         calling this method.
         """
         # Poll any pending entry order first; may promote pos to 'open'.
@@ -555,7 +539,7 @@ class LivePositionManager:
             return
 
         # ── Poll exchange-resident stop status ───────────────────────────────
-        # If IB fired the stop since the last bar, early-return so no TP/EMA
+        # If IB fired the stop since the last bar, early-return so no TP
         # logic runs against a position that's already closed at the exchange.
         # On polling failure, log a warning and continue — the bar-by-bar stop
         # check below acts as backup (removed in the next prompt).
@@ -947,26 +931,14 @@ class LivePositionManager:
                 pos.tp2_hit    = True
                 self._update_pos(pos)
 
-        # ── 6. TP3 EMA-crossback check ────────────────────────────────────────
-        if pos.tp2_hit and not pos.tp3_hit and pos.remaining > 0 \
-                and not pos.use_trail_atp1:
-            ind = self._indicators.get(symbol)
-            if ind is None or not ind.is_seeded:
-                raise RuntimeError(
-                    f"RollingIndicators for {symbol} is not seeded — "
-                    "the runner must call seed_from_orb_bars() before "
-                    "delivering post-ORB bars to on_bar()."
-                )
-            ema          = ind.ema
-            is_profitable = (ema > pos.actual_entry_price) if pos.direction == 1 \
-                            else (ema < pos.actual_entry_price)
-            crossed_back  = (cl < ema) if pos.direction == 1 else (cl > ema)
-            if is_profitable and crossed_back:
-                self._exit_all(pos, symbol, leg="tp3", ref_price=ema,
-                               exit_reason="TP3", exit_time=ts,
-                               session_date=pos.session_date)
-                pos.tp3_hit = True
-                return
+        # ── 6. Anything still open rides to the EOD exit ──────────────────────
+        # A TP3 exit leg lived here, gated on an exponential moving average.
+        # Removed with the rest of that machinery: v1 runs exit_ratio_tp1 =
+        # 1.0, so TP1 takes the whole
+        # position and this branch was unreachable. It also RAISED when the
+        # indicator was unseeded -- and indicators were never seeded (L1), so
+        # raising exit_ratio_tp2/tp3 above 0 would have thrown mid-session
+        # with a position open.
 
     # ── Universe registration ──────────────────────────────────────────────────
 

@@ -83,7 +83,6 @@ def _build_components(args: argparse.Namespace, _log=None):
     from orb_live.core.clock import MarketClock
     from orb_live.data.bar_cache import BarCache
     from orb_live.data.underlying_data import UnderlyingDataStore
-    from orb_live.execution.indicators import RollingIndicators
     from orb_live.execution.order_policy import MarketableLimitPolicy
     from orb_live.execution.position_manager import LivePositionManager
     from orb_live.execution.risk_gate import RiskGate
@@ -151,14 +150,12 @@ def _build_components(args: argparse.Namespace, _log=None):
     policy = MarketableLimitPolicy(broker, cfg, store)
     gate   = RiskGate(cfg, store, broker, logger=logger)
 
-    indicators_store: dict = {}
 
     mgr = LivePositionManager(
         broker=broker,
         policy=policy,
         state_store=store,
         risk_gate=gate,
-        indicators_store=indicators_store,
         config=cfg.strategy_config,
         logger=logger,
     )
@@ -178,7 +175,6 @@ def _build_components(args: argparse.Namespace, _log=None):
         strategy_engine=engine,
         position_manager=mgr,
         risk_gate=gate,
-        indicators_store=indicators_store,
         underlying_store=ul_store,
         clock=clock,
         logger=logger,

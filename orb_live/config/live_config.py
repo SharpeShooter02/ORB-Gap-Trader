@@ -125,7 +125,6 @@ def _make_v1_strategy_config(
         # live used the split (P5). Reverted; R7 tracks whether a per-class
         # target deserves another look on evidence that is not this sample.
         tp1_target_multiple_by_class={},
-        require_ema_confirmation=False,   # v1 boundary-fill variant
         entry_at_boundary=True,           # v1 boundary-fill variant
         instrument_exit_overrides={},
         use_rtg_scaling=False,

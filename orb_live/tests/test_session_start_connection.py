@@ -43,7 +43,6 @@ def _runner(broker):
         strategy_engine=MagicMock(),
         position_manager=mgr,
         risk_gate=MagicMock(),
-        indicators_store={},
         underlying_store=SimpleNamespace(),
         clock=MagicMock(),
         _sleep=lambda _: None,

@@ -8,8 +8,6 @@ State transitions (one-way, no re-entry within a session):
     ORB_COMPLETE      → EXITED_OR_SKIPPED   past latest_entry_minute OR entry rejected
     IN_POSITION       — terminal for entry detection; exits handled by position_manager
 
-IMPORTANT: The runner must call indicators[symbol].on_bar(bar) BEFORE calling
-this engine's on_bar().  position_manager.on_bar() is called by the session
 runner directly (not through this engine) to avoid double-calling.
 """
 

@@ -132,7 +132,7 @@ def compute_opening_range(
     bars must have a DatetimeIndex (tz-naive Eastern, or tz-aware is accepted
     and stripped).  Columns: close, and optionally high, low.
 
-    Returns dict: {high, low, midpoint, size_pct, n_bars, ema}
+    Returns dict: {high, low, midpoint, size_pct, n_bars}
     Returns None if insufficient bars.
     """
     _market_open = dtime(config.market_open_hour, config.market_open_minute)
@@ -172,19 +172,12 @@ def compute_opening_range(
     midpoint  = (orb_high + orb_low) / 2.0
     size_pct  = (orb_high - orb_low) / midpoint
 
-    mult   = 2.0 / (config.ema_length + 1)
-    closes = orb_bars["close"].values
-    ema    = float(closes[0])
-    for c in closes[1:]:
-        ema = float(c) * mult + ema * (1.0 - mult)
-
     return {
         "high":     orb_high,
         "low":      orb_low,
         "midpoint": midpoint,
         "size_pct": size_pct,
         "n_bars":   len(orb_bars),
-        "ema":      ema,
     }
 
 
@@ -224,23 +217,11 @@ def check_breakout(
             price_touched = bar_high >= orb["high"]
         else:
             price_touched = bar_low  <= orb["low"]
-        if not price_touched:
-            return False
-        if getattr(config, "require_ema_confirmation", True):
-            if gap_direction == 1 and not (close > orb["ema"]):
-                return False
-            if gap_direction == -1 and not (close < orb["ema"]):
-                return False
-        return True
+        return price_touched
 
     if gap_direction == 1:
-        if getattr(config, "require_ema_confirmation", True) and not (close > orb["ema"]):
-            return False
         return close > orb["high"]
-    else:
-        if getattr(config, "require_ema_confirmation", True) and not (close < orb["ema"]):
-            return False
-        return close < orb["low"]
+    return close < orb["low"]
 
 
 # ── compute_entry ─────────────────────────────────────────────────────────────

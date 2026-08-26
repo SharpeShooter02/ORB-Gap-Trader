@@ -6,7 +6,6 @@ stack (StrategyEngine + LivePositionManager + DryRunBroker) and verifies that
 the exit reason and P&L direction match the expected outcome.
 
 Scenarios:
-    A. tp3_crossback  — entry fires, TP1 + TP2 hit, TP3 EMA-crossback exits
     B. stop_hit       — entry fires, price drops below stop immediately
     C. eod_flatten    — entry fires, position open at "EOD", flatten_all closes it
 
@@ -49,13 +48,12 @@ def _bar(ts: datetime, close: float, hi: float, lo: float) -> dict:
             "close": close, "volume": 5000}
 
 
-def _orb(high: float = 101.0, low: float = 99.0, ema: Optional[float] = None) -> dict:
+def _orb(high: float = 101.0, low: float = 99.0) -> dict:
     mid = (high + low) / 2.0
     return {
         "high": high, "low": low, "midpoint": mid,
         "size_pct": (high - low) / mid,
         "n_bars": 30,
-        "ema": ema if ema is not None else mid,
     }
 
 
@@ -73,13 +71,9 @@ def _make_p2(symbol, orb_val=None, tp1_mult=0.35, tp2_mult=0.05):
 
 def _build_live_stack(tmp_store, mock_broker, tp3_ema_value=100.0):
     """
-    Build LivePositionManager + StrategyEngine + RollingIndicators for TQQQ.
-
-    tp3_ema_value — the EMA the indicator is seeded to (used for TP3 detection).
-    The position manager reads this EMA during on_bar.
+    Build LivePositionManager + StrategyEngine for TQQQ.
     """
     from orb_live.config.live_config import load_live_config
-    from orb_live.execution.indicators import RollingIndicators
     from orb_live.execution.order_policy import MarketableLimitPolicy
     from orb_live.execution.position_manager import LivePositionManager
     from orb_live.execution.risk_gate import RiskGate
@@ -97,18 +91,12 @@ def _build_live_stack(tmp_store, mock_broker, tp3_ema_value=100.0):
         max_position_pct=0.50,
     )
 
-    indicators_store: dict = {}
-
     # Seed indicator
-    ind = RollingIndicators("TQQQ", scfg)
     orb_bars = pd.DataFrame(
         [{"high": tp3_ema_value + 0.5, "low": tp3_ema_value - 0.5,
           "close": tp3_ema_value}],
         index=pd.date_range("2026-01-07 09:30", periods=1, freq="1min", tz=ET),
     )
-    ind.seed_from_orb_bars(orb_bars)
-    indicators_store["TQQQ"] = ind
-
     policy = MarketableLimitPolicy(mock_broker, exc_cfg, tmp_store,
                                    _sleep=_NO_SLEEP)
     gate   = RiskGate(exc_cfg, tmp_store, mock_broker)
@@ -116,25 +104,22 @@ def _build_live_stack(tmp_store, mock_broker, tp3_ema_value=100.0):
 
     mgr = LivePositionManager(
         broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store=indicators_store, config=scfg,
+        risk_gate=gate, config=scfg,
     )
 
     engine = StrategyEngine(mgr, cfg, tmp_store, mock_broker)
     engine.new_session(TDATE)
 
-    return mgr, engine, indicators_store, ind, scfg
+    return mgr, engine, scfg
 
 
-def _replay_bars(bars: list[dict], mgr, indicators_store, symbol="TQQQ"):
+def _replay_bars(bars: list[dict], mgr, symbol="TQQQ"):
     """
     Replay a list of bars through indicators + position_manager in the correct order.
     Mirrors SessionRunner._on_bar_dispatch for post-ORB bars.
     """
     for bar in bars:
         ts  = bar["timestamp"]
-        ind = indicators_store.get(symbol)
-        if ind is not None and ind.is_seeded:
-            ind.on_bar(bar)
         mgr.on_bar(symbol, bar, ts)
 
 
@@ -143,8 +128,7 @@ def _replay_bars(bars: list[dict], mgr, indicators_store, symbol="TQQQ"):
 def test_a_tp1_only_full_exit(mock_broker, tmp_store):
     """
     v1 TP1-only: entry fires, TP1 consumes all shares, position closes immediately.
-
-    ORB: high=101, low=99 (range=2), ema=100
+    ORB: high=101, low=99 (range=2)
     v1 config: exit_ratio_tp1=1.0, tp1_target_multiple=2.0
     v1 sizing: shares = floor(1000 × 1.0 / 102) = 9
     TP1 price = 102 + 2×2.0 = 106.0; tp1_shares=9, tp2_shares=0, tp3_shares=0
@@ -152,8 +136,8 @@ def test_a_tp1_only_full_exit(mock_broker, tmp_store):
     Bar 1: hi=106.5 ≥ TP1=106.0 → TP1 fires, all 9 shares exit, remaining=0
     → position closes immediately with exit_reason="TP1_ONLY"
     """
-    orb = _orb(high=101.0, low=99.0, ema=100.0)
-    mgr, engine, indicators_store, ind, scfg = _build_live_stack(
+    orb = _orb(high=101.0, low=99.0)
+    mgr, engine, scfg = _build_live_stack(
         tmp_store, mock_broker, tp3_ema_value=103.0
     )
     # v1: tp1_mult=2.0 sets TP1 price = entry + 2×range; tp2_mult=0.0 unused
@@ -162,7 +146,6 @@ def test_a_tp1_only_full_exit(mock_broker, tmp_store):
 
     # Entry bar: close=102 > orb_high=101 AND > orb_ema=100 → breakout
     entry_bar = _bar(_et(10, 1), close=102.0, hi=102.5, lo=101.5)
-    ind.on_bar(entry_bar)
     engine.on_bar("TQQQ", entry_bar, _et(10, 1))
 
     pos = mgr._positions.get("TQQQ")
@@ -180,7 +163,6 @@ def test_a_tp1_only_full_exit(mock_broker, tmp_store):
 
     # Bar 1: hi=106.5 ≥ TP1=106 → OCA TP1 confirmed filled → position closes
     bar1 = _bar(_et(10, 2), close=106.2, hi=106.5, lo=105.0)
-    ind.on_bar(bar1)
     mgr.on_bar("TQQQ", bar1, _et(10, 2))
 
     pos = mgr._positions.get("TQQQ")
@@ -208,16 +190,14 @@ def test_b_stop_hit_exit_reason_and_negative_pnl(mock_broker, tmp_store):
     Entry bar: close=102 (breakout)
     Bar 1:     lo=99.0 < stop=99.5 → stop fires
     """
-    orb = _orb(high=101.0, low=99.0, ema=100.0)
-    # EMA #2 above entry → no TP3 crossback on this scenario
-    mgr, engine, indicators_store, ind, scfg = _build_live_stack(
+    orb = _orb(high=101.0, low=99.0)
+    mgr, engine, scfg = _build_live_stack(
         tmp_store, mock_broker, tp3_ema_value=110.0
     )
     p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=0.35, tp2_mult=0.05)
     engine.on_orb_complete("TQQQ", p2, None)
 
     entry_bar = _bar(_et(10, 1), close=102.0, hi=102.5, lo=101.5)
-    ind.on_bar(entry_bar)
     engine.on_bar("TQQQ", entry_bar, _et(10, 1))
 
     pos = mgr._positions.get("TQQQ")
@@ -232,7 +212,6 @@ def test_b_stop_hit_exit_reason_and_negative_pnl(mock_broker, tmp_store):
         "filled_avg_price": str(stop_price),
     }
     bar_stop = _bar(_et(10, 2), close=99.0, hi=101.0, lo=98.5)
-    ind.on_bar(bar_stop)
     mgr.on_bar("TQQQ", bar_stop, _et(10, 2))
 
     pos = mgr._positions.get("TQQQ")
@@ -258,16 +237,14 @@ def test_c_eod_flatten_closes_open_position(mock_broker, tmp_store):
     Entry fires and the position remains open until flatten_all('eod_sweep').
     flatten_all must close the position and record a closed trade.
     """
-    orb = _orb(high=101.0, low=99.0, ema=100.0)
-    # EMA #2 well above close → no TP3 crossback
-    mgr, engine, indicators_store, ind, scfg = _build_live_stack(
+    orb = _orb(high=101.0, low=99.0)
+    mgr, engine, scfg = _build_live_stack(
         tmp_store, mock_broker, tp3_ema_value=200.0
     )
     p2 = _make_p2("TQQQ", orb_val=orb, tp1_mult=0.35, tp2_mult=0.05)
     engine.on_orb_complete("TQQQ", p2, None)
 
     entry_bar = _bar(_et(10, 1), close=102.0, hi=102.5, lo=101.5)
-    ind.on_bar(entry_bar)
     engine.on_bar("TQQQ", entry_bar, _et(10, 1))
 
     pos = mgr._positions.get("TQQQ")
@@ -277,7 +254,6 @@ def test_c_eod_flatten_closes_open_position(mock_broker, tmp_store):
     # TP1 = 102.0 + 2*0.35 = 102.70; stop = 99.5; keep hi < 102.70, lo > 99.5
     for i in range(2, 6):
         safe_bar = _bar(_et(10, i), close=101.5, hi=102.0, lo=100.5)
-        ind.on_bar(safe_bar)
         mgr.on_bar("TQQQ", safe_bar, _et(10, i))
 
     pos = mgr._positions.get("TQQQ")

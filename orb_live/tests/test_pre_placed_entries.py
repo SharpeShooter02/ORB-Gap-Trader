@@ -60,7 +60,6 @@ def _exe_cfg(**overrides):
 
 def _strategy_cfg(**overrides):
     ns = SimpleNamespace(
-        tp3_mode="ema_crossback",
         eod_exit_hour=16,
         eod_exit_minute=0,
         exit_ratio_tp1=1.0,
@@ -85,7 +84,7 @@ def _build_mgr(mock_broker, tmp_store, exe_cfg=None, strategy_cfg=None, universe
 
     mgr = LivePositionManager(
         broker=mock_broker, policy=policy, state_store=tmp_store,
-        risk_gate=gate, indicators_store={}, config=scfg,
+        risk_gate=gate, config=scfg,
         universe=universe or ["TQQQ"],
     )
     return mgr

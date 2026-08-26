@@ -24,7 +24,7 @@ Schema (20 tables):
   17. candidates        — per-symbol per-session qualification decision log
   18. sigma_history     — audit trail of sigma recalibrations
   19. fills             — individual order fill records per leg
-  20. indicator_state   — per-bar EMA snapshot for audit / restart recovery
+  20. indicator_state   — legacy, unused since the EMA machinery was removed
 """
 
 from datetime import date, datetime, timezone
@@ -311,7 +311,8 @@ fills = Table("fills", _metadata,
     Column("raw_response_json", Text),
 )
 
-# 20. indicator_state — per-bar EMA snapshot for audit / restart recovery
+# 20. indicator_state — legacy. Nothing writes it since the EMA machinery
+#     was removed; kept so existing databases still open.
 indicator_state = Table("indicator_state", _metadata,
     Column("id",           Integer,    primary_key=True, autoincrement=True),
     Column("session_date", Date,       nullable=False),

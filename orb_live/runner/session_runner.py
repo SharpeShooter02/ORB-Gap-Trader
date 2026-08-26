@@ -4,16 +4,15 @@ runner/session_runner.py — Top-level session orchestrator.
 Production session timeline (all times ET):
   ~08:30  pre-market:   Phase 1 gap scan + PS filter
    09:30  ORB window:   subscribe_bars begins; bars accumulate in bar_cache
-   10:00  ORB closes:   Phase 2 (RTG + routing + preflight); seed indicators
+   10:00  ORB closes:   Phase 2 (RTG + routing + preflight)
   10:00+  trade_active: per-bar dispatch loop (LOAD-BEARING ORDER below)
   16:00   eod_exit:     wait for eod_exit_hour, then flatten_all("eod_sweep")
   16:30   report:       generate_daily_report
 
 LOAD-BEARING BAR DISPATCH ORDER (do not reorder):
   1. bar_cache.add_bar(symbol, bar)
-  2. indicators[symbol].on_bar(bar)           ← EMA update; MUST precede step 3
-  3. position_manager.on_bar(symbol, bar, ts) ← exit management
-  4. strategy_engine.on_bar(symbol, bar, ts)  ← entry detection (ORB_COMPLETE only)
+  2. position_manager.on_bar(symbol, bar, ts) ← exit management
+  3. strategy_engine.on_bar(symbol, bar, ts)  ← entry detection (ORB_COMPLETE only)
 """
 
 from __future__ import annotations
@@ -48,7 +47,6 @@ class SessionRunner:
         strategy_engine,       # StrategyEngine
         position_manager,      # LivePositionManager
         risk_gate,             # RiskGate
-        indicators_store,      # dict[str, RollingIndicators] (mutable, session-scoped)
         underlying_store,      # UnderlyingDataStore
         clock,                 # MarketClock
         logger=None,
@@ -63,7 +61,6 @@ class SessionRunner:
         self._engine      = strategy_engine
         self._mgr         = position_manager
         self._gate        = risk_gate
-        self._indicators  = indicators_store
         self._ul          = underlying_store
         self._clock       = clock
         self._log         = logger
@@ -79,7 +76,7 @@ class SessionRunner:
         self._session_start_equity: Optional[float] = None  # captured at pre-market
 
         # Register bar dispatch with router. The 1-min listener drives cache,
-        # indicators and exits (and is the entry fallback); the 5-sec entry
+        # exits (and is the entry fallback); the 5-sec entry
         # listener drives low-latency breakout detection only.
         self._router.register_listener(self._on_bar_dispatch)
         self._router.register_entry_listener(self._on_entry_bar_dispatch)
@@ -310,7 +307,7 @@ class SessionRunner:
             self._sleep(secs)
 
     def _run_post_orb(self, session_date: date) -> None:
-        """Run Phase 2, seed indicators, then wait until eod_exit_hour."""
+        """Run Phase 2, then wait until the EOD exit."""
         self._store.upsert_day_state(session_date, phase="trade_active")
 
         if not self._phase1_results:
@@ -329,7 +326,6 @@ class SessionRunner:
         # leveraged-ETF margin check never runs at all.
         self._seed_margin_rates()
 
-        from orb_live.execution.indicators import RollingIndicators
 
         for p2 in p2_results:
             symbol = p2.symbol
@@ -348,7 +344,7 @@ class SessionRunner:
             # table seeded above is a fallback, not the source of truth.
             self._prewarm_candidate_margin(p2)
 
-            # Get ORB bars from cache and seed the indicator
+            # ORB bars from cache, for the engine's opening-range computation.
             raw = self._cache.get_bars(symbol)
             if raw.empty:
                 self._engine.on_orb_complete(symbol, p2, None)
@@ -363,19 +359,6 @@ class SessionRunner:
             orb_start_dt = orb_end_dt - timedelta(minutes=self._cfg.orb_minutes)
             mask = (raw.index >= _aware(orb_start_dt)) & (raw.index < _aware(orb_end_dt))
             orb_df = raw.loc[mask]
-
-            scfg      = self._cfg.strategy_config
-            indicator = RollingIndicators(symbol, scfg)
-
-            try:
-                if not orb_df.empty:
-                    indicator.seed_from_orb_bars(orb_df)
-                    self._indicators[symbol] = indicator
-            except Exception as exc:
-                if self._log:
-                    self._log.error("indicator_seed_failed", symbol=symbol, exc=str(exc))
-                self._engine.on_orb_complete(symbol, p2, None)
-                continue
 
             self._engine.on_orb_complete(symbol, p2, orb_df)
 
@@ -542,7 +525,7 @@ class SessionRunner:
         """
         5-sec entry path: forward the raw bar to the entry state machine ONLY.
 
-        Deliberately does NOT touch cache/indicators/position_manager — those
+        Deliberately does NOT touch cache/position_manager — those
         stay on the 1-min pipeline (_on_bar_dispatch). The first path to see the
         breakout flips the symbol to IN_POSITION; the other then no-ops via the
         engine's state guard, so running both is idempotent.
@@ -558,7 +541,6 @@ class SessionRunner:
 
         ORDER IS LOAD-BEARING — do not reorder steps 2/3/4:
           1. bar_cache.add_bar       — persist to cache
-          2. indicators.on_bar       — update EMA  ← MUST precede position_manager
           3. position_manager.on_bar — exit checks for open positions
           4. strategy_engine.on_bar  — entry detection (ORB_COMPLETE symbols only)
         """
@@ -573,15 +555,10 @@ class SessionRunner:
         if not self._is_post_orb(ts):
             return  # ORB window bar — cached but not dispatched to engine
 
-        # 2. Indicators
-        indicator = self._indicators.get(symbol)
-        if indicator is not None and indicator.is_seeded:
-            indicator.on_bar(bar)
-
-        # 3. Position management (exits)
+        # 2. Position management (exits)
         self._mgr.on_bar(symbol, bar, ts)
 
-        # 4. Entry detection
+        # 3. Entry detection
         if self._log:
             self._log.debug(
                 "engine_on_bar", symbol=symbol,
